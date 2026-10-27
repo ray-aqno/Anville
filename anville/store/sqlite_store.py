@@ -1,0 +1,223 @@
+"""Durable event store (ADR 0006): SQLite, WAL, explicit commits.
+
+Every write runs in its own `BEGIN IMMEDIATE` transaction, so concurrent
+writers queue on SQLite's write lock (up to busy_timeout) instead of failing
+mid-transaction. On Modal, exactly one container may open the file (the
+single-writer rule); locally, any number of threads or processes may.
+
+Stdlib only, so it runs unchanged locally and inside Modal.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Iterator
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS events (
+    key          TEXT PRIMARY KEY,              -- idempotency key: version:<vid>, comment:<cid>, ask:<rid>
+    document_id  TEXT NOT NULL,
+    payload      TEXT NOT NULL,                 -- the first delivery's JSON; redeliveries are ignored
+    status       TEXT NOT NULL DEFAULT 'received'
+                 CHECK (status IN ('received', 'claimed', 'done', 'failed')),
+    received_at  REAL NOT NULL,
+    claimed_at   REAL,
+    attempts     INTEGER NOT NULL DEFAULT 0,    -- also the fencing token of the current claim
+    finished_at  REAL
+);
+CREATE INDEX IF NOT EXISTS events_by_doc ON events (document_id, status);
+"""
+
+
+class StaleClaim(Exception):
+    """finish() came from a claim that has since been superseded (lease expired, event re-claimed)."""
+
+
+@dataclass(frozen=True)
+class Event:
+    key: str
+    document_id: str
+    payload: dict
+    status: str
+    attempts: int
+    received_at: float
+    claimed_at: float | None
+
+
+class Store:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        clock: Callable[[], float] = time.time,
+        after_commit: Callable[[], None] | None = None,
+        lease_s: float = 600,
+        max_attempts: int = 3,
+        busy_timeout_ms: int = 10_000,
+    ):
+        self.path = Path(path)
+        self._clock = clock
+        # On Modal this is volume.commit(): SQLite's commit alone doesn't make the write durable.
+        self._after_commit = after_commit
+        self._lease_s = lease_s
+        self._max_attempts = max_attempts
+        self._busy_timeout_ms = busy_timeout_ms
+        self._local = threading.local()
+        self._conns: list[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
+
+        conn = self._conn()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(f"BEGIN IMMEDIATE; {SCHEMA} COMMIT;")
+
+    def close(self) -> None:
+        with self._conns_lock:
+            for conn in self._conns:
+                conn.close()
+            self._conns.clear()
+
+    # --- events -------------------------------------------------------------
+
+    def record(self, key: str, document_id: str, payload: dict) -> bool:
+        """Insert a delivery; False means the key was already recorded (a duplicate)."""
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO events (key, document_id, payload, received_at) VALUES (?, ?, ?, ?)",
+                (key, document_id, json.dumps(payload, sort_keys=True), self._clock()),
+            )
+            return cur.rowcount == 1
+
+    def claim(self, key: str) -> int | None:
+        """Take the event for processing; returns a fencing token, or None if it isn't ours to run.
+
+        Succeeds for a `received` event, or a `claimed` one whose lease expired,
+        while attempts remain and no other event on the same document holds a
+        live claim (ADR 0003: one loop per document at a time).
+        """
+        now = self._clock()
+        with self._write() as conn:
+            row = conn.execute(
+                """
+                UPDATE events SET status = 'claimed', claimed_at = :now, attempts = attempts + 1
+                WHERE key = :key
+                  AND attempts < :max_attempts
+                  AND (status = 'received' OR (status = 'claimed' AND claimed_at <= :expired))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM events o
+                      WHERE o.document_id = events.document_id AND o.key != events.key
+                        AND o.status = 'claimed' AND o.claimed_at > :expired)
+                RETURNING attempts
+                """,
+                {"key": key, "now": now, "expired": now - self._lease_s,
+                 "max_attempts": self._max_attempts},
+            ).fetchone()
+            return row[0] if row else None
+
+    def finish(self, key: str, token: int, ok: bool) -> str | None:
+        """Close the claim; returns the next waiting event key on the same document, if any.
+
+        Raises StaleClaim if `token` is no longer the current claim, so a job
+        that outlived its lease learns it lost ownership.
+        """
+        with self._write() as conn:
+            row = conn.execute(
+                """
+                UPDATE events SET status = ?, finished_at = ?
+                WHERE key = ? AND status = 'claimed' AND attempts = ?
+                RETURNING document_id
+                """,
+                ("done" if ok else "failed", self._clock(), key, token),
+            ).fetchone()
+            if row is None:
+                raise StaleClaim(f"{key}: claim {token} is no longer current")
+            nxt = conn.execute(
+                "SELECT key FROM events WHERE document_id = ? AND status = 'received' "
+                "ORDER BY received_at, key LIMIT 1",
+                (row[0],),
+            ).fetchone()
+            return nxt[0] if nxt else None
+
+    def reapable(self, received_grace_s: float) -> list[Event]:
+        """Events to re-spawn: `received` past the grace period, or `claimed` past the lease.
+
+        Returns at most one event per document, and none for a document with a
+        live claim. Events that have used every attempt are marked `failed`
+        here, so they stop coming back.
+        """
+        now = self._clock()
+        expired = now - self._lease_s
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE events SET status = 'failed', finished_at = ? "
+                "WHERE status = 'claimed' AND claimed_at <= ? AND attempts >= ?",
+                (now, expired, self._max_attempts),
+            )
+            rows = conn.execute(
+                """
+                SELECT * FROM events e
+                WHERE ((e.status = 'received' AND e.received_at <= :received_before)
+                    OR (e.status = 'claimed' AND e.claimed_at <= :expired))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM events o
+                      WHERE o.document_id = e.document_id
+                        AND o.status = 'claimed' AND o.claimed_at > :expired)
+                ORDER BY e.received_at, e.key
+                """,
+                {"received_before": now - received_grace_s, "expired": expired},
+            ).fetchall()
+        oldest: dict[str, Event] = {}
+        for r in rows:
+            oldest.setdefault(r["document_id"], _event(r))
+        return list(oldest.values())
+
+    def event(self, key: str) -> Event | None:
+        row = self._conn().execute("SELECT * FROM events WHERE key = ?", (key,)).fetchone()
+        return _event(row) if row else None
+
+    # --- plumbing -----------------------------------------------------------
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            # One connection per thread; isolation_level=None so BEGIN/COMMIT are ours alone.
+            # check_same_thread=False only so close() can run from another thread.
+            conn = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
+            conn.execute("PRAGMA synchronous=FULL")  # WAL's default NORMAL can drop the last commits
+            with self._conns_lock:
+                self._conns.append(conn)
+            self._local.conn = conn
+        return conn
+
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        conn = self._conn()
+        before = conn.total_changes
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
+        if self._after_commit is not None and conn.total_changes != before:
+            self._after_commit()
+
+
+def _event(row: sqlite3.Row) -> Event:
+    return Event(
+        key=row["key"],
+        document_id=row["document_id"],
+        payload=json.loads(row["payload"]),
+        status=row["status"],
+        attempts=row["attempts"],
+        received_at=row["received_at"],
+        claimed_at=row["claimed_at"],
+    )
