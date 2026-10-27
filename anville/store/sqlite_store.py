@@ -124,6 +124,9 @@ class Store:
         self.path = Path(path)
         self._clock = clock
         # On Modal this is volume.commit(): SQLite's commit alone doesn't make the write durable.
+        # It costs ~1.5 s there (probe c8f35196), so only writes whose loss matters call it:
+        # a new event (it gates the webhook's 200) and a ledger entry (a verified lesson).
+        # Everything else rides Modal's background commits and the commit at container shutdown.
         self._after_commit = after_commit
         self._lease_s = lease_s
         self._max_attempts = max_attempts
@@ -160,7 +163,7 @@ class Store:
         timestamp), falling back to arrival time.
         """
         now = self._clock()
-        with self._write() as conn:
+        with self._write(durable=True) as conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO events (key, document_id, payload, received_at) VALUES (?, ?, ?, ?)",
                 (key, document_id, json.dumps(payload, sort_keys=True), now),
@@ -374,7 +377,7 @@ class Store:
             raise ValueError(f"unknown ledger {ledger!r}")
         if not provenance:
             raise ValueError("ledger entries need provenance")
-        with self._write() as conn:
+        with self._write(durable=True) as conn:
             cur = conn.execute(
                 "INSERT INTO ledger (ledger, scope, payload, provenance, created_at) VALUES (?, ?, ?, ?, ?)",
                 (ledger, scope, json.dumps(payload), json.dumps(provenance), self._clock()),
@@ -434,7 +437,7 @@ class Store:
         return conn
 
     @contextmanager
-    def _write(self) -> Iterator[sqlite3.Connection]:
+    def _write(self, durable: bool = False) -> Iterator[sqlite3.Connection]:
         conn = self._conn()
         before = conn.total_changes
         conn.execute("BEGIN IMMEDIATE")
@@ -444,7 +447,7 @@ class Store:
             conn.execute("ROLLBACK")
             raise
         conn.execute("COMMIT")
-        if self._after_commit is not None and conn.total_changes != before:
+        if durable and self._after_commit is not None and conn.total_changes != before:
             self._after_commit()
 
 

@@ -136,13 +136,23 @@ def test_event_out_of_attempts_is_marked_failed_not_reaped(store, clock):
     assert store.event("version:v1").status == "failed"
 
 
-def test_after_commit_runs_only_when_a_write_changed_rows(db_path, clock):
+def test_after_commit_runs_only_for_new_events_and_ledger_entries(db_path, clock):
+    # volume.commit() costs ~1.5 s on Modal (probe c8f35196), so only writes whose loss
+    # matters pay it; the rest ride Modal's background commits.
     commits = []
     s = Store(db_path, clock=clock, after_commit=lambda: commits.append(1))
 
-    s.record("version:v1", "docA", {})
-    s.record("version:v1", "docA", {})  # duplicate: nothing changed
-    s.claim("version:v1")
+    s.record("version:v1", "docA", {})                   # durable
+    s.record("version:v1", "docA", {})                   # duplicate: nothing changed
+    token = s.claim("version:v1")
+    s.reserve_post("version:v1", "review")
+    s.complete_post("version:v1", "review", "c1")
+    s.append_trace("docA", "r1", 0, "run_started", "start")
+    s.reserve_call("2026-10-27", cap=10)
+    s.release_call("2026-10-27")
+    s.reapable(30)
+    s.finish("version:v1", token, ok=True)
+    s.append_ledger("constraint", "team:baja", {"rule": "x"}, {"event": "comment:c1"})  # durable
     s.close()
 
     assert len(commits) == 2
