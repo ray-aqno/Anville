@@ -47,7 +47,28 @@ CREATE TABLE IF NOT EXISTS posted (
     posted_at    REAL,
     PRIMARY KEY (event_key, kind)
 );
+
+-- ADR 0007 trace events. AUTOINCREMENT so a cursor is never reused, even if rows are pruned.
+CREATE TABLE IF NOT EXISTS trace (
+    cursor       INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id  TEXT NOT NULL,
+    run_id       TEXT NOT NULL,
+    seq          INTEGER NOT NULL,
+    ts           REAL NOT NULL,
+    version_id   TEXT,
+    element_id   TEXT,
+    kind         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    detail       TEXT NOT NULL,                 -- JSON object
+    face_ids     TEXT NOT NULL                  -- JSON array
+);
+CREATE INDEX IF NOT EXISTS trace_by_doc ON trace (document_id, cursor);
 """
+
+TRACE_KINDS = frozenset({
+    "run_started", "tool_call", "tool_result", "option", "decision",
+    "action", "verify", "comment_posted", "run_finished", "error",
+})
 
 
 class StaleClaim(Exception):
@@ -267,6 +288,59 @@ class Store:
             (self._clock() - older_than_s,),
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
+
+    # --- trace (ADR 0007) ---------------------------------------------------
+
+    def append_trace(
+        self,
+        document_id: str,
+        run_id: str,
+        seq: int,
+        kind: str,
+        title: str,
+        *,
+        ts: float | None = None,
+        version_id: str | None = None,
+        element_id: str | None = None,
+        detail: dict | None = None,
+        face_ids: list[str] | tuple[str, ...] = (),
+    ) -> int:
+        """Append one trace event; returns its cursor.
+
+        Cursors are assigned under SQLite's write lock and commit in that order,
+        so a reader replaying `after=<cursor>` never skips a late-committing row.
+        """
+        if kind not in TRACE_KINDS:
+            raise ValueError(f"unknown trace kind {kind!r}")
+        if face_ids and not element_id:
+            raise ValueError("face_ids need element_id (ADR 0007)")
+        with self._write() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO trace (document_id, run_id, seq, ts, version_id, element_id,
+                                   kind, title, detail, face_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (document_id, run_id, seq, self._clock() if ts is None else ts, version_id,
+                 element_id, kind, title, json.dumps(detail or {}), json.dumps(list(face_ids))),
+            )
+            return cur.lastrowid
+
+    def trace_after(self, document_id: str, after: int = 0, limit: int = 500) -> list[dict]:
+        """Trace events for a document with cursor > after, oldest first (the panel's replay)."""
+        rows = self._conn().execute(
+            "SELECT * FROM trace WHERE document_id = ? AND cursor > ? ORDER BY cursor LIMIT ?",
+            (document_id, after, limit),
+        ).fetchall()
+        return [
+            {
+                "cursor": r["cursor"], "run_id": r["run_id"], "seq": r["seq"], "ts": r["ts"],
+                "document_id": r["document_id"], "version_id": r["version_id"],
+                "element_id": r["element_id"], "kind": r["kind"], "title": r["title"],
+                "detail": json.loads(r["detail"]), "face_ids": json.loads(r["face_ids"]),
+            }
+            for r in rows
+        ]
 
     def event(self, key: str) -> Event | None:
         row = self._conn().execute("SELECT * FROM events WHERE key = ?", (key,)).fetchone()
