@@ -7,12 +7,16 @@ Answers, before anything is wired:
                 Then PRAGMA integrity_check on the WAL database a fresh container mounts.
   3. dedup    - 20 concurrent duplicate record() + claim() calls through a single-writer
                 service (max_containers=1, concurrent inputs on threads): one row, one claim.
+  4. rtt      - where a .remote() round trip's time goes: the store service vs a serial
+                class with no Volume vs a plain function.
+  5. job      - store overhead of one job-shaped run (18 calls through StoreSvc.call), with
+                volume.commit only on durable writes.
 
 Not covered: the rolling-redeploy overlap (needs `modal deploy`, owned by the main session),
 and real host loss (SIGKILL kills the process; Modal's runtime may still commit on shutdown).
 
 Isolated: ephemeral app `anville-store-probe`, its own Volume. No Onshape calls.
-    Run (from repo root):  modal run tests/store/modal_probe.py
+    Run (from repo root):  modal run tests/store/modal_probe.py [--only rtt,job]
     Clean up:              modal volume delete anville-store-probe
 Not collected by pytest (no test_ prefix).
 """
@@ -101,39 +105,78 @@ class StoreSvc:
         self.s = Store(DB, after_commit=commit)
 
     @modal.method()
-    def record(self, key: str, doc: str, payload: dict) -> bool:
-        return self.s.record(key, doc, payload)
+    def call(self, op: str, *args, **kw):
+        # The wiring plan's shape: one generic method in front of the Store.
+        return getattr(self.s, op)(*args, **kw)
 
+
+@app.cls(image=image, max_containers=1, timeout=300)
+class SerialSvc:
     @modal.method()
-    def claim(self, key: str) -> int | None:
-        return self.s.claim(key)
-
-    @modal.method()
-    def calls(self, day: str) -> int:
-        return self.s.calls(day)
+    def ping(self) -> int:
+        return 0
 
 
-@app.function(image=image, timeout=120)
+@app.function(image=image, max_containers=1, timeout=300)
+def ping_fn() -> int:
+    return 0
+
+
+@app.function(image=image, timeout=300)
 def remote_rtt(n: int) -> dict:
-    """Time .remote() into the store from another container: the hop every webhook and job pays."""
-    svc = StoreSvc()
-    svc.calls.remote("1970-01-01")  # warm the store container first
-    rtts = []
-    for _ in range(n):
+    """Time .remote() from another container (the hop every webhook and job pays), per target."""
+    targets = {
+        "StoreSvc.call (concurrent, Volume, SQLite read)": lambda: StoreSvc().call.remote("calls", "1970-01-01"),
+        "SerialSvc.ping (no concurrent, no Volume)": lambda: SerialSvc().ping.remote(),
+        "ping_fn (plain function)": lambda: ping_fn.remote(),
+    }
+    out = {}
+    for name, call in targets.items():
+        call()  # warm
+        rtts = []
+        for _ in range(n):
+            t = time.perf_counter()
+            call()
+            rtts.append(time.perf_counter() - t)
+        out[name] = _pcts(rtts)
+    return out
+
+
+@app.function(image=image, timeout=300)
+def job_overhead(run: str, jobs: int) -> dict:
+    """Store calls one review job would make, timed end to end from a job container."""
+    svc = StoreSvc().call
+    svc.remote("calls", "1970-01-01")  # warm
+    durable, job = [], []
+    for j in range(jobs):
+        key, doc = f"probe:job:{run}:{j}", f"docJ{j}"
         t = time.perf_counter()
-        svc.calls.remote("1970-01-01")  # read-only, so no volume.commit in the timing
-        rtts.append(time.perf_counter() - t)
-    return _pcts(rtts)
+        svc.remote("record", key, doc, {}, version_id=f"v{j}")  # the webhook's durable write
+        durable.append(time.perf_counter() - t)
+        t = time.perf_counter()
+        token = svc.remote("claim", key)
+        for _ in range(3):
+            svc.remote("reserve_call", "1970-01-02", 10_000)
+        for i in range(10):
+            svc.remote("append_trace", doc, f"r{j}", i, "tool_call", f"step {i}")
+        svc.remote("is_current", doc, f"v{j}")
+        svc.remote("reserve_post", key, "review")
+        svc.remote("complete_post", key, "review", f"c{j}")
+        svc.remote("finish", key, token, True)
+        job.append(time.perf_counter() - t)
+    return {"record_durable": _pcts(durable), "job_18_calls": _pcts(job)}
 
 
 @app.local_entrypoint()
-def main():
+def main(only: str = "latency,durable,dedup,rtt,job", peek: str = ""):
     run = uuid.uuid4().hex[:8]
-    print(f"run {run}")
+    steps = set(only.split(","))
+    print(f"run {run}, steps {sorted(steps)}")
 
-    print("1. latency:", commit_latency.remote(run, 50))
+    if "latency" in steps:
+        print("1. latency:", commit_latency.remote(run, 50))
 
-    for commit_each in (True, False):
+    for commit_each in (True, False) if "durable" in steps else ():
         prefix = f"probe:crash:{run}:{int(commit_each)}:"
         try:
             write_then_die.remote(prefix, 20, commit_each)
@@ -143,11 +186,22 @@ def main():
         print(f"2. durable (after_commit={'volume.commit' if commit_each else 'None'}), "
               f"expect rows=20:", inspect.remote(prefix))
 
-    svc = StoreSvc()
-    key = f"probe:dup:{run}"
-    inserted = list(svc.record.map([key] * 20, ["docP"] * 20, [{"i": i} for i in range(20)]))
-    tokens = list(svc.claim.map([key] * 20))
-    print("3. dedup: inserted", inserted.count(True), "(expect 1); claims",
-          sorted(t for t in tokens if t), "(expect [1])")
+    if peek:  # inspect an event left by an earlier run, e.g. --peek probe:dup:<run>
+        ev = StoreSvc().call.remote("event", peek)
+        print(f"peek {peek}: {ev}; now {time.time():.0f}")
 
-    print("1b. one .remote() store call, container to container:", remote_rtt.remote(20))
+    if "dedup" in steps:
+        # Own document per run: an earlier run's unfinished claim on a shared document
+        # would block this one (one loop per document), which is correct store behaviour.
+        call, key, doc = StoreSvc().call, f"probe:dup:{run}", f"docDup-{run}"
+        inserted = list(call.map(["record"] * 20, [key] * 20, [doc] * 20, [{"i": i} for i in range(20)]))
+        tokens = list(call.map(["claim"] * 20, [key] * 20))
+        print("3. dedup: inserted", inserted.count(True), "(expect 1); claims",
+              sorted(t for t in tokens if t), "(expect [1])")
+
+    if "rtt" in steps:
+        for name, pcts in remote_rtt.remote(20).items():
+            print(f"4. rtt {name}: {pcts}")
+
+    if "job" in steps:
+        print("5. job:", job_overhead.remote(run, 5))
