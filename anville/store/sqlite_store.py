@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS events (
     finished_at  REAL
 );
 CREATE INDEX IF NOT EXISTS events_by_doc ON events (document_id, status);
+
+CREATE TABLE IF NOT EXISTS doc_state (
+    document_id  TEXT PRIMARY KEY,
+    version_id   TEXT NOT NULL,                 -- latest version under review
+    version_ts   REAL NOT NULL                  -- Onshape's event timestamp, else arrival time
+);
 """
 
 
@@ -84,14 +90,39 @@ class Store:
 
     # --- events -------------------------------------------------------------
 
-    def record(self, key: str, document_id: str, payload: dict) -> bool:
-        """Insert a delivery; False means the key was already recorded (a duplicate)."""
+    def record(
+        self,
+        key: str,
+        document_id: str,
+        payload: dict,
+        version_id: str | None = None,
+        version_ts: float | None = None,
+    ) -> bool:
+        """Insert a delivery; False means the key was already recorded (a duplicate).
+
+        A version event (`version_id` given) also advances doc_state in the same
+        transaction, if it is newer than the version already there. Webhooks can
+        arrive out of order, so "newer" is `version_ts` (Onshape's event
+        timestamp), falling back to arrival time.
+        """
+        now = self._clock()
         with self._write() as conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO events (key, document_id, payload, received_at) VALUES (?, ?, ?, ?)",
-                (key, document_id, json.dumps(payload, sort_keys=True), self._clock()),
+                (key, document_id, json.dumps(payload, sort_keys=True), now),
             )
-            return cur.rowcount == 1
+            inserted = cur.rowcount == 1
+            if inserted and version_id is not None:
+                conn.execute(
+                    """
+                    INSERT INTO doc_state (document_id, version_id, version_ts) VALUES (?, ?, ?)
+                    ON CONFLICT (document_id) DO UPDATE
+                        SET version_id = excluded.version_id, version_ts = excluded.version_ts
+                        WHERE excluded.version_ts > doc_state.version_ts
+                    """,
+                    (document_id, version_id, now if version_ts is None else version_ts),
+                )
+            return inserted
 
     def claim(self, key: str) -> int | None:
         """Take the event for processing; returns a fencing token, or None if it isn't ours to run.
@@ -175,6 +206,18 @@ class Store:
         for r in rows:
             oldest.setdefault(r["document_id"], _event(r))
         return list(oldest.values())
+
+    def is_current(self, document_id: str, version_id: str) -> bool:
+        """False if a newer version of the document has been recorded since.
+
+        Check-then-post is not atomic: a version recorded between this check and
+        the Onshape call still gets the stale comment. The window is one HTTP
+        call long; holding a lock across that call would be worse.
+        """
+        row = self._conn().execute(
+            "SELECT version_id FROM doc_state WHERE document_id = ?", (document_id,)
+        ).fetchone()
+        return row is None or row[0] == version_id
 
     def event(self, key: str) -> Event | None:
         row = self._conn().execute("SELECT * FROM events WHERE key = ?", (key,)).fetchone()
