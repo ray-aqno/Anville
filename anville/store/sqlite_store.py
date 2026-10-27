@@ -79,6 +79,12 @@ CREATE TRIGGER IF NOT EXISTS ledger_no_update BEFORE UPDATE ON ledger
     BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS ledger_no_delete BEFORE DELETE ON ledger
     BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+
+-- Onshape calls per UTC day, against our own cap (OnshapeClient's CallLedger).
+CREATE TABLE IF NOT EXISTS call_budget (
+    day          TEXT PRIMARY KEY,              -- YYYY-MM-DD, UTC
+    n            INTEGER NOT NULL DEFAULT 0
+);
 """
 
 LEDGERS = frozenset({"constraint", "shop_outcome"})
@@ -385,6 +391,27 @@ class Store:
              "payload": json.loads(r["payload"]), "provenance": json.loads(r["provenance"])}
             for r in rows
         ]
+
+    # --- Onshape call budget (OnshapeClient's CallLedger) -------------------
+
+    def reserve_call(self, day: str, cap: int) -> bool:
+        """Take one call from the day's budget; False if the cap is reached.
+
+        Check and increment are one UPDATE, so racing jobs can't both take the last slot.
+        """
+        with self._write() as conn:
+            conn.execute("INSERT OR IGNORE INTO call_budget (day) VALUES (?)", (day,))
+            cur = conn.execute("UPDATE call_budget SET n = n + 1 WHERE day = ? AND n < ?", (day, cap))
+            return cur.rowcount == 1
+
+    def release_call(self, day: str) -> None:
+        """Hand back a reservation for a call Onshape didn't bill."""
+        with self._write() as conn:
+            conn.execute("UPDATE call_budget SET n = n - 1 WHERE day = ? AND n > 0", (day,))
+
+    def calls(self, day: str) -> int:
+        row = self._conn().execute("SELECT n FROM call_budget WHERE day = ?", (day,)).fetchone()
+        return row[0] if row else 0
 
     def event(self, key: str) -> Event | None:
         row = self._conn().execute("SELECT * FROM events WHERE key = ?", (key,)).fetchone()
