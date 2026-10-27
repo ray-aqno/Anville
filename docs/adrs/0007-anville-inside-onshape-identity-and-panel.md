@@ -39,11 +39,13 @@ The agent emits trace events. The panel only reads them, plus one write endpoint
 
 ```json
 {
+  "cursor": 1042,
   "run_id": "r_8f2c",
   "seq": 7,
   "ts": 1793072590.17,
   "document_id": "d58f…",
   "version_id": "d8a3…",
+  "element_id": "d4ed…",
   "kind": "run_started | tool_call | tool_result | option | decision | action | verify | comment_posted | run_finished | error",
   "title": "Re-check: 3 → 2 setups",
   "detail": {},
@@ -52,7 +54,8 @@ The agent emits trace events. The panel only reads them, plus one write endpoint
 ```
 
 - `title` is the human-readable line the panel shows. `detail` holds the numbers. Any number in `title` must come from `detail`, never from the model's free text (ADR 0003 slot rule).
-- `face_ids` let the panel tie an event to geometry.
+- `cursor` increases across all runs of a document; it is the event store's row order. `seq` orders events within one run. Replay always uses `cursor`, never `seq`.
+- `face_ids` let the panel tie an event to geometry. When `face_ids` is non-empty, `element_id` is required, because a document can hold several Part Studios. Face IDs are valid only for `version_id` (or the microversion in `detail.microversion_id` for workspace runs).
 
 **Endpoints** (on the existing Modal web app; all scoped to allowlisted documents):
 
@@ -60,10 +63,20 @@ The agent emits trace events. The panel only reads them, plus one write endpoint
 |---|---|---|
 | GET | `/panel?documentId=&workspaceId=&elementId=&t=<panel token>` | Serves the panel page. Onshape loads it in the right panel. |
 | GET | `/api/runs?documentId=` | Recent runs with their events, for first paint. |
-| GET | `/api/stream?documentId=&after=<seq>` | Server-sent events of new trace events. |
-| POST | `/api/ask` `{documentId, workspaceId, elementId, face_ids, question}` | Inserts a `panel.ask` event (ADR 0006 delivery order). Returns 202 with its event id. |
+| GET | `/api/stream?documentId=&after=<cursor>` | Server-sent events of trace events with `cursor > after`, across runs. The panel resumes with the last cursor it rendered. |
+| POST | `/api/ask` `{request_id, documentId, workspaceId, elementId, microversion_id?, face_ids, question}` | Inserts a `panel.ask` event (ADR 0006 delivery order). Returns 202 with its event id, or 200 with the original event id on a duplicate. |
 
-- **Auth for the hackathon:** a panel token in the extension URL, checked in constant time (same pattern as the webhook secret, F2), plus the document allowlist.
+- **Auth for the hackathon:**
+  - The panel token arrives in the extension URL as `t`.
+  - The panel sends it back as the `t` query parameter on **every** `/api/*` request, including the SSE stream. `EventSource` can't set headers, and third-party cookies inside Onshape's iframe aren't reliable.
+  - The server checks `t` in constant time on every `/panel` and `/api/*` request (same pattern as the webhook secret, F2). It returns 404 on a mismatch, and 404 for any document not on the allowlist.
+  - Known cost: the token appears in request logs, like the webhook secret. Rotate both before the demo.
+- **`/api/ask` idempotency:**
+  - `request_id` is a client-generated UUID, reused on retries. The event store key is `ask:<request_id>` (ADR 0006).
+- **Selection versions:**
+  - The panel sends the selection's `microversion_id` when the client provides it.
+  - Otherwise the server records the workspace's current microversion when the event is inserted.
+  - The answering job maps face IDs from that microversion to the version it analyzes with `idtranslations`. A face that can't be mapped is answered as "that face no longer exists", never guessed.
 - **Later:** Onshape OAuth session validation replaces the token. This is noted as a known limitation.
 
 ### Ownership
