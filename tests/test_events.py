@@ -3,6 +3,7 @@ from anville.connectors.onshape.events import (
     CREATE_VERSION,
     TRANSLATION_COMPLETE,
     classify,
+    token_matches,
 )
 
 DOC = "doc1"
@@ -63,3 +64,17 @@ def test_translation_complete_is_processed_without_allowlist():
 
 def test_unknown_event_is_ignored():
     assert run({"event": "onshape.document.lifecycle.shared", "documentId": DOC}).action == "ignore"
+
+
+def test_duplicate_translation_delivery_is_ignored():
+    d = run({"event": TRANSLATION_COMPLETE, "translationId": "t1"}, seen={"tx:t1"})
+    assert d.action == "ignore" and d.reason == "duplicate delivery"
+
+
+def test_token_matches_only_the_secret():
+    assert token_matches("s3cret", "s3cret")
+    assert not token_matches("s3cre", "s3cret")
+
+
+def test_non_ascii_token_is_rejected_not_raised():  # was a TypeError -> 500
+    assert not token_matches("é", "s3cret")

@@ -5,6 +5,7 @@ Pure function, no I/O, so the F1/F2 rules are unit-tested rather than trusted.
 
 from __future__ import annotations
 
+import hmac
 from dataclasses import dataclass
 from typing import Collection, Mapping
 
@@ -19,6 +20,15 @@ class Decision:
     action: str  # "ack" | "ignore" | "process"
     reason: str
     idempotency_key: str | None = None
+
+
+def token_matches(token: str, secret: str) -> bool:
+    """Constant-time check of the URL token (F2).
+
+    Compares bytes: hmac.compare_digest raises TypeError on non-ASCII str, which
+    would turn a probe like /hook/%C3%A9 into a 500 instead of a 404.
+    """
+    return hmac.compare_digest(token.encode(), secret.encode())
 
 
 def classify(
@@ -38,7 +48,10 @@ def classify(
         tid = event.get("translationId")
         if not tid:
             return Decision("ignore", "translation event without translationId")
-        return Decision("process", "translation complete", f"tx:{tid}")
+        key = f"tx:{tid}"
+        if key in seen_keys:
+            return Decision("ignore", "duplicate delivery", key)
+        return Decision("process", "translation complete", key)
 
     did = event.get("documentId")
     if not did or did not in allowed_document_ids:

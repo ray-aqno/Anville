@@ -9,7 +9,6 @@ Deploy:   modal deploy anville/modal_app.py
 Register: python3 scripts/register_webhook.py <web URL printed by deploy>
 """
 
-import hmac
 import json
 import os
 import time
@@ -27,6 +26,7 @@ from anville.connectors.onshape.events import (
     CREATE_VERSION,
     TRANSLATION_COMPLETE,
     classify,
+    token_matches,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +98,7 @@ def web():
     @api.post("/hook/{token}")
     async def hook(token: str, request: Request):
         # F2: unknown token looks exactly like an unknown route.
-        if not hmac.compare_digest(token, os.environ["ANVILLE_WEBHOOK_SECRET"]):
+        if not token_matches(token, os.environ["ANVILLE_WEBHOOK_SECRET"]):
             raise HTTPException(status_code=404)
         received_at = time.time()
         event = await request.json()
@@ -176,12 +176,14 @@ def _on_create_version(event: dict, received_at: float) -> None:
 
 
 def _part_studio_id(client, did: str, vid: str) -> str:
-    cached = state.get(f"elem:{did}")
+    # Keyed by version: versions are immutable, but a later one may have replaced the studio.
+    key = f"elem:{did}:{vid}"
+    cached = state.get(key)
     if cached:
         return cached
     elements = client.get(f"/documents/d/{did}/v/{vid}/elements?elementType=PARTSTUDIO")
     eid = elements[0]["id"]
-    state[f"elem:{did}"] = eid
+    state[key] = eid
     return eid
 
 

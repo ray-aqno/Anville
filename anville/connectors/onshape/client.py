@@ -84,8 +84,9 @@ class OnshapeClient:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
             try:
                 with urllib.request.urlopen(req, timeout=60) as resp:
-                    payload = resp.read()
+                    # Count on status, before the body: Onshape bills the call even if the read fails.
                     self._count()
+                    payload = resp.read()
                     if raw:
                         return payload
                     return json.loads(payload) if payload else None
