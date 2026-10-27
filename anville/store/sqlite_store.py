@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS doc_state (
     version_id   TEXT NOT NULL,                 -- latest version under review
     version_ts   REAL NOT NULL                  -- Onshape's event timestamp, else arrival time
 );
+
+CREATE TABLE IF NOT EXISTS posted (
+    event_key    TEXT NOT NULL,                 -- the event that produced the comment
+    kind         TEXT NOT NULL,                 -- review, setup_sheet, answer, ...
+    reserved_at  REAL NOT NULL,
+    comment_id   TEXT,                          -- NULL until Onshape confirms the post
+    posted_at    REAL,
+    PRIMARY KEY (event_key, kind)
+);
 """
 
 
@@ -218,6 +227,46 @@ class Store:
             "SELECT version_id FROM doc_state WHERE document_id = ?", (document_id,)
         ).fetchone()
         return row is None or row[0] == version_id
+
+    # --- posted comments ----------------------------------------------------
+
+    def reserve_post(self, event_key: str, kind: str) -> bool:
+        """Claim the right to post; call before the Onshape request. False means don't post.
+
+        Reserving first makes posting at-most-once: a crash between the post and
+        complete_post() leaves an unconfirmed row instead of a second comment.
+        """
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO posted (event_key, kind, reserved_at) VALUES (?, ?, ?)",
+                (event_key, kind, self._clock()),
+            )
+            return cur.rowcount == 1
+
+    def complete_post(self, event_key: str, kind: str, comment_id: str) -> None:
+        with self._write() as conn:
+            cur = conn.execute(
+                "UPDATE posted SET comment_id = ?, posted_at = ? WHERE event_key = ? AND kind = ?",
+                (comment_id, self._clock(), event_key, kind),
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"no reserved post for {event_key} / {kind}")
+
+    def already_posted(self, event_key: str, kind: str) -> bool:
+        """True once reserved, confirmed or not."""
+        row = self._conn().execute(
+            "SELECT 1 FROM posted WHERE event_key = ? AND kind = ?", (event_key, kind)
+        ).fetchone()
+        return row is not None
+
+    def unconfirmed_posts(self, older_than_s: float) -> list[tuple[str, str]]:
+        """Reservations never confirmed: the job died mid-post. For the reaper to flag, not repost."""
+        rows = self._conn().execute(
+            "SELECT event_key, kind FROM posted WHERE comment_id IS NULL AND reserved_at <= ? "
+            "ORDER BY reserved_at, event_key",
+            (self._clock() - older_than_s,),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
 
     def event(self, key: str) -> Event | None:
         row = self._conn().execute("SELECT * FROM events WHERE key = ?", (key,)).fetchone()
