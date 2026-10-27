@@ -103,7 +103,7 @@ reachable(f, d) = accessible(f, d) and some shop tool fits
 ```
 anville/geometry/
   facts.py    PartFacts, FaceFacts, Edge, SetupPlan dataclasses (pure, JSON-serializable)
-  extract.py  extract(step_path) -> PartFacts              (the only module that imports OCP)
+  step.py     extract(step_path) -> PartFacts              (the only module that imports OCP)
   plan.py     min_setups(facts, shop, *, axes=3) -> SetupPlan  (pure Python, no OCP)
   shop.py     the minimal ShopProfile subset plan.py reads: tools [{name, diameter, max_ld}]
 ```
