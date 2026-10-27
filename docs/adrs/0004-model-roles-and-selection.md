@@ -13,9 +13,10 @@ Meta's model docs (dev.meta.ai, checked 2026-10-26) establish these facts:
   - `muse-spark-1.3`, `-1.2`, `-1.1`: text, image, video, PDF in; tool calling; 1M-token context. $1.25 in / $4.25 out per 1M tokens.
   - `-contributor` variants: cheaper, but prompts and outputs may be used to train Meta models.
   - `sam-3.1`: segmentation, $2.50 per 1,000 images.
-- **Muse Spark Open** (816B, open weights) is **not** on Model API. Hosted providers use the ID `meta-models/muse-spark-open`. Self-hosting needs 4× B300, which is out of reach.
+- **Muse Spark Open** (816B, open weights) is **not** on Model API. Meta's deploy page lists the generic ID `meta-models/muse-spark-open`. The hackathon's Baseten deployment is `meta-models/muse-spark-open-1026` at `https://inference.baseten.co/v1`, and the hackathon key is scoped to it: the generic ID returns 403 (verified 2026-10-26; the `-1026` ID returned 200 with a valid tool call). Self-hosting needs 4× B300, which is out of reach.
 - **Muse Glimmer 30B** (Apache 2.0) is self-host only. Its 4-bit variant fits 24 GB of VRAM (Hugging Face model card). The card claims tool use but documents no tool-call parser or structured-output mode.
-- **Muse Code** is a product (a coding-agent subscription), not a model ID.
+- **Muse Code** is a product (a coding agent), not a model ID. It can be driven programmatically through `muse-code-sdk` (TypeScript, Developer Preview; needs Node 20 and the `muse` host binary).
+- **Structured output:** Chat Completions accepts `response_format: {type: "json_schema"}`. The Responses API uses `text.format` instead. Recursive schemas are not supported.
 
 Capability and cost differ by role, and claims about which model is better are vendor-reported. The choice should therefore be **measured**, not assumed.
 
@@ -37,7 +38,9 @@ Capability and cost differ by role, and claims about which model is better are v
 
    Each run records valid-or-correct rate, p50 latency, and dollars per task. **Rule: the cheapest candidate that clears the role's threshold wins.** The default threshold is at least 9 of 10 valid. Results are recorded in the repo.
 3. **Standard mode only.** No `-contributor` model IDs anywhere: development, tests, or demo. Prompts and outputs are not used for Meta training, and `max` reasoning stays available.
-4. **The brief's Baseten ID `meta-models/muse-spark-open-1026`** is replaced by `meta-models/muse-spark-open`, from Meta's deploy page. Confirm it against Baseten's catalog before first use.
+4. **Muse Spark Open runs as `meta-models/muse-spark-open-1026` on Baseten** (corrected: an earlier draft of this ADR replaced it with the generic ID, which the hackathon key rejects). The ID is configuration (`MUSE_SPARK_OPEN_MODEL_ID`), not code.
+5. **Structured outputs where the role allows it.** Extraction roles (fix JSON, reply parsing, ADR 0005 evidence) request `json_schema` output, and code still validates the result. The agent loop uses tool calls.
+6. **Muse Code is an escalation path for the fix compiler, not a primary role.** If the fix compiler fails its eval, a Muse Code session driven through `muse-code-sdk` is the next candidate. It stays out of the hot path because it adds a Node runtime and a preview SDK.
 
 ## Options considered
 
