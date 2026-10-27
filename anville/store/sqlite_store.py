@@ -63,7 +63,25 @@ CREATE TABLE IF NOT EXISTS trace (
     face_ids     TEXT NOT NULL                  -- JSON array
 );
 CREATE INDEX IF NOT EXISTS trace_by_doc ON trace (document_id, cursor);
+
+-- Constraint and shop-outcome ledgers. Minimal on purpose: scope rules, conflict
+-- handling and forgetting are open (CLAUDE.md §4, harness schema) and need an RFC.
+CREATE TABLE IF NOT EXISTS ledger (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ledger       TEXT NOT NULL CHECK (ledger IN ('constraint', 'shop_outcome')),
+    scope        TEXT NOT NULL,                 -- part:<id>, team:<id>, shop:<id>
+    payload      TEXT NOT NULL,                 -- JSON
+    provenance   TEXT NOT NULL,                 -- JSON: which event/run/verification produced it
+    created_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ledger_by_scope ON ledger (ledger, scope, id);
+CREATE TRIGGER IF NOT EXISTS ledger_no_update BEFORE UPDATE ON ledger
+    BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS ledger_no_delete BEFORE DELETE ON ledger
+    BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
 """
+
+LEDGERS = frozenset({"constraint", "shop_outcome"})
 
 TRACE_KINDS = frozenset({
     "run_started", "tool_call", "tool_result", "option", "decision",
@@ -339,6 +357,32 @@ class Store:
                 "element_id": r["element_id"], "kind": r["kind"], "title": r["title"],
                 "detail": json.loads(r["detail"]), "face_ids": json.loads(r["face_ids"]),
             }
+            for r in rows
+        ]
+
+    # --- ledgers -------------------------------------------------------------
+
+    def append_ledger(self, ledger: str, scope: str, payload: dict, provenance: dict) -> int:
+        """Append a verified lesson. Write only after the planner has verified it (ADR 0006 §2)."""
+        if ledger not in LEDGERS:
+            raise ValueError(f"unknown ledger {ledger!r}")
+        if not provenance:
+            raise ValueError("ledger entries need provenance")
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO ledger (ledger, scope, payload, provenance, created_at) VALUES (?, ?, ?, ?, ?)",
+                (ledger, scope, json.dumps(payload), json.dumps(provenance), self._clock()),
+            )
+            return cur.lastrowid
+
+    def read_ledger(self, ledger: str, scope: str | None = None) -> list[dict]:
+        sql, args = "SELECT * FROM ledger WHERE ledger = ?", [ledger]
+        if scope is not None:
+            sql, args = sql + " AND scope = ?", args + [scope]
+        rows = self._conn().execute(sql + " ORDER BY id", args).fetchall()
+        return [
+            {"id": r["id"], "ledger": r["ledger"], "scope": r["scope"], "created_at": r["created_at"],
+             "payload": json.loads(r["payload"]), "provenance": json.loads(r["provenance"])}
             for r in rows
         ]
 
