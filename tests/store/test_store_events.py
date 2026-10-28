@@ -1,5 +1,7 @@
 """ADR 0006 event lifecycle: received -> claimed -> done | failed."""
 
+import threading
+
 import pytest
 from conftest import race, scalar
 
@@ -136,14 +138,14 @@ def test_event_out_of_attempts_is_marked_failed_not_reaped(store, clock):
     assert store.event("version:v1").status == "failed"
 
 
-def test_after_commit_runs_only_for_new_events_and_ledger_entries(db_path, clock):
+def test_after_commit_runs_only_for_event_deliveries_and_ledger_entries(db_path, clock):
     # volume.commit() costs ~1.5 s on Modal (probe c8f35196), so only writes whose loss
     # matters pay it; the rest ride Modal's background commits.
     commits = []
     s = Store(db_path, clock=clock, after_commit=lambda: commits.append(1))
 
     s.record("version:v1", "docA", {})                   # durable
-    s.record("version:v1", "docA", {})                   # duplicate: nothing changed
+    s.record("version:v1", "docA", {})                   # duplicate: durable too (see below)
     token = s.claim("version:v1")
     s.reserve_post("version:v1", "review")
     s.complete_post("version:v1", "review", "c1")
@@ -155,7 +157,54 @@ def test_after_commit_runs_only_for_new_events_and_ledger_entries(db_path, clock
     s.append_ledger("constraint", "team:baja", {"rule": "x"}, {"event": "comment:c1"})  # durable
     s.close()
 
-    assert len(commits) == 2
+    assert len(commits) == 3
+
+
+def test_duplicate_delivery_retries_a_durable_save_that_failed(db_path, clock):
+    # Greptile P1 on PR #4: the row is in SQLite but the Volume save failed. A redelivery
+    # must not answer "duplicate" (-> 200) without making the first insert durable.
+    outcomes = iter([OSError("volume busy"), None])
+
+    def flaky_commit():
+        err = next(outcomes)
+        if err:
+            raise err
+
+    s = Store(db_path, clock=clock, after_commit=flaky_commit)
+    with pytest.raises(OSError):
+        s.record("version:v1", "docA", {})
+
+    assert s.record("version:v1", "docA", {}) is False  # no exception: the save went through
+    assert next(outcomes, "exhausted") == "exhausted"
+    s.close()
+
+
+def test_duplicate_delivery_waits_for_the_first_durable_save(db_path, clock):
+    # Greptile P1 on PR #4: a concurrent duplicate must not return while the first
+    # delivery's volume.commit() is still running.
+    in_commit, release, calls = threading.Event(), threading.Event(), []
+
+    def slow_first_commit():
+        calls.append(1)
+        if len(calls) == 1:
+            in_commit.set()
+            release.wait(5)
+
+    s = Store(db_path, clock=clock, after_commit=slow_first_commit)
+    first = threading.Thread(target=s.record, args=("version:v1", "docA", {}))
+    first.start()
+    assert in_commit.wait(5)
+
+    dup_done = threading.Event()
+    dup = threading.Thread(target=lambda: (s.record("version:v1", "docA", {}), dup_done.set()))
+    dup.start()
+    assert not dup_done.wait(0.3)  # still blocked behind the first save
+
+    release.set()
+    first.join(5)
+    dup.join(5)
+    assert dup_done.is_set()
+    s.close()
 
 
 def test_database_uses_wal(db_path, store):

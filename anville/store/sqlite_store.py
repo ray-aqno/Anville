@@ -125,9 +125,10 @@ class Store:
         self._clock = clock
         # On Modal this is volume.commit(): SQLite's commit alone doesn't make the write durable.
         # It costs ~1.5 s there (probe c8f35196), so only writes whose loss matters call it:
-        # a new event (it gates the webhook's 200) and a ledger entry (a verified lesson).
+        # an event delivery (it gates the webhook's 200) and a ledger entry (a verified lesson).
         # Everything else rides Modal's background commits and the commit at container shutdown.
         self._after_commit = after_commit
+        self._persist_lock = threading.Lock()
         self._lease_s = lease_s
         self._max_attempts = max_attempts
         self._busy_timeout_ms = busy_timeout_ms
@@ -161,9 +162,13 @@ class Store:
         transaction, if it is newer than the version already there. Webhooks can
         arrive out of order, so "newer" is `version_ts` (Onshape's event
         timestamp), falling back to arrival time.
+
+        Returns only once the event is durable, duplicates included: a duplicate
+        waits for the first delivery's save, and retries it if that save failed.
+        Otherwise a redelivery could be acknowledged for an event not yet saved.
         """
         now = self._clock()
-        with self._write(durable=True) as conn:
+        with self._write() as conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO events (key, document_id, payload, received_at) VALUES (?, ?, ?, ?)",
                 (key, document_id, json.dumps(payload, sort_keys=True), now),
@@ -179,7 +184,8 @@ class Store:
                     """,
                     (document_id, version_id, now if version_ts is None else version_ts),
                 )
-            return inserted
+        self._persist()
+        return inserted
 
     def claim(self, key: str) -> int | None:
         """Take the event for processing; returns a fencing token, or None if it isn't ours to run.
@@ -377,12 +383,13 @@ class Store:
             raise ValueError(f"unknown ledger {ledger!r}")
         if not provenance:
             raise ValueError("ledger entries need provenance")
-        with self._write(durable=True) as conn:
+        with self._write() as conn:
             cur = conn.execute(
                 "INSERT INTO ledger (ledger, scope, payload, provenance, created_at) VALUES (?, ?, ?, ?, ?)",
                 (ledger, scope, json.dumps(payload), json.dumps(provenance), self._clock()),
             )
-            return cur.lastrowid
+        self._persist()
+        return cur.lastrowid
 
     def read_ledger(self, ledger: str, scope: str | None = None) -> list[dict]:
         sql, args = "SELECT * FROM ledger WHERE ledger = ?", [ledger]
@@ -437,9 +444,8 @@ class Store:
         return conn
 
     @contextmanager
-    def _write(self, durable: bool = False) -> Iterator[sqlite3.Connection]:
+    def _write(self) -> Iterator[sqlite3.Connection]:
         conn = self._conn()
-        before = conn.total_changes
         conn.execute("BEGIN IMMEDIATE")
         try:
             yield conn
@@ -447,8 +453,12 @@ class Store:
             conn.execute("ROLLBACK")
             raise
         conn.execute("COMMIT")
-        if durable and self._after_commit is not None and conn.total_changes != before:
-            self._after_commit()
+
+    def _persist(self) -> None:
+        """Run after_commit, one at a time: when it returns, every write committed before it is durable."""
+        if self._after_commit is not None:
+            with self._persist_lock:
+                self._after_commit()
 
 
 def _event(row: sqlite3.Row) -> Event:
