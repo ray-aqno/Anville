@@ -1,6 +1,8 @@
 """ADR 0006 event lifecycle: received -> claimed -> done | failed."""
 
+import sqlite3
 import threading
+import time
 
 import pytest
 from conftest import race, scalar
@@ -138,16 +140,17 @@ def test_event_out_of_attempts_is_marked_failed_not_reaped(store, clock):
     assert store.event("version:v1").status == "failed"
 
 
-def test_after_commit_runs_only_for_event_deliveries_and_ledger_entries(db_path, clock):
+def test_after_commit_runs_only_for_deliveries_post_reservations_and_ledger_entries(db_path, clock):
     # volume.commit() costs ~1.5 s on Modal (probe c8f35196), so only writes whose loss
-    # matters pay it; the rest ride Modal's background commits.
+    # matters pay it; the rest ride Modal's background commits. A post reservation matters:
+    # losing it lets a re-run post a second comment (Greptile, PR #7).
     commits = []
     s = Store(db_path, clock=clock, after_commit=lambda: commits.append(1))
 
     s.record("version:v1", "docA", {})                   # durable
     s.record("version:v1", "docA", {})                   # duplicate: durable too (see below)
     token = s.claim("version:v1")
-    s.reserve_post("version:v1", "review")
+    s.reserve_post("version:v1", "review")              # durable
     s.complete_post("version:v1", "review", "c1")
     s.append_trace("docA", "r1", 0, "run_started", "start")
     s.reserve_call("2026-10-27", cap=10)
@@ -157,7 +160,7 @@ def test_after_commit_runs_only_for_event_deliveries_and_ledger_entries(db_path,
     s.append_ledger("constraint", "team:baja", {"rule": "x"}, {"event": "comment:c1"})  # durable
     s.close()
 
-    assert len(commits) == 3
+    assert len(commits) == 4
 
 
 def test_duplicate_delivery_retries_a_durable_save_that_failed(db_path, clock):
@@ -204,6 +207,40 @@ def test_duplicate_delivery_waits_for_the_first_durable_save(db_path, clock):
     first.join(5)
     dup.join(5)
     assert dup_done.is_set()
+    s.close()
+
+
+def test_burst_of_deliveries_shares_durable_saves(db_path, clock):
+    # Staging (PR #7): 20 concurrent duplicates took p50 12.2 s at /hook, because every
+    # record() ran its own volume.commit() in a row. With group commit a burst costs ~2 saves,
+    # and each record() still returns only after a save that started after its row committed.
+    saves, durable = [], set()
+
+    def slow_save():
+        conn = sqlite3.connect(db_path)
+        seen = {r[0] for r in conn.execute("SELECT key FROM events")}  # what this save captures
+        conn.close()
+        time.sleep(0.2)
+        saves.append(1)
+        durable.update(seen)
+
+    s = Store(db_path, clock=clock, after_commit=slow_save)
+    returned_unsaved = []
+
+    def deliver(key):
+        s.record(key, "docA", {})
+        if key not in durable:
+            returned_unsaved.append(key)
+
+    keys = ["comment:c1"] * 10 + [f"comment:c{i}" for i in range(2, 12)]
+    threads = [threading.Thread(target=deliver, args=(k,)) for k in keys]
+    t0 = time.monotonic()
+    [t.start() for t in threads]
+    [t.join(10) for t in threads]
+
+    assert returned_unsaved == []
+    assert len(saves) <= 3
+    assert time.monotonic() - t0 < 2  # 20 saves in a row would take 4 s
     s.close()
 
 
