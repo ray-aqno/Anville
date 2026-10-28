@@ -300,7 +300,10 @@ class Store:
                 "INSERT OR IGNORE INTO posted (event_key, kind, reserved_at) VALUES (?, ?, ?)",
                 (event_key, kind, self._clock()),
             )
-            return cur.rowcount == 1
+        # Durable before the Onshape call (Greptile, PR #7): a reservation lost with the store's
+        # host would let the reaper re-run the job and post a second comment.
+        self._persist()
+        return cur.rowcount == 1
 
     def complete_post(self, event_key: str, kind: str, comment_id: str) -> None:
         with self._write() as conn:

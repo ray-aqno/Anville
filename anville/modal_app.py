@@ -221,8 +221,12 @@ def web():
             raise HTTPException(status_code=500) from None
         _log("recorded", key=key, inserted=inserted, record_s=round(time.time() - received_at, 3))
         if inserted:
-            # If this spawn is lost, the reaper picks the event up after RECEIVED_GRACE_S.
-            await handle_event.spawn.aio(key)
+            try:
+                await handle_event.spawn.aio(key)
+            except Exception as e:
+                # The event is durable, so this is still a 200 (ADR 0006 §3); the reaper
+                # picks it up after RECEIVED_GRACE_S.
+                _log("spawn_failed", key=key, error=repr(e)[:300])
         return {"ok": True}
 
     return api
@@ -271,6 +275,20 @@ def _on_create_version(store, ev) -> None:
               "attempt": ev.attempts}
     trace = _Trace(store, did, f"{vid[:8]}-{ev.attempts}", vid)
     trace.add("run_started", "Reviewing a new version")
+    try:
+        _review(store, ev, trace, timing)
+    except Exception as e:
+        # Close the trace so the panel shows a failed run, not one stuck mid-step.
+        trace.add("error", "Review failed", error=type(e).__name__, message=str(e)[:300])
+        trace.add("run_finished", "Review ended with an error")
+        trace.flush()
+        raise
+
+
+def _review(store, ev, trace: "_Trace", timing: dict) -> None:
+    event = ev.payload
+    did, vid = event["documentId"], event["versionId"]
+    received_at = ev.received_at
     client = _client()
 
     eid = _part_studio_id(client, did, vid)
@@ -286,10 +304,8 @@ def _on_create_version(store, ev) -> None:
     info = _wait_for_translation(client, tid, timing)
     if info.get("requestState") != "DONE":
         _log("translation_failed", tid=tid, state=info.get("requestState"), reason=info.get("failureReason"))
-        trace.add("error", "STEP export failed", state=info.get("requestState"))
-        trace.flush()
         state[f"timing:{vid}"] = timing
-        raise RuntimeError(f"translation {tid} ended {info.get('requestState')}")
+        raise RuntimeError(f"STEP export {tid} ended {info.get('requestState')}")
 
     step = client.get(f"/documents/d/{did}/externaldata/{info['resultExternalDataIds'][0]}",
                       accept="application/octet-stream", raw=True)
@@ -344,8 +360,13 @@ def _review_message(vid: str, plan: dict) -> str:
     """Every number here comes from the SetupPlan (locked decision 3)."""
     dirs = "; ".join(" + ".join(s["directions"]) for s in plan["setups"]) or "none"
     msg = f"Anville reviewed version {vid[:8]}: {plan['count']} setup(s) on a 3-axis mill ({dirs})."
-    if plan["unreachable"]:
-        msg += f" {len(plan['unreachable'])} face(s) can't be finished with the shop's tools."
+    # The two reasons have different fixes: a tool the shop could buy vs. a design change.
+    no_tool = sum(u["reason"] == "no_tool" for u in plan["unreachable"])
+    no_dir = sum(u["reason"] == "no_direction" for u in plan["unreachable"])
+    if no_tool:
+        msg += f" {no_tool} face(s) need a tool the shop doesn't have."
+    if no_dir:
+        msg += f" {no_dir} face(s) can't be reached from any of the six directions."
     return msg + " Geometry only so far; costed options come next."
 
 
