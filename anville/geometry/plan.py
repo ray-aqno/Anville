@@ -61,22 +61,25 @@ class _Part:
         self.faces = {f.id: f for f in facts.faces}
         self.group = {fid: g for g in facts.groups for fid in g}
         self.neighbours: dict[int, set[int]] = {f.id: set() for f in facts.faces}
-        self.sharp: dict[int, set[str]] = {f.id: set() for f in facts.faces}
+        # Concave straight edges along a principal axis: axis -> tightest radius (0.0 when sharp).
+        self.corners: dict[int, dict[str, float]] = {f.id: {} for f in facts.faces}
         for e in facts.edges:
             if e.kind in ("concave", "tangent"):
                 self.neighbours[e.a].add(e.b)
                 self.neighbours[e.b].add(e.a)
             if e.kind == "concave" and e.axis:
-                self.sharp[e.a].add(e.axis)
-                self.sharp[e.b].add(e.axis)
+                r = e.radius or 0.0
+                for fid in (e.a, e.b):
+                    self.corners[fid][e.axis] = min(r, self.corners[fid].get(e.axis, math.inf))
 
     def limit(self, face: FaceFacts, d: str) -> _Limit:
         """Largest tool diameter that can finish `face` from `d`: tightest over its group and concave neighbours."""
         group = self.group.get(face.id, [face.id])
-        if any(d[1] in self.sharp[g] for g in group):
+        corner = min((self.corners[g].get(d[1], math.inf) for g in group), default=math.inf)
+        if corner == 0.0:
             return _Limit(0.0, f"sharp inside corner parallel to {d[1]}")
+        best = _Limit(2 * corner, f"r{corner:g} corner parallel to {d[1]}") if corner < math.inf else _Limit(math.inf, "")
         region = set(group).union(*(self.neighbours[g] for g in group))
-        best = _Limit(math.inf, "")
         for fid in sorted(region):
             g = self.faces[fid]
             if g.concave_axis == d[1] and g.concave_radius is not None and 2 * g.concave_radius < best.diameter:

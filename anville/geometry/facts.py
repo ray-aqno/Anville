@@ -53,8 +53,9 @@ class Edge:
 
     a: int
     b: int
-    kind: str               # tangent | concave | convex
-    axis: str | None = None  # sharp concave straight edges parallel to a principal axis
+    kind: str                  # tangent | concave | convex
+    axis: str | None = None    # sharp concave straight edges parallel to a principal axis
+    radius: float | None = None  # set when an edit fillets that edge; None means sharp
 
 
 @dataclass
@@ -70,6 +71,16 @@ class PartFacts:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def labelled_groups(self) -> dict[str, list[int]]:
+        """Groups as the agent names them: G1, G2, ... in `groups` order (stable for one STEP file)."""
+        return {f"G{i}": ids for i, ids in enumerate(self.groups, 1)}
+
+    def group_faces(self, label: str) -> list[int]:
+        try:
+            return self.labelled_groups()[label]
+        except KeyError:
+            raise ValueError(f"unknown face group {label!r}; this part has G1..G{len(self.groups)}") from None
 
     @classmethod
     def from_dict(cls, d: dict) -> "PartFacts":
