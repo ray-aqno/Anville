@@ -117,7 +117,7 @@ FaceFacts   id, surface (plane|cylinder|cone|sphere|torus|bspline|other), area, 
             axis?, radius?            ← geometric signature for matching faces to Onshape face IDs
             stock, concave_radius?, concave_axis?, n_samples,
             access{dir: {fraction, depth, gap?}}
-Edge        a, b, kind (tangent|concave|convex), axis?   (sharp concave straight edges only)
+Edge        a, b, kind (tangent|concave|convex), axis? (concave straight edges along a principal axis), radius? (set by a fillet edit; absent = sharp)
 SetupPlan   axes, count, setups: [{directions: [dir], faces: [{face_id, tool}]}], unreachable: [{face_id, reason, detail}]
 ```
 
