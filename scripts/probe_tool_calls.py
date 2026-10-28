@@ -12,6 +12,7 @@ Stdlib only. Reads keys from .env; never prints them.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import re
@@ -163,6 +164,8 @@ def _validate(value, schema, path="$") -> list[str]:
             errs.append(f"{path}: {value!r} fails pattern")
         if len(value) < schema.get("minLength", 0) or len(value) > schema.get("maxLength", 10**9):
             errs.append(f"{path}: length {len(value)} out of bounds")
+    if t == "number" and not math.isfinite(value):
+        return [f"{path}: {value} is not a finite number"]
     if t == "number" and "exclusiveMinimum" in schema and not value > schema["exclusiveMinimum"]:
         errs.append(f"{path}: {value} not > {schema['exclusiveMinimum']}")
     if t == "array":
@@ -211,6 +214,17 @@ def _call(base_url: str, key: str, model: str, situation: str, effort: str | Non
         return json.loads(resp.read())
 
 
+def _reject_constant(name: str):
+    raise ValueError(f"non-standard JSON constant {name}")
+
+
+def _parse_args(raw):
+    """Strict JSON: Python's json accepts NaN/Infinity, which are not valid JSON."""
+    if not isinstance(raw, str):
+        raw = json.dumps(raw, allow_nan=False)  # already parsed by the provider; still reject NaN/Infinity
+    return json.loads(raw, parse_constant=_reject_constant)
+
+
 def judge(response: dict, situation: str, expected: str) -> dict:
     choice = response["choices"][0]
     msg = choice["message"]
@@ -229,17 +243,18 @@ def judge(response: dict, situation: str, expected: str) -> dict:
     if schema is None:
         out["errors"].append(f"unknown tool {fn['name']!r}")
         return out
+    out["raw_arguments"] = fn["arguments"]
     try:
-        args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
-    except json.JSONDecodeError as e:
-        out["raw_arguments"] = fn["arguments"]
+        args = _parse_args(fn["arguments"])
+    except ValueError as e:  # JSONDecodeError is a ValueError; so are NaN/Infinity
         out["errors"].append(f"arguments not JSON: {e}")
         return out
     out["args"] = args
-    out["raw_arguments"] = fn["arguments"]
     out["errors"] = _validate(args, schema)
     out["valid"] = not out["errors"]
     out["expected_tool"] = fn["name"] == expected
+    if not out["valid"]:
+        return out  # grounding only means something for schema-valid arguments
     allowed = set(re.findall(r"G[0-9]+", situation))
     out["grounded"] = _face_groups(args) <= allowed
     return out
@@ -283,26 +298,34 @@ def run(label: str, base_url: str, key: str, model: str, effort: str | None = No
     return rows
 
 
+# label, base-URL env var (or fixed URL), key env var, model-id env var
+TARGETS = {
+    "open": ("muse-spark-open", "MUSE_SPARK_OPEN_BASE_URL", "MUSE_SPARK_OPEN_API_KEY", "MUSE_SPARK_OPEN_MODEL_ID"),
+    "spark": ("muse-spark", "https://api.meta.ai/v1", "MODEL_API_KEY", "MUSE_SPARK_MODEL_ID"),
+}
+
+
 def main() -> None:
-    which = sys.argv[1] if len(sys.argv) > 1 else "both"
-    out_path = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else None
-    effort = sys.argv[sys.argv.index("--effort") + 1] if "--effort" in sys.argv else None
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("which", nargs="?", default="both", choices=["open", "spark", "both"])
+    ap.add_argument("--effort", choices=["minimal", "low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--out", type=Path)
+    a = ap.parse_args()
     env = load_env()
-    targets = {
-        "open": ("muse-spark-open", env["MUSE_SPARK_OPEN_BASE_URL"], env["MUSE_SPARK_OPEN_API_KEY"],
-                 env["MUSE_SPARK_OPEN_MODEL_ID"]),
-        "spark": ("muse-spark", "https://api.meta.ai/v1", env["MODEL_API_KEY"], env["MUSE_SPARK_MODEL_ID"]),
-    }
     results = {}
-    for name in (["open", "spark"] if which == "both" else [which]):
-        label, base, key, model = targets[name]
-        if not key:
-            print(f"[{label}] skipped: API key is empty in .env")
+    for name in (["open", "spark"] if a.which == "both" else [a.which]):
+        label, base, key_var, model_var = TARGETS[name]
+        # Read only the selected provider's settings, so one missing provider can't block the other.
+        base = base if base.startswith("https://") else env.get(base, "")
+        key, model = env.get(key_var, ""), env.get(model_var, "")
+        missing = [v for v, val in ((key_var, key), (model_var, model), ("base URL", base)) if not val]
+        if missing:
+            print(f"[{label}] skipped: missing or empty in .env: {', '.join(missing)}")
             continue
-        tag = f"{label}@{effort}" if effort else label
-        results[f"{model}@{effort}" if effort else model] = run(tag, base, key, model, effort)
-    if out_path:
-        Path(out_path).write_text(json.dumps(results, indent=2))
+        tag = f"{label}@{a.effort}" if a.effort else label
+        results[f"{model}@{a.effort}" if a.effort else model] = run(tag, base, key, model, a.effort)
+    if a.out:
+        a.out.write_text(json.dumps(results, indent=2))
 
 
 if __name__ == "__main__":
