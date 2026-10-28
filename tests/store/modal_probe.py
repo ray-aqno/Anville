@@ -69,7 +69,10 @@ def write_then_die(prefix: str, k: int, commit_each: bool) -> None:
 
     s = Store(DB, after_commit=vol.commit if commit_each else None)
     for i in range(k):
-        s.record(f"{prefix}{i}", "docP", {"i": i})
+        s.record(f"{prefix}row:{i}", "docP", {"i": i})
+    # Sentinel: proves the worker got past every write. Without it, a write error before
+    # the kill would read as "rows lost in the crash".
+    s.record(f"{prefix}reached-kill", "docP", {})
     os.kill(os.getpid(), signal.SIGKILL)  # no close(), no clean exit
 
 
@@ -82,7 +85,9 @@ def inspect(prefix: str) -> dict:
     try:
         return {
             "integrity": conn.execute("PRAGMA integrity_check").fetchone()[0],
-            "rows": conn.execute("SELECT COUNT(*) FROM events WHERE key LIKE ?", (prefix + "%",)).fetchone()[0],
+            "rows": conn.execute("SELECT COUNT(*) FROM events WHERE key LIKE ?", (prefix + "row:%",)).fetchone()[0],
+            "reached_kill": conn.execute("SELECT COUNT(*) FROM events WHERE key = ?",
+                                         (prefix + "reached-kill",)).fetchone()[0] == 1,
             "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
         }
     finally:
@@ -149,7 +154,7 @@ def job_overhead(run: str, jobs: int) -> dict:
     svc.remote("calls", "1970-01-01")  # warm
     durable, job = [], []
     for j in range(jobs):
-        key, doc = f"probe:job:{run}:{j}", f"docJ{j}"
+        key, doc = f"probe:job:{run}:{j}", f"docJ-{run}-{j}"
         t = time.perf_counter()
         svc.remote("record", key, doc, {}, version_id=f"v{j}")  # the webhook's durable write
         durable.append(time.perf_counter() - t)
@@ -178,13 +183,20 @@ def main(only: str = "latency,durable,dedup,rtt,job", peek: str = ""):
 
     for commit_each in (True, False) if "durable" in steps else ():
         prefix = f"probe:crash:{run}:{int(commit_each)}:"
+        crashed = False
         try:
             write_then_die.remote(prefix, 20, commit_each)
             print("   write_then_die returned?! (expected a crash)")
-        except Exception as e:  # the container dies; Modal surfaces it as an error
-            print(f"   killed as intended ({type(e).__name__})")
+        except (modal.exception.InternalFailure, modal.exception.RemoteError) as e:
+            crashed = True  # how Modal surfaced the SIGKILL in run c8f35196
+            print(f"   container died ({type(e).__name__})")
+        except Exception as e:  # a write or commit error inside the worker, not the kill
+            print(f"   WORKER ERROR before the kill: {type(e).__name__}: {str(e)[:200]}")
+        result = inspect.remote(prefix)
+        valid = crashed and result["reached_kill"]
         print(f"2. durable (after_commit={'volume.commit' if commit_each else 'None'}), "
-              f"expect rows=20:", inspect.remote(prefix))
+              f"expect rows=20:", result,
+              "" if valid else "<- NOT a crash-durability result: the worker didn't reach the kill")
 
     if peek:  # inspect an event left by an earlier run, e.g. --peek probe:dup:<run>
         ev = StoreSvc().call.remote("event", peek)
