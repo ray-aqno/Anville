@@ -15,7 +15,6 @@ from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepClass import BRepClass_FaceClassifier
-from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepTools import BRepTools
 from OCP.collections import (
@@ -44,10 +43,9 @@ SLIVER_RETRY = 3         # faces with no interior cell centre retry at this mult
 RAY_OFFSET = 0.01        # mm off the surface before casting
 NORMAL_TOL = 0.01        # n·d >= -tol faces the tool (walls parallel to the axis count)
 WALL_LIKE = 0.3          # |n projected ⟂ d| above this measures a gap
-TANGENT_DOT = 0.99       # n1·n2 above this: a smooth (tangent) edge
+TANGENT_DOT = math.cos(math.radians(0.5))  # n1·n2 above this: a smooth (tangent) edge; a 5° kink is sharp
 PRINCIPAL_DOT = 0.999
 STOCK_TOL = 1e-3         # mm
-PROBE = 0.05             # mm, concavity probe distance from an edge
 FAR = 1e9                # mm, ray length
 
 _SURFACES = {GeomAbs_Plane: "plane", GeomAbs_Cylinder: "cylinder", GeomAbs_Cone: "cone",
@@ -165,11 +163,24 @@ def _concave_cylinder(surf, pts) -> tuple[float, str | None] | None:
     return cyl.Radius(), _principal(axis)
 
 
+def _into_face(face, edge, t: float, n: Vec) -> Vec:
+    """Direction from `edge` into `face`, tangent to it. OCCT keeps a face's interior to the left
+    of its oriented edges, so it is n × tangent (checked against a point probe on 248 edges)."""
+    exp = TopExp_Explorer(face, TopAbs_EDGE)
+    while not exp.Current().IsSame(edge):
+        exp.Next()
+    oriented = TopoDS.Edge(exp.Current())
+    p, v = gp_Pnt(), gp_Vec()
+    BRepAdaptor_Curve(oriented).D1(t, p, v)
+    s = -1.0 if oriented.Orientation() == TopAbs_REVERSED else 1.0
+    tan = (s * v.X(), s * v.Y(), s * v.Z())
+    return (n[1] * tan[2] - n[2] * tan[1], n[2] * tan[0] - n[0] * tan[2], n[0] * tan[1] - n[1] * tan[0])
+
+
 def _edges(shape, faces: ShapeMap) -> list[Edge]:
     """Classify every edge between two distinct faces as tangent, concave or convex."""
     emap = EdgeFaceMap()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, emap)
-    inside = BRepClass3d_SolidClassifier(shape)
     out = set()
     for i in range(1, emap.Extent() + 1):
         pair = [TopoDS.Face(f) for f in emap.FindFromIndex(i)]
@@ -188,11 +199,11 @@ def _edges(shape, faces: ShapeMap) -> list[Edge]:
         if _dot(normals[0], normals[1]) > TANGENT_DOT:
             out.add(Edge(a, b, "tangent"))
             continue
-        # Step off the edge toward one face's outside and away from the other's: material means concave.
-        diff = _axpy(normals[0], normals[1], -1.0)
-        probe = _axpy(_xyz(mid), diff, PROBE / math.sqrt(_dot(diff, diff)))
-        inside.Perform(gp_Pnt(*probe), 1e-6)
-        if inside.State() != TopAbs_IN:
+        # Concave when the second face's normal leans toward the first face's interior.
+        # No point classification: the signal is sin(angle), so a 5° kink is as clear as a 90° corner.
+        edge = TopoDS.Edge(emap.FindKey(i))
+        t = 0.5 * (curve.FirstParameter() + curve.LastParameter())
+        if _dot(normals[1], _into_face(pair[0], edge, t, normals[0])) <= 0:
             out.add(Edge(a, b, "convex"))
             continue
         axis = _principal(_xyz(curve.Line().Direction())) if curve.GetType() == GeomAbs_Line else None
@@ -223,8 +234,11 @@ def extract(step_path: str | Path) -> PartFacts:
         BRepGProp.SurfaceProperties_s(face, props)
         kind = _SURFACES.get(surf.GetType(), "other")
         normal = pts[0][1] if kind == "plane" and pts else None
+        # Stock faces lie flat on the bounding box: the whole face, not just its lowest point.
         stock = normal is not None and any(
-            _dot(normal, VECTORS[d]) > PRINCIPAL_DOT and abs(_dot(flo, VECTORS[d]) - top[d]) < STOCK_TOL
+            _dot(normal, VECTORS[d]) > PRINCIPAL_DOT
+            and fhi[_AXIS_INDEX[d[1]]] - flo[_AXIS_INDEX[d[1]]] < STOCK_TOL
+            and abs(_dot(flo, VECTORS[d]) - top[d]) < STOCK_TOL
             for d in DIRECTIONS)
         access = {}
         for d in DIRECTIONS:

@@ -1,7 +1,6 @@
 import pytest
 
 from anville.geometry import ShopProfile, Tool, extract
-from tests.geometry.parts import PARTS, write_step
 
 
 @pytest.fixture(scope="session")
@@ -13,6 +12,8 @@ def shop():
 @pytest.fixture(scope="session")
 def facts(tmp_path_factory):
     """Extract each synthetic part once per session: name -> PartFacts."""
+    from tests.geometry.parts import PARTS, write_step  # OCP: keep it out of test_plan.py's collection
+
     out = tmp_path_factory.mktemp("parts")
     cache = {}
 

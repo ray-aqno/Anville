@@ -16,6 +16,8 @@ EXPECTED_3AXIS = {
     "tight_corner": (1, [["+Z"]]),
     "clevis": (1, [["+Z"]]),
     "undercut": (1, [["+Z"]]),
+    "wedge": (1, [["-Z"]]),
+    "kinked_pocket": (1, [["+Z"]]),
 }
 
 
@@ -80,6 +82,20 @@ def test_bore_inside_pocket_wall_has_no_direction(facts, shop):
     plan = min_setups(facts("undercut"), shop)
     assert len(plan.unreachable) == 2
     assert {u.reason for u in plan.unreachable} == {"no_direction"}
+
+
+def test_slightly_sloped_face_is_not_stock(facts):
+    f = facts("wedge")
+    assert [face.normal[2] < -0.999 for face in f.faces if not face.stock] == [True]
+
+
+def test_shallow_sharp_kink_is_not_treated_as_tangent(facts, shop):
+    f = facts("kinked_pocket")
+    kink = [e for e in f.edges if e.axis == "Z"]
+    assert len(kink) == 1 and kink[0].kind == "concave"
+    flagged = {u.face_id: u for u in min_setups(f, shop).unreachable}
+    assert {kink[0].a, kink[0].b} <= flagged.keys()
+    assert "sharp" in flagged[kink[0].a].detail
 
 
 @pytest.mark.parametrize("name,count", [("plain_block", 1), ("two_pockets", 1), ("side_hole", 1), ("undercut", 1)])
