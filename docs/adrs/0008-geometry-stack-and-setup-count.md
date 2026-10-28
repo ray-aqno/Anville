@@ -1,6 +1,6 @@
 # ADR 0008: Geometry stack and setup-count method
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-27)
 - **Date:** 2026-10-27
 - **Depends on:** ADR 0001 (STEP in, no CAD API), ADR 0002 (Decisions 3 and 5), ADR 0003 (code computes every number)
 - **Feeds:** ADR 0005 (callouts map to face groups), ADR 0006 and 0007 (comments anchor to faces)
@@ -184,3 +184,4 @@ Cost is linear in rays, at about 18 µs per ray. A part with 150 faces at 2 mm s
   - when sampling at 4× changes a count on any real part;
   - when the shop-profile ADR defines tools with a reach length instead of L:D;
   - when real outcomes show the finishing-tool rule driving bad cost estimates.
+- **Follow-up (Rayyan, 2026-10-27): flag precision.** Limits apply group-wide (§5), so one sharp corner marks a whole wall ring unreachable: 9 faces in `kinked_pocket`, where only 2 meet at the kink. Setup counts are unaffected, but anchored comments and fix intents would point at more geometry than is at fault. This is to be handled as a broader pass on how flags are localized to faces, not as a patch to the sharp-corner rule alone.
