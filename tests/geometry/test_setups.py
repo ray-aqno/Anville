@@ -18,6 +18,10 @@ EXPECTED_3AXIS = {
     "undercut": (1, [["+Z"]]),
     "wedge": (1, [["-Z"]]),
     "kinked_pocket": (1, [["+Z"]]),
+    "demo_bracket": (2, [["+Z"], ["-Z"]]),
+    "demo_bracket_unchamfered": (1, [["+Z"]]),
+    "demo_bracket_b": (2, [["+Z"], ["-Z"]]),
+    "demo_bracket_b_unchamfered": (1, [["+Z"]]),
 }
 
 

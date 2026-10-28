@@ -10,7 +10,7 @@ from pathlib import Path
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
-from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
 from OCP.GeomAbs import GeomAbs_Line
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
@@ -120,8 +120,67 @@ def kinked_pocket():
     return _cut(plain_block(), fillet.Shape())
 
 
+def _chamfer(shape, distance, on_edge):
+    """Chamfer the one straight edge whose midpoint satisfies `on_edge(x, y, z)`."""
+    tool = BRepFilletAPI_MakeChamfer(shape)
+    found = 0
+    exp = TopExp_Explorer(shape, TopAbs_EDGE)
+    seen = []
+    while exp.More():
+        edge = TopoDS.Edge(exp.Current())
+        curve = BRepAdaptor_Curve(edge)
+        mid = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))
+        if curve.GetType() == GeomAbs_Line and on_edge(mid.X(), mid.Y(), mid.Z()) \
+                and not any(edge.IsSame(e) for e in seen):
+            tool.Add(distance, edge)
+            seen.append(edge)
+            found += 1
+        exp.Next()
+    if found != 1:
+        raise ValueError(f"expected one edge to chamfer, matched {found}")
+    return tool.Shape()
+
+
+def _demo_bracket_body():
+    """Demo part A without its last feature. Onshape build sheet: docs/demo/build-sheet.md."""
+    part = _box(0, 0, 0, 100, 60, 20)
+    part = _cut(part, _pocket_body(25, 15, 12, 50, 30, 10, 6))          # top pocket 50×30×8, r6
+    for x in (12, 88):
+        part = _cut(part, _cylinder((x, 30, -1), (0, 0, 1), 4.25, 22))  # Ø8.5 through (M8 clearance)
+    return _chamfer(part, 1.0, lambda x, y, z: abs(y - 60) < 1e-6 and abs(z - 20) < 1e-6)  # top edge break
+
+
+def demo_bracket():
+    """Demo part A: top features plus a 2 mm weld-clearance chamfer on one bottom edge. Expect 2 setups (+Z, −Z)."""
+    return _chamfer(_demo_bracket_body(), 2.0, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
+
+
+def demo_bracket_unchamfered():
+    """Demo part A with the bottom chamfer suppressed (the fix branch). Expect 1 setup."""
+    return _demo_bracket_body()
+
+
+def _demo_bracket_b_body():
+    """Demo part B (the learning beat) without its last feature."""
+    # 20 mm thick: the Ø10.5 hole must stay within EM6's 24 mm reach, since shop tools have no type (no drills).
+    part = _box(0, 0, 0, 80, 40, 20)
+    part = _cut(part, _pocket_body(30, 10, 12, 40, 20, 10, 5))           # top pocket 40×20×8, r5
+    return _cut(part, _cylinder((15, 20, -1), (0, 0, 1), 5.25, 22))      # Ø10.5 through (M10 clearance)
+
+
+def demo_bracket_b():
+    """Demo part B: same pattern, its own 1.5 mm bottom chamfer on the x=0 edge. Expect 2 setups (+Z, −Z)."""
+    return _chamfer(_demo_bracket_b_body(), 1.5, lambda x, y, z: abs(x) < 1e-6 and abs(z) < 1e-6)
+
+
+def demo_bracket_b_unchamfered():
+    """Demo part B with the bottom chamfer suppressed. Expect 1 setup."""
+    return _demo_bracket_b_body()
+
+
 PARTS = {f.__name__: f for f in (plain_block, two_pockets, side_hole, deep_slot, tight_corner, clevis, undercut,
-                                 wedge, kinked_pocket)}
+                                 wedge, kinked_pocket, demo_bracket, demo_bracket_unchamfered,
+                                 demo_bracket_b, demo_bracket_b_unchamfered)}
 
 
 def write_step(shape, path: Path) -> Path:

@@ -62,9 +62,18 @@ def test_shallower_slot_becomes_reachable(facts, shop):
 def test_removing_the_bottom_pocket_drops_a_setup(facts, shop):
     f = facts("two_pockets")
     bottom = next(x.id for x in f.faces if x.concave_radius and x.access.get("-Z"))
-    result = evaluate_edits(f, shop, [{"kind": "set_depth", "face_group": _group_of(f, bottom)}])
-    removal = next(o for o in _options(result, "set_depth") if o.params["depth"] == 0.0)
+    result = evaluate_edits(f, shop, [{"kind": "remove_feature", "face_group": _group_of(f, bottom)}])
+    (removal,) = result.options
     assert (removal.before.setups, removal.after.setups) == (2, 1)
+    assert len(removal.removed_faces) == 9  # 4 walls, 4 corner fillets, the floor
+
+
+def test_set_depth_never_proposes_zero(facts, shop):
+    """Removal has its own kind: one option, whatever direction the feature is cut from."""
+    f = facts("deep_slot")
+    slot = _group_of(f, next(x.id for x in f.faces if x.concave_radius))
+    depths = [o.params["depth"] for o in evaluate_edits(f, shop, [{"kind": "set_depth", "face_group": slot}]).options]
+    assert 0.0 not in depths and depths
 
 
 def test_long_reach_tool_for_the_slot(facts, shop):
@@ -81,7 +90,7 @@ def test_naming_two_groups_of_one_feature_offers_each_value_once(facts, shop):
     groups = sorted({_group_of(f, x.id) for x in f.faces if not x.stock})
     assert len(groups) == 2  # walls and floor
     result = evaluate_edits(f, shop, [{"kind": "set_depth", "face_group": g} for g in groups])
-    assert sorted(o.params["depth"] for o in result.options) == [0.0, 12.0]
+    assert sorted(o.params["depth"] for o in result.options) == [12.0]
     assert [x.reason for x in result.skipped] == ["same feature as an earlier request: its options are listed once"]
 
 
@@ -165,9 +174,9 @@ def test_options_that_leave_the_plan_unchanged_are_returned_and_flagged():
                        access={"+Z": Access(1.0, 5.0)}) for i in (1, 2)]
     f = PartFacts(source_sha256="t", bbox=((0, 0, 0), (1, 1, 1)), faces=faces, edges=[],
                   groups=face_groups(faces, []), extract_s=0.0)
-    result = evaluate_edits(f, ShopProfile([Tool("EM6", 6.0, 4.0)]), [{"kind": "set_depth", "face_group": "G1"}])
+    result = evaluate_edits(f, ShopProfile([Tool("EM6", 6.0, 4.0)]), [{"kind": "remove_feature", "face_group": "G1"}])
     (removal,) = result.options
-    assert removal.params["depth"] == 0.0 and removal.removed_faces == [1]
+    assert removal.kind == "remove_feature" and removal.removed_faces == [1]
     assert (removal.before, removal.after) == (removal.before, removal.before)
     assert removal.changes_plan is False
     assert result.skipped == []
@@ -176,7 +185,7 @@ def test_options_that_leave_the_plan_unchanged_are_returned_and_flagged():
 def test_plan_changing_options_sort_first(facts, shop):
     f = facts("two_pockets")
     result = evaluate_edits(f, shop, [{"kind": k, "face_group": g} for g in f.labelled_groups()
-                                      for k in ("set_min_radius", "set_depth")])
+                                      for k in ("set_min_radius", "remove_feature")])
     flags = [o.changes_plan for o in result.options]
     assert flags == sorted(flags, reverse=True) and flags[0]
 

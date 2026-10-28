@@ -10,7 +10,8 @@ This scores; it doesn't recommend. Every evaluated candidate is returned, flagge
 no setup still reaches the agent, for instance when the designer asked for it on intent alone.
 
 Part edits act on a feature: the named group plus the groups sharing a concave edge with it, so
-"make this pocket shallower" moves its walls and its floor together.
+"make this pocket shallower" moves its walls and its floor together, and `remove_feature` drops
+all of it (in CAD: suppress the feature that made those faces; ADR 0002 Amendment 1).
 """
 
 import copy
@@ -21,8 +22,8 @@ from anville.geometry.facts import DIRECTIONS, PartFacts, face_groups
 from anville.geometry.plan import SetupPlan, _Part, min_setups
 from anville.geometry.shop import ShopProfile, Tool
 
-CATALOG = ("set_min_radius", "set_depth", "add_tool", "add_fixture", "route_machine")
-NEEDS_GROUP = ("set_min_radius", "set_depth", "add_tool")
+CATALOG = ("set_min_radius", "set_depth", "remove_feature", "add_tool", "add_fixture", "route_machine")
+NEEDS_GROUP = ("set_min_radius", "set_depth", "remove_feature", "add_tool")
 
 
 @dataclass
@@ -152,10 +153,13 @@ def _candidates(facts, shop, axes, base, kind, label):
             deepest = max(depths)
             limit = min(part.limit(by_id[fid], d).diameter for fid in feature)
             reaches = sorted({t.reach for t in tools if t.diameter <= limit + 1e-6 and t.reach < deepest}, reverse=True)
-            for depth in reaches + [0.0]:
+            for depth in reaches:
                 params = {"direction": d, "depth": depth}
                 yield (f"set_depth/{label}/{d}/{depth:g}", "part", params,
                        (_with_depth(facts, feature, d, deepest - depth), shop, axes))
+
+    elif kind == "remove_feature":
+        yield f"remove_feature/{label}", "part", {}, (_without(facts, feature), shop, axes)
 
     elif kind == "add_tool":
         for d in DIRECTIONS:
@@ -212,15 +216,18 @@ def _with_radius(facts: PartFacts, feature: set[int], r: float) -> PartFacts:
     return new
 
 
-def _with_depth(facts: PartFacts, feature: set[int], d: str, shift: float) -> PartFacts:
-    """Raise the feature's floor by `shift` along d; a shift to zero depth removes the feature."""
+def _without(facts: PartFacts, feature: set[int]) -> PartFacts:
+    """Drop the feature's faces; the stock faces it was cut from close over the gap."""
     new = copy.deepcopy(facts)
-    deepest = max(f.access[d].depth for f in new.faces if f.id in feature)
-    if shift >= deepest - 1e-9:
-        new.faces = [f for f in new.faces if f.id not in feature]
-        new.edges = [e for e in new.edges if e.a not in feature and e.b not in feature]
-        new.groups = face_groups(new.faces, new.edges)
-        return new
+    new.faces = [f for f in new.faces if f.id not in feature]
+    new.edges = [e for e in new.edges if e.a not in feature and e.b not in feature]
+    new.groups = face_groups(new.faces, new.edges)
+    return new
+
+
+def _with_depth(facts: PartFacts, feature: set[int], d: str, shift: float) -> PartFacts:
+    """Raise the feature's floor by `shift` along d."""
+    new = copy.deepcopy(facts)
     for f in new.faces:
         if f.id in feature:
             f.access[d].depth = max(0.0, f.access[d].depth - shift)
