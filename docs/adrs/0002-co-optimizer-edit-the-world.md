@@ -50,16 +50,17 @@ Constraints on the design: setup count is computed from geometry, never guessed 
 
 ## Amendment 1 (Proposed, 2026-10-28): `remove_feature` joins the catalog
 
-**Context.** PR #8 (`evaluate_edits`) found that, among predicted edits, only removing a feature or routing to 5-axis lowers the setup count. Radius and depth edits change *how* a face is cut, never *from which side*. The demo's fix branch therefore suppresses a bottom chamfer (2 → 1 setups). Removal was first expressed as `set_depth` with depth 0. Three problems:
+**Context.** PR #8 (`evaluate_edits`) found that, among predicted edits, only removing a feature or routing to 5-axis lowers the setup count. Radius and depth edits change *how* a face is cut, never *from which side*. The demo parts were therefore built around a removable bottom chamfer (2 → 1 setups). Rayyan has since given that chamfer a stated intent (weld clearance). The intent protects the face, so the demo's fix became shop-side, and `remove_feature` stays as a capability for features whose intent allows it. Removal was first expressed as `set_depth` with depth 0. Three problems:
 - **Depth means nothing for a chamfer.** "Set the depth of this chamfer to 0" reads as nonsense to the designer and to the model.
 - **Removal doesn't depend on direction, but depth does.** The demo's bottom-edge chamfer is fully visible from −Z, from −Y, and along its own length from ±X (measured with `extract`). `set_depth` would have offered the same removal once for each of those directions.
-- **The CAD action is "suppress", not "resize".** Spike 0001 shows the connector edits by "read feature → patch → update → verify". Suppression is one more patch: the feature's `suppressed` flag. That flag is from memory of Onshape's feature model and wasn't exercised in the spike, so it needs one call to confirm.
+- **The CAD action is "suppress", not "resize".** Spike 0001 shows the connector edits by "read feature → patch → update → verify". Suppression is one more patch: the feature's `suppressed` flag. **Verified 2026-10-28 by the main session:** `suppressed: true` on a feature update returned `featureStatus: OK`, the face count went from 13 to 12, and it took 2 Onshape calls.
 
 **Decision.**
 1. Add `PartEdit: remove_feature`. It drops the named group plus the groups that share a concave edge with it (the same "feature" scope as the other part edits). The connector compiles it to suppressing the CAD feature that made those faces.
 2. `set_depth` no longer proposes depth 0. It only proposes depths that a fitting tool reaches.
 
 **Consequences.**
+- **Removal must respect stated intent.** A face whose intent is stated (RFC 0001's gate) is protected, so `remove_feature` on it is a violation for the tool layer to reject before scoring (ADR 0003 Amendment 1), not a fix.
 - **Predicted vs. measured:** on both demo parts, the predicted removal matches re-extracting the part with the chamfer suppressed: 1 setup and 0 unreachable faces in both (`tests/geometry/test_demo_parts.py`).
 - **Where prediction stops being exact:** a removed feature that *defines* the bounding box (for example a boss that sets the part's height) changes which faces count as stock, and dropping faces can't predict that. Such removals need the measured path.
 - **Main session:**

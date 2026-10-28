@@ -1,4 +1,7 @@
-"""The demo's fix branch (handoff 2026-10-28): suppressing a bottom chamfer drops a setup, predicted and measured."""
+"""remove_feature as a capability: removing the demo parts' bottom chamfer, predicted on facts, matches re-extraction.
+
+The demo itself fixes Part A shop-side: the chamfer's stated intent (weld clearance) protects it from removal.
+"""
 
 import pytest
 

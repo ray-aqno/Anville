@@ -6,11 +6,11 @@ Two synthetic brackets for the demo (locked decision 7). They're designed to *lo
 - **Units:** mm. Material: 6061-T6 aluminum (appearance only; the planner doesn't read material).
 - **Orientation:** model with Z up and the part's corner at the origin, on the Top plane. The setup directions in the expected results (+Z, −Z) assume this orientation.
 - **One part per Part Studio.** `extract` rejects a STEP file that holds more than one solid.
-- **The bottom chamfer is its own feature, and the last one.** The fix branch suppresses only that feature, and nothing downstream depends on it.
+- **The bottom chamfer is its own feature, and the last one.** Nothing downstream depends on it, so suppressing it can never break a reference.
 
 Onshape feature names and dialogs below are from memory, not checked against the current UI.
 
-## Part A: shock-mount bracket (the first review and the fix branch)
+## Part A: shock-mount bracket (the first review)
 
 | # | Feature | Definition |
 |---|---|---|
@@ -23,8 +23,9 @@ Onshape feature names and dialogs below are from memory, not checked against the
 **Expected Anville results** (shop: EM12, EM6, EM3 flat endmills at L:D 4):
 - **2 setups: +Z, then −Z.** The weld-clearance chamfer is the *only* face in the −Z setup.
 - The 1 mm top edge break costs nothing: it is cut in the +Z setup.
-- **Fix branch:** suppress feature 5 → **1 setup.** `evaluate_edits` predicts this as `remove_feature` on the chamfer's group. Re-extracting the suppressed part measures the same result (asserted in `test_demo_parts.py`).
-- On 3+2 (5-axis): 1 setup, the shop-side alternative to suppressing.
+- **The fix is shop-side.** The feature's name states its intent, so the face is protected and Anville must not propose removing it. The demo fix is a back-chamfer cutter that reaches the bottom edge from +Z: **1 setup, intent intact.** This needs tool types in the shop profile (an RFC is pending), so it isn't modelled yet.
+- On 3+2 (5-axis): 1 setup, another shop-side route.
+- `remove_feature` still computes the removal as a capability: predicted 2 → 1, matching re-extraction of the part with feature 5 suppressed (`test_demo_parts.py`).
 - Finishing tools: pocket walls, floor and r6 corners EM12; holes EM6; chamfers EM12.
 - Extraction: about 0.8 s locally (19 faces).
 
@@ -41,7 +42,7 @@ Onshape feature names and dialogs below are from memory, not checked against the
 
 **Expected Anville results:**
 - **2 setups: +Z, then −Z.** The chamfer is again the only −Z face.
-- Suppressing feature 4 → **1 setup**, predicted and measured.
+- The same shop-side fix applies. As a capability, removal computes 2 → 1, predicted and measured.
 - Finishing tools: everything EM6 (the r5 corners cap the tool at Ø10).
 
 **For the learning beat:** this part arrives with the same pattern, a bottom chamfer that alone costs a flip. Whatever Anville learned on Part A (the designer's reason for the chamfer, or the shop's note on bottom edge breaks) should shape this review from the start. Which lesson to record is the main session's call.
