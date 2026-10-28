@@ -38,7 +38,7 @@ A throwaway prototype (OCP only, 7 synthetic parts) was run before writing this.
 - **Units and frame:** mm, in the part's own STEP coordinates. The STEP reader converts to mm. Verified: a file that declares `METRE` reads back ×1000.
 - **Directions:** `+X −X +Y −Y +Z −Z`. A direction `d` points from the part toward the spindle, so the tool moves along `−d` as it enters.
 - **Stock:** the blank is squared to the part's bounding box.
-  - Planar faces that lie on the bounding box and face outward are **stock faces**. They are finished in whatever setups already exist, or left as stock, and never add a setup.
+  - Planar faces that lie flat on the bounding box (the whole face, not only its lowest point) and face outward are **stock faces**. A face sloped by even 1° is machined. They are finished in whatever setups already exist, or left as stock, and never add a setup.
   - Every part needs at least 1 setup, so a plain block comes out as **1 setup** (`+Z`).
 
 ### 3. Accessibility: sampled ray casting
@@ -54,9 +54,10 @@ A throwaway prototype (OCP only, 7 synthetic parts) was run before writing this.
 These are raw measured facts, so the `PartEdit`s from ADR 0002 can change them and re-plan.
 - **`concave_radius` and `concave_axis`:** set for concave cylindrical faces (corner fillets, holes), with the axis when it is principal.
 - **`gap[d]`:** set for wall-like samples, meaning the normal projected perpendicular to `d` has length > 0.3. It is the minimum, over the face's samples, of the ray distance straight out from the wall to opposing material. It catches open slots and clevises that have no radius anywhere.
-- **Adjacency:** every edge between two faces is classified by normals at the edge midpoint plus a solid-classifier probe:
-  - `tangent` when `n₁·n₂ > 0.99`;
-  - otherwise `concave` or `convex`.
+- **Adjacency:** every edge between two faces is classified by the normals at the edge midpoint:
+  - `tangent` when the faces meet within 0.5°;
+  - otherwise `concave` when the second face's normal leans into the first face (`n₂ · (n₁ × t) > 0`, where `t` is the edge's tangent as oriented in that face), and `convex` when it doesn't.
+  - This needs no point classification, so a 5° kink is as clear as a 90° corner. A solid-classifier probe was tried first and called a 5° kink convex, because the probe landed only 0.002 mm into material (Greptile, PR #5). The two methods agree on all 248 edges at 25° or more across the test parts.
 
   A sharp concave straight edge parallel to a principal axis records that axis.
 - **Face groups:** union-find over coplanar planar neighbours and over concave-cylinder faces with their tangent neighbours. A group is a smooth region, such as a pocket's wall ring (walls plus corner fillets) or its floor. A pocket is its wall group plus the floor group joined to it across a concave edge. Groups are the unit for edits (ADR 0002), callouts (ADR 0005), and comments.
@@ -117,7 +118,7 @@ FaceFacts   id, surface (plane|cylinder|cone|sphere|torus|bspline|other), area, 
             stock, concave_radius?, concave_axis?, n_samples,
             access{dir: {fraction, depth, gap?}}
 Edge        a, b, kind (tangent|concave|convex), axis?   (sharp concave straight edges only)
-SetupPlan   axes, setups: [{direction, face_ids, tools{face_id: tool}}], unreachable: [{face_id, reason, detail}]
+SetupPlan   axes, count, setups: [{directions: [dir], faces: [{face_id, tool}]}], unreachable: [{face_id, reason, detail}]
 ```
 
 - **Face IDs** are the OCCT indices in STEP order. They are stable for the same file, but **they are not Onshape face IDs.**
