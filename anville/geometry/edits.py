@@ -65,12 +65,13 @@ def feature_faces(facts: PartFacts, label: str) -> set[int]:
     """The named group plus non-stock groups that share a concave edge with it."""
     group_of = {fid: g for g, ids in facts.labelled_groups().items() for fid in ids}
     stock = {f.id for f in facts.faces if f.stock}
-    out = set(facts.group_faces(label))
+    named = set(facts.group_faces(label))
+    out = set(named)
     for e in facts.edges:
         if e.kind != "concave":
             continue
         for a, b in ((e.a, e.b), (e.b, e.a)):
-            if a in out and b not in stock:
+            if a in named and b not in stock:  # one hop from the named group, never from what was added
                 out |= set(facts.group_faces(group_of[b])) - stock
     return out
 
@@ -95,6 +96,9 @@ def evaluate_edits(facts: PartFacts, shop: ShopProfile, requests: list[dict], *,
                 continue
             seen.add(same)
             option = _score(key, kind, label, side, params, facts, base, *world)
+            # Offer only what changes the computed plan (ADR 0002: never recommend a change that saves
+            # nothing). Cycle time isn't modelled yet, so a removal that only saves machining time has
+            # no number behind it; once Summary carries dollars, it passes this check on its own.
             if option.after != option.before or option.tool_changes:
                 found.append(option)
         if found:
@@ -113,9 +117,9 @@ def _validate(facts: PartFacts, req: dict) -> None:
     extra = set(req) - {"kind", "face_group"}
     if extra:
         raise ValueError(f"requests name a kind and a face group; code proposes the values (got {sorted(extra)})")
-    if req["kind"] in NEEDS_GROUP:
-        if "face_group" not in req:
-            raise ValueError(f"{req['kind']} needs a face_group")
+    if req["kind"] in NEEDS_GROUP and "face_group" not in req:
+        raise ValueError(f"{req['kind']} needs a face_group")
+    if "face_group" in req:
         facts.group_faces(req["face_group"])
 
 
@@ -162,10 +166,21 @@ def _candidates(facts, shop, axes, base, kind, label):
             if not fitting or depth <= fitting[0].reach:
                 continue  # nothing fits at all, or an existing tool already reaches
             base_tool = fitting[0]
-            tool = Tool(f"{base_tool.name}-LR", base_tool.diameter, math.ceil(depth / base_tool.diameter))
+            max_ld = math.ceil(depth / base_tool.diameter)
+            tool = Tool(_unique_name(f"{base_tool.name}-L{base_tool.diameter * max_ld:g}", shop),
+                        base_tool.diameter, max_ld)
             params = {"name": tool.name, "diameter": tool.diameter, "max_ld": tool.max_ld, "direction": d}
-            yield f"add_tool/{label}/{d}/{tool.name}x{tool.max_ld:g}", "shop", params, \
+            yield f"add_tool/{label}/{d}/{tool.name}", "shop", params, \
                 (facts, ShopProfile(list(shop.tools) + [tool]), axes)
+
+
+def _unique_name(name: str, shop: ShopProfile) -> str:
+    """Plans record tools by name only, so a proposed tool must not reuse one already in the shop."""
+    taken = {t.name for t in shop.tools}
+    out, n = name, 2
+    while out in taken:
+        out, n = f"{name}-{n}", n + 1
+    return out
 
 
 def _with_radius(facts: PartFacts, feature: set[int], r: float) -> PartFacts:

@@ -115,3 +115,34 @@ def test_filleting_a_sharp_corner_replaces_zero_with_the_radius():
     (option,) = evaluate_edits(f, shop, [{"kind": "set_min_radius", "face_group": "G1"}]).options
     assert option.params["radius"] == 3.0
     assert (option.before.unreachable, option.after.unreachable) == (2, 0)
+
+
+def _chain(edge_order):
+    """Three single-face groups joined A-B-C by concave edges, listed in the given order."""
+    faces = [FaceFacts(id=i, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False,
+                       access={"+Z": Access(1.0, 5.0)}) for i in (1, 2, 3)]
+    edges = [Edge(*pair, "concave") for pair in edge_order]
+    return PartFacts(source_sha256="t", bbox=((0, 0, 0), (1, 1, 1)), faces=faces, edges=edges,
+                     groups=face_groups(faces, edges), extract_s=0.0)
+
+
+@pytest.mark.parametrize("order", [[(1, 2), (2, 3)], [(2, 3), (1, 2)]])
+def test_feature_is_one_hop_whatever_the_edge_order(order):
+    f = _chain(order)
+    assert feature_faces(f, "G1") == {1, 2}
+
+
+def test_long_reach_tool_gets_a_name_no_shop_tool_has():
+    f = _chain([(1, 2), (2, 3)])
+    for face in f.faces:
+        face.access["+Z"].depth = 45.0
+    shop = ShopProfile([Tool("EM3", 3.0, 4.0), Tool("EM3-LR", 3.0, 8.0)])
+    (option,) = evaluate_edits(f, shop, [{"kind": "add_tool", "face_group": "G1"}]).options
+    assert option.params["name"] not in {t.name for t in shop.tools}
+    assert "45" in option.params["name"]
+
+
+@pytest.mark.parametrize("kind", ["route_machine", "add_fixture"])
+def test_unknown_group_is_rejected_for_every_kind(kind, facts, shop):
+    with pytest.raises(ValueError, match="G99"):
+        evaluate_edits(facts("two_pockets"), shop, [{"kind": kind, "face_group": "G99"}])
