@@ -1,14 +1,18 @@
-"""Day-1 spike: Onshape webhook round trip on Modal.
+"""Anville on Modal: webhook → durable event store → per-event jobs (ADR 0006), geometry (ADR 0008).
 
-    Onshape ──POST /hook/<secret>──▶ web()  ── classify (F1/F2, idempotency) ──▶ 200 immediately
-                                       └── spawn ──▶ handle_event()
-                                              createversion: dummy comment + STEP export, timed
-                                              comment.create: log only (re-checked for self-comments)
+    Onshape ──POST /hook/<secret>──▶ web() ── classify (F1/F2) ──▶ StoreSvc.record (durable) ──▶ 200
+                                                                      └── spawn ──▶ handle_event(key)
+    handle_event(key): claim → STEP export → analyze() → setup count → comment → finish → spawn next
+    analyze(vid):      OCP image only. STEP → PartFacts → SetupPlan
+    reaper:            re-spawns events left `received`, or `claimed` past their lease
+    StoreSvc:          the only process that opens the SQLite file (single writer, its own Volume)
 
-Deploy:   modal deploy anville/modal_app.py
+Deploy with recreate, so two store containers never overlap (Volumes have no cross-host locking):
+    modal deploy --strategy recreate anville/modal_app.py
 Register: python3 scripts/register_webhook.py <web URL printed by deploy>
 """
 
+import datetime as dt
 import json
 import os
 import time
@@ -32,9 +36,13 @@ from anville.connectors.onshape.events import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 app = modal.App("anville")
-image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install("fastapi[standard]")
+_base = modal.Image.debian_slim(python_version="3.12")
+image = _base.pip_install("fastapi[standard]").add_local_python_source("anville")
+# OCP links libGL/libX11, which its wheel doesn't bundle (ADR 0008). ~380 MB installed,
+# so only analyze() uses this image; the webhook stays small and starts fast.
+geo_image = (
+    _base.apt_install("libgl1", "libx11-6")
+    .pip_install("cadquery-ocp-novtk==8.0.1.1.0")
     .add_local_python_source("anville")
 )
 # .env is read only on the deploying machine; containers receive the values via the Secret.
@@ -44,8 +52,11 @@ if modal.is_local():
     secrets = [modal.Secret.from_dict(load_env(REPO_ROOT / ".env"))]
 else:
     secrets = [modal.Secret.from_dict({})]
+# Ephemeral only (ADR 0006 §7): self-created IDs, translation-done flags, caches, timings.
 state = modal.Dict.from_name("anville-state", create_if_missing=True)
 data = modal.Volume.from_name("anville-data", create_if_missing=True)
+# The database gets its own Volume, so data.commit() in jobs never touches the database file.
+store_vol = modal.Volume.from_name("anville-store", create_if_missing=True)
 
 # How long handle_event waits for the translation.complete webhook before polling.
 TX_WEBHOOK_WAIT_S = 120
@@ -53,6 +64,21 @@ TX_POLL_INTERVAL_S = 15
 TX_POLL_MAX = 4
 # A webhook for our own comment can arrive before createComment returns (F1 race).
 SELF_COMMENT_RECHECK_S = 3
+# The reaper only matters after a failure, so it runs rarely: each run also keeps the store warm.
+REAPER_PERIOD_MIN = 5
+RECEIVED_GRACE_S = 60
+UNCONFIRMED_POST_S = 120
+
+# Placeholder shop until the shop-profile format is decided (CLAUDE.md §4); same tools as the geometry tests.
+DEFAULT_TOOLS = (("EM12", 12.0, 4.0), ("EM6", 6.0, 4.0), ("EM3", 3.0, 4.0))
+
+# The Store methods a remote caller may run.
+STORE_OPS = frozenset({
+    "record", "claim", "finish", "reapable", "event", "is_current",
+    "reserve_post", "complete_post", "already_posted", "unconfirmed_posts",
+    "append_trace", "trace_after", "append_ledger", "read_ledger",
+    "reserve_call", "release_call", "calls",
+})
 
 
 class _Prefixed:
@@ -66,19 +92,89 @@ class _Prefixed:
 
 
 def _log(kind: str, **fields) -> None:
-    print(json.dumps({"kind": kind, "t": round(time.time(), 3), **fields}))
+    print(json.dumps({"kind": kind, "t": round(time.time(), 3), **fields}, default=str))
+
+
+class _StoreLedger:
+    """OnshapeClient's CallLedger backed by the store: one atomic daily budget across containers."""
+
+    def reserve_call(self, day: str, cap: int) -> bool:
+        return StoreSvc().call.remote("reserve_call", day, cap)
+
+    def release_call(self, day: str) -> None:
+        StoreSvc().call.remote("release_call", day)
+
+    def calls(self, day: str) -> int:
+        return StoreSvc().call.remote("calls", day)
 
 
 def _client():
     from anville.connectors.onshape.client import OnshapeClient
 
-    return OnshapeClient.from_env(os.environ, ledger=state)
+    return OnshapeClient.from_env(os.environ, ledger=_StoreLedger())
 
 
 def _allowed() -> set[str]:
     from anville.env import allowed_document_ids
 
     return allowed_document_ids(dict(os.environ))
+
+
+def _event_ts(event: dict) -> float | None:
+    """Onshape's webhook timestamp, e.g. '2026-10-27T01:59:05.446+00:00' (day-1 run); None if absent."""
+    try:
+        return dt.datetime.fromisoformat(event["timestamp"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+@app.cls(image=image, volumes={"/store": store_vol}, max_containers=1, timeout=600)
+@modal.concurrent(max_inputs=32)  # sync methods run on threads; Store keeps one connection per thread
+class StoreSvc:
+    """The only process that opens the database file (ADR 0006 §2): last write wins on a Volume."""
+
+    @modal.enter()
+    def open(self):
+        from anville.store import Store
+
+        # Store serializes after_commit itself; record() returns only once the event is durable.
+        self.s = Store("/store/anville.db", after_commit=store_vol.commit)
+
+    @modal.method()
+    def call(self, op: str, *args, **kw):
+        return self._run(op, args, kw)
+
+    @modal.method()
+    def call_many(self, ops: list[tuple[str, tuple, dict]]) -> list:
+        """Several store calls in one round trip (a job step's trace events). Not one transaction."""
+        return [self._run(op, args, kw) for op, args, kw in ops]
+
+    def _run(self, op: str, args: tuple, kw: dict):
+        if op not in STORE_OPS:  # explicit: an assert would vanish under python -O
+            raise ValueError(f"store op {op!r} is not allowed")
+        return getattr(self.s, op)(*args, **kw)
+
+
+class _Trace:
+    """ADR 0007 trace events for one run, buffered and written in one store round trip per flush."""
+
+    def __init__(self, store, document_id: str, run_id: str, version_id: str):
+        self.store, self.did, self.run_id, self.vid = store, document_id, run_id, version_id
+        self.element_id: str | None = None
+        self.seq = 0
+        self.buf: list = []
+
+    def add(self, kind: str, title: str, **detail) -> None:
+        # Titles carry no numbers; numbers go in detail (ADR 0007 contract).
+        self.seq += 1
+        self.buf.append(("append_trace", (self.did, self.run_id, self.seq, kind, title),
+                         {"ts": time.time(), "version_id": self.vid, "element_id": self.element_id,
+                          "detail": detail}))
+
+    def flush(self) -> None:
+        if self.buf:
+            self.store.call_many.remote(self.buf)
+            self.buf = []
 
 
 @app.function(image=image, secrets=secrets)
@@ -102,60 +198,98 @@ def web():
             raise HTTPException(status_code=404)
         received_at = time.time()
         event = await request.json()
-        decision = classify(event, _allowed(), _Prefixed("self:"), _Prefixed("seen:"))
+        # No seen-set here: the store's record() is the de-duplication authority (ADR 0006).
+        decision = classify(event, _allowed(), _Prefixed("self:"), ())
         _log("webhook", event=event.get("event"), action=decision.action, reason=decision.reason,
              documentId=event.get("documentId"), versionId=event.get("versionId"))
+        if decision.action != "process":
+            return {"ok": True}
 
-        if decision.action == "process":
-            state[f"seen:{decision.idempotency_key}"] = received_at
-            if event.get("event") == TRANSLATION_COMPLETE:
-                state[f"txdone:{event['translationId']}"] = received_at
-            else:
-                handle_event.spawn(event, received_at)
+        if event.get("event") == TRANSLATION_COMPLETE:
+            state[f"txdone:{event['translationId']}"] = received_at  # idempotent; ephemeral (§7)
+            return {"ok": True}
+
+        key = decision.idempotency_key
+        version_id = event.get("versionId") if event.get("event") == CREATE_VERSION else None
+        try:
+            inserted = await StoreSvc().call.remote.aio(
+                "record", key, event["documentId"], event,
+                version_id=version_id, version_ts=_event_ts(event))
+        except Exception as e:
+            # ADR 0006 §3: non-200 only when the insert itself fails.
+            _log("record_failed", key=key, error=repr(e)[:300])
+            raise HTTPException(status_code=500) from None
+        _log("recorded", key=key, inserted=inserted, record_s=round(time.time() - received_at, 3))
+        if inserted:
+            # If this spawn is lost, the reaper picks the event up after RECEIVED_GRACE_S.
+            await handle_event.spawn.aio(key)
         return {"ok": True}
 
     return api
 
 
 @app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=600)
-def handle_event(event: dict, received_at: float) -> None:
-    name = event.get("event")
-    if name == CREATE_VERSION:
-        _on_create_version(event, received_at)
-    elif name == COMMENT_CREATE:
-        time.sleep(SELF_COMMENT_RECHECK_S)
-        if f"self:{event['commentId']}" in state:
-            _log("ignored", reason="own comment (late recheck, F1)", commentId=event["commentId"])
-        else:
-            _log("designer_comment", commentId=event["commentId"], documentId=event["documentId"])
+def handle_event(key: str) -> None:
+    from anville.store import StaleClaim
+
+    store = StoreSvc()
+    token = store.call.remote("claim", key)
+    if token is None:
+        # Done already, claimed by a live job, out of attempts, or another event on its document is running.
+        _log("not_claimed", key=key)
+        return
+    ev = store.call.remote("event", key)
+    ok = False
+    try:
+        name = ev.payload.get("event")
+        if name == CREATE_VERSION:
+            _on_create_version(store, ev)
+        elif name == COMMENT_CREATE:
+            time.sleep(SELF_COMMENT_RECHECK_S)
+            cid = ev.payload["commentId"]
+            if f"self:{cid}" in state:
+                _log("ignored", reason="own comment (late recheck, F1)", commentId=cid)
+            else:
+                _log("designer_comment", commentId=cid, documentId=ev.document_id)
+        ok = True
+    finally:
+        # A failed job is marked failed, not retried: the reaper only retries lost or expired claims.
+        try:
+            nxt = store.call.remote("finish", key, token, ok)
+        except StaleClaim:
+            _log("stale_claim", key=key, token=token)  # our lease expired and the event was re-claimed
+            nxt = None
+        if nxt:
+            handle_event.spawn(nxt)
 
 
-def _on_create_version(event: dict, received_at: float) -> None:
-    client = _client()
+def _on_create_version(store, ev) -> None:
+    event = ev.payload
     did, vid = event["documentId"], event["versionId"]
-    timing = {"versionId": vid, "event_timestamp": event.get("timestamp"), "received_at": received_at}
+    received_at = ev.received_at
+    timing = {"versionId": vid, "event_timestamp": event.get("timestamp"), "received_at": received_at,
+              "attempt": ev.attempts}
+    trace = _Trace(store, did, f"{vid[:8]}-{ev.attempts}", vid)
+    trace.add("run_started", "Reviewing a new version")
+    client = _client()
 
     eid = _part_studio_id(client, did, vid)
-
-    comment = client.post("/comments", {
-        "documentId": did,
-        "versionId": vid,
-        "elementId": eid,
-        "message": f"Anville received version {vid[:8]}. (Day-1 spike: webhook round trip.)",
-    })
-    state[f"self:{comment['id']}"] = time.time()
-    timing["comment_posted_at"] = time.time()
+    trace.element_id = eid
 
     tx = client.post(f"/partstudios/d/{did}/v/{vid}/e/{eid}/translations",
                      {"formatName": "STEP", "storeInDocument": False, "notifyUser": False})
     tid = tx["id"]
     timing["tx_started_at"] = time.time()
+    trace.add("tool_call", "Exporting STEP", translation_id=tid)
+    trace.flush()
 
     info = _wait_for_translation(client, tid, timing)
     if info.get("requestState") != "DONE":
         _log("translation_failed", tid=tid, state=info.get("requestState"), reason=info.get("failureReason"))
+        trace.add("error", "STEP export failed", state=info.get("requestState"))
+        trace.flush()
         state[f"timing:{vid}"] = timing
-        return
+        raise RuntimeError(f"translation {tid} ended {info.get('requestState')}")
 
     step = client.get(f"/documents/d/{did}/externaldata/{info['resultExternalDataIds'][0]}",
                       accept="application/octet-stream", raw=True)
@@ -164,15 +298,82 @@ def _on_create_version(event: dict, received_at: float) -> None:
     Path(f"/data/step/{vid}.step").write_bytes(step)
     data.commit()
 
+    result = analyze.remote(vid)
+    timing["analyzed_at"] = time.time()
+    plan = result["plan"]
+    trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
+              directions=[s["directions"] for s in plan["setups"]],
+              unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
+
+    # Version guard (ADR 0006 §5): a superseded version gets no comment.
+    if not store.call.remote("is_current", did, vid):
+        trace.add("run_finished", "Superseded by a newer version; nothing posted")
+        trace.flush()
+        _log("superseded", versionId=vid)
+        return
+
+    # Reserve before posting, so a crash mid-post can't produce a second comment.
+    if store.call.remote("reserve_post", ev.key, "review"):
+        comment = client.post("/comments", {
+            "documentId": did,
+            "versionId": vid,
+            "elementId": eid,
+            "message": _review_message(vid, plan),
+        })
+        state[f"self:{comment['id']}"] = time.time()
+        store.call.remote("complete_post", ev.key, "review", comment["id"])
+        timing["comment_posted_at"] = time.time()
+        trace.add("comment_posted", "Posted the setup count", comment_id=comment["id"])
+    trace.add("run_finished", "Review finished")
+    trace.flush()
+
     timing.update(
         step_bytes=len(step),
-        receive_to_comment_s=round(timing["comment_posted_at"] - received_at, 2),
         export_s=round(timing["tx_done_at"] - timing["tx_started_at"], 2),
         receive_to_step_s=round(timing["downloaded_at"] - received_at, 2),
+        analyze_s=round(timing["analyzed_at"] - timing["downloaded_at"], 2),
         calls_today=client.calls_today(),
     )
+    if "comment_posted_at" in timing:
+        timing["receive_to_comment_s"] = round(timing["comment_posted_at"] - received_at, 2)
     state[f"timing:{vid}"] = timing
     _log("timing", **timing)
+
+
+def _review_message(vid: str, plan: dict) -> str:
+    """Every number here comes from the SetupPlan (locked decision 3)."""
+    dirs = "; ".join(" + ".join(s["directions"]) for s in plan["setups"]) or "none"
+    msg = f"Anville reviewed version {vid[:8]}: {plan['count']} setup(s) on a 3-axis mill ({dirs})."
+    if plan["unreachable"]:
+        msg += f" {len(plan['unreachable'])} face(s) can't be finished with the shop's tools."
+    return msg + " Geometry only so far; costed options come next."
+
+
+@app.function(image=geo_image, volumes={"/data": data}, timeout=300)
+def analyze(version_id: str) -> dict:
+    """STEP → PartFacts → SetupPlan (ADR 0008). PartFacts are kept on the Volume for later stages."""
+    from anville.geometry import ShopProfile, Tool, extract, min_setups
+
+    data.reload()  # the STEP was committed by handle_event's container
+    facts = extract(f"/data/step/{version_id}.step")
+    plan = min_setups(facts, ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS]))
+    Path("/data/facts").mkdir(parents=True, exist_ok=True)
+    Path(f"/data/facts/{version_id}.json").write_text(json.dumps(facts.to_dict()))
+    data.commit()
+    return {"plan": plan.to_dict(), "faces": len(facts.faces), "groups": len(facts.groups),
+            "extract_s": round(facts.extract_s, 2)}
+
+
+@app.function(image=image, schedule=modal.Period(minutes=REAPER_PERIOD_MIN), timeout=120)
+def reaper() -> None:
+    """ADR 0006 §4: re-spawn events whose spawn was lost or whose job died past its lease."""
+    store = StoreSvc()
+    for ev in store.call.remote("reapable", RECEIVED_GRACE_S):
+        _log("reaped", key=ev.key, status=ev.status, attempts=ev.attempts)
+        handle_event.spawn(ev.key)
+    stuck = store.call.remote("unconfirmed_posts", UNCONFIRMED_POST_S)
+    if stuck:
+        _log("unconfirmed_posts", posts=stuck)  # flagged for a human, never reposted
 
 
 def _part_studio_id(client, did: str, vid: str) -> str:
