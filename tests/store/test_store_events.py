@@ -1,6 +1,8 @@
 """ADR 0006 event lifecycle: received -> claimed -> done | failed."""
 
+import sqlite3
 import threading
+import time
 
 import pytest
 from conftest import race, scalar
@@ -204,6 +206,40 @@ def test_duplicate_delivery_waits_for_the_first_durable_save(db_path, clock):
     first.join(5)
     dup.join(5)
     assert dup_done.is_set()
+    s.close()
+
+
+def test_burst_of_deliveries_shares_durable_saves(db_path, clock):
+    # Staging (PR #7): 20 concurrent duplicates took p50 12.2 s at /hook, because every
+    # record() ran its own volume.commit() in a row. With group commit a burst costs ~2 saves,
+    # and each record() still returns only after a save that started after its row committed.
+    saves, durable = [], set()
+
+    def slow_save():
+        conn = sqlite3.connect(db_path)
+        seen = {r[0] for r in conn.execute("SELECT key FROM events")}  # what this save captures
+        conn.close()
+        time.sleep(0.2)
+        saves.append(1)
+        durable.update(seen)
+
+    s = Store(db_path, clock=clock, after_commit=slow_save)
+    returned_unsaved = []
+
+    def deliver(key):
+        s.record(key, "docA", {})
+        if key not in durable:
+            returned_unsaved.append(key)
+
+    keys = ["comment:c1"] * 10 + [f"comment:c{i}" for i in range(2, 12)]
+    threads = [threading.Thread(target=deliver, args=(k,)) for k in keys]
+    t0 = time.monotonic()
+    [t.start() for t in threads]
+    [t.join(10) for t in threads]
+
+    assert returned_unsaved == []
+    assert len(saves) <= 3
+    assert time.monotonic() - t0 < 2  # 20 saves in a row would take 4 s
     s.close()
 
 

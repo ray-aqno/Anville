@@ -128,7 +128,12 @@ class Store:
         # an event delivery (it gates the webhook's 200) and a ledger entry (a verified lesson).
         # Everything else rides Modal's background commits and the commit at container shutdown.
         self._after_commit = after_commit
-        self._persist_lock = threading.Lock()
+        # Group commit (see _persist): writes counted after their SQLite COMMIT, and how many
+        # of them a finished after_commit has covered.
+        self._persist_cv = threading.Condition()
+        self._written = 0
+        self._durable = 0
+        self._persisting = False
         self._lease_s = lease_s
         self._max_attempts = max_attempts
         self._busy_timeout_ms = busy_timeout_ms
@@ -455,10 +460,36 @@ class Store:
         conn.execute("COMMIT")
 
     def _persist(self) -> None:
-        """Run after_commit, one at a time: when it returns, every write committed before it is durable."""
-        if self._after_commit is not None:
-            with self._persist_lock:
-                self._after_commit()
+        """Return once every write committed before this call is durable.
+
+        Group commit: one after_commit runs at a time, and it covers every write counted
+        before it started. Callers already covered by a running save just wait for it, so
+        a burst of N deliveries costs about 2 saves instead of N in a row (12 s for 20
+        duplicates on staging before this). A write is counted only after its SQLite
+        COMMIT, so a save that starts later always includes it. A failed save covers
+        nothing: the error reaches its caller, and a waiter retries.
+        """
+        if self._after_commit is None:
+            return
+        cv = self._persist_cv
+        with cv:
+            self._written += 1
+            mine = self._written
+            while self._durable < mine:
+                if self._persisting:
+                    cv.wait()
+                    continue
+                self._persisting, covers, saved = True, self._written, False
+                cv.release()
+                try:
+                    self._after_commit()
+                    saved = True
+                finally:
+                    cv.acquire()
+                    self._persisting = False
+                    if saved:
+                        self._durable = max(self._durable, covers)
+                    cv.notify_all()
 
 
 def _event(row: sqlite3.Row) -> Event:
