@@ -135,16 +135,14 @@ def _candidates(facts, shop, axes, base, kind, label):
     by_id = {f.id: f for f in facts.faces}
 
     if kind == "set_min_radius":
-        # Only corners parallel to an axis the feature is cut along limit the tool; floor edges don't.
-        along = {d[1] for d in DIRECTIONS
-                 if all(by_id[fid].access.get(d) and by_id[fid].access[d].fraction >= 1.0 for fid in feature)}
-        current = min([f.concave_radius for f in facts.faces
-                       if f.id in feature and f.concave_radius and f.concave_axis in along] +
-                      [e.radius or 0.0 for e in facts.edges if _corner(e, feature, along)], default=math.inf)
+        # Only corners parallel to an axis a touching face is cut along limit the tool; floor edges don't.
+        current = min([f.concave_radius for f in facts.faces if _limiting_fillet(f, feature)] +
+                      [e.radius or 0.0 for e in facts.edges if _limiting_corner(e, feature, by_id)],
+                      default=math.inf)
         for r in sorted({t.diameter / 2 for t in tools}):
             if r > current:
                 yield (f"set_min_radius/{label}/r{r:g}", "part", {"radius": r},
-                       (_with_radius(facts, feature, along, r), shop, axes))
+                       (_with_radius(facts, feature, r), shop, axes))
 
     elif kind == "set_depth":
         for d in DIRECTIONS:
@@ -187,17 +185,29 @@ def _unique_name(name: str, shop: ShopProfile) -> str:
     return out
 
 
-def _corner(e, feature: set[int], along: set[str]) -> bool:
-    return e.kind == "concave" and e.axis in along and (e.a in feature or e.b in feature)
+def _cut_axes(face) -> set[str]:
+    """Axes of the directions this face is fully visible from."""
+    return {d[1] for d, a in face.access.items() if a.fraction >= 1.0}
 
 
-def _with_radius(facts: PartFacts, feature: set[int], along: set[str], r: float) -> PartFacts:
-    """Raise the feature's corner radii parallel to `along` to at least r; sharp corners get filleted."""
+def _limiting_fillet(face, feature: set[int]) -> bool:
+    return face.id in feature and face.concave_radius is not None and face.concave_axis in _cut_axes(face)
+
+
+def _limiting_corner(e, feature: set[int], by_id: dict) -> bool:
+    """A concave straight edge of the feature, parallel to an axis that a face it touches is cut along."""
+    return (e.kind == "concave" and e.axis is not None and (e.a in feature or e.b in feature)
+            and e.axis in _cut_axes(by_id[e.a]) | _cut_axes(by_id[e.b]))
+
+
+def _with_radius(facts: PartFacts, feature: set[int], r: float) -> PartFacts:
+    """Raise the feature's tool-limiting corner radii to at least r; sharp corners get filleted."""
     new = copy.deepcopy(facts)
+    by_id = {f.id: f for f in facts.faces}
     for f in new.faces:
-        if f.id in feature and f.concave_axis in along and f.concave_radius is not None and f.concave_radius < r:
+        if _limiting_fillet(f, feature) and f.concave_radius < r:
             f.concave_radius = r
-    new.edges = [replace(e, radius=r) if _corner(e, feature, along) and (e.radius or 0.0) < r else e
+    new.edges = [replace(e, radius=r) if _limiting_corner(e, feature, by_id) and (e.radius or 0.0) < r else e
                  for e in new.edges]
     return new
 

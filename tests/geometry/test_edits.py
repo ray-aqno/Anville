@@ -46,7 +46,7 @@ def test_radius_edit_leaves_floor_edges_sharp(facts, shop):
     floor_edges = {(e.a, e.b) for e in f.edges if e.kind == "concave" and e.axis in ("X", "Y")}
     assert floor_edges
     from anville.geometry.edits import _with_radius, feature_faces as feature
-    edited = _with_radius(f, feature(f, _group_of(f, corner)), {"Z"}, 6.0)
+    edited = _with_radius(f, feature(f, _group_of(f, corner)), 6.0)
     assert all(e.radius is None for e in edited.edges if (e.a, e.b) in floor_edges)
 
 
@@ -179,3 +179,20 @@ def test_plan_changing_options_sort_first(facts, shop):
                                       for k in ("set_min_radius", "set_depth")])
     flags = [o.changes_plan for o in result.options]
     assert flags == sorted(flags, reverse=True) and flags[0]
+
+
+def test_radius_candidates_survive_a_face_cut_from_another_direction():
+    """Walls cut from +Z meet at a sharp Z corner; a neighbour reachable only from +X must not hide the fix."""
+    faces = [FaceFacts(id=1, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False,
+                       access={"+Z": Access(1.0, 10.0, 40.0)}),
+             FaceFacts(id=2, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False,
+                       access={"+Z": Access(1.0, 10.0, 40.0)}),
+             FaceFacts(id=3, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False,
+                       access={"+X": Access(1.0, 5.0)})]
+    edges = [Edge(1, 2, "concave", "Z"), Edge(1, 3, "concave")]
+    f = PartFacts(source_sha256="t", bbox=((0, 0, 0), (1, 1, 1)), faces=faces, edges=edges,
+                  groups=face_groups(faces, edges), extract_s=0.0)
+    result = evaluate_edits(f, ShopProfile([Tool("EM6", 6.0, 4.0)]), [{"kind": "set_min_radius", "face_group": "G1"}])
+    (option,) = result.options
+    assert option.params["radius"] == 3.0
+    assert (option.before.unreachable, option.after.unreachable) == (2, 0)
