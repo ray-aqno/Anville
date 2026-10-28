@@ -128,7 +128,7 @@ This is the "advancing" beat with evidence behind it. Anville's standard of work
 1. **The keystone: wrong intent tags.** If the ledger tags a face wrongly, the gate blocks a good question and nothing catches it. Should the Decide stage be allowed to *challenge* a tag (request a re-check), without being allowed to override it?
 2. **Does Baseten accept `reasoning_effort` for Spark Open?** Not tested.
 3. **Playbook retrieval:** situation tags first (no new service). Do we ever need embeddings?
-4. **Disputed labels:** in 3 cases, all model runs disagreed with the author's label (2, 4, 9). Rayyan rules on them before the gate becomes the bar.
+4. ~~**Disputed labels**~~ **Resolved 2026-10-28:** Rayyan relabeled cases 2 and 4 (score shop-side fixes) and case 9 (ask), as the gate predicts. The probe now grades "respects intent". Spark Open broke stated intent in 2 of 20 cases and `muse-spark-1.3` in 0 (ADR 0003 Amendment 1).
 5. **Is the Karpathy loop core or stretch?** Its inputs (eval gate, playbook layer) are core either way. Running it overnight is cheap: about 20–40 calls per iteration, a few cents each.
 6. **Demo:** show the outer loop's git history as evidence, or run it live? Live is risky; a recorded history is honest and cheap.
 
