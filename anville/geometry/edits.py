@@ -5,6 +5,10 @@ tool library and the measured geometry), applies each to a copy of the world, re
 reports what changed. Every result here is `predicted`: a PartEdit is `measured` only after the
 CAD edit is made and the new STEP is re-extracted.
 
+This scores; it doesn't recommend. Every evaluated candidate is returned, flagged with
+`changes_plan`, and the caller (the agent's tool layer) decides what to show. A removal that saves
+no setup still reaches the agent, for instance when the designer asked for it on intent alone.
+
 Part edits act on a feature: the named group plus the groups sharing a concave edge with it, so
 "make this pocket shallower" moves its walls and its floor together.
 """
@@ -45,6 +49,7 @@ class Option:
     after: Summary
     tool_changes: list[ToolChange] = field(default_factory=list)
     removed_faces: list[int] = field(default_factory=list)
+    changes_plan: bool = False  # setups, reachability or a tool changes; removals alone don't count
     basis: str = "predicted"
 
 
@@ -57,7 +62,7 @@ class Skipped:
 
 @dataclass
 class EvaluateResult:
-    options: list[Option]  # fewest unreachable, then fewest setups; ties keep request order
+    options: list[Option]  # plan-changing first, then fewest unreachable, then fewest setups; stable
     skipped: list[Skipped]
 
 
@@ -95,19 +100,14 @@ def evaluate_edits(facts: PartFacts, shop: ShopProfile, requests: list[dict], *,
                 duplicates += 1  # another group of the same feature already produced this option
                 continue
             seen.add(same)
-            option = _score(key, kind, label, side, params, facts, base, *world)
-            # Offer only what changes the computed plan (ADR 0002: never recommend a change that saves
-            # nothing). Cycle time isn't modelled yet, so a removal that only saves machining time has
-            # no number behind it; once Summary carries dollars, it passes this check on its own.
-            if option.after != option.before or option.tool_changes:
-                found.append(option)
+            found.append(_score(key, kind, label, side, params, facts, base, *world))
         if found:
             options += found
         elif duplicates:
             skipped.append(Skipped(kind, label, "same feature as an earlier request: its options are listed once"))
         else:
-            skipped.append(Skipped(kind, label, "no candidate value changes the plan"))
-    options.sort(key=lambda o: (o.after.unreachable, o.after.setups))
+            skipped.append(Skipped(kind, label, "no candidate values: the shop's tools and the geometry leave none"))
+    options.sort(key=lambda o: (not o.changes_plan, o.after.unreachable, o.after.setups))
     return EvaluateResult(options, skipped)
 
 
@@ -135,12 +135,16 @@ def _candidates(facts, shop, axes, base, kind, label):
     by_id = {f.id: f for f in facts.faces}
 
     if kind == "set_min_radius":
-        current = min([f.concave_radius for f in facts.faces if f.id in feature and f.concave_radius] +
-                      [e.radius or 0.0 for e in facts.edges
-                       if e.kind == "concave" and e.axis and (e.a in feature or e.b in feature)], default=math.inf)
+        # Only corners parallel to an axis the feature is cut along limit the tool; floor edges don't.
+        along = {d[1] for d in DIRECTIONS
+                 if all(by_id[fid].access.get(d) and by_id[fid].access[d].fraction >= 1.0 for fid in feature)}
+        current = min([f.concave_radius for f in facts.faces
+                       if f.id in feature and f.concave_radius and f.concave_axis in along] +
+                      [e.radius or 0.0 for e in facts.edges if _corner(e, feature, along)], default=math.inf)
         for r in sorted({t.diameter / 2 for t in tools}):
             if r > current:
-                yield f"set_min_radius/{label}/r{r:g}", "part", {"radius": r}, (_with_radius(facts, feature, r), shop, axes)
+                yield (f"set_min_radius/{label}/r{r:g}", "part", {"radius": r},
+                       (_with_radius(facts, feature, along, r), shop, axes))
 
     elif kind == "set_depth":
         for d in DIRECTIONS:
@@ -183,13 +187,18 @@ def _unique_name(name: str, shop: ShopProfile) -> str:
     return out
 
 
-def _with_radius(facts: PartFacts, feature: set[int], r: float) -> PartFacts:
+def _corner(e, feature: set[int], along: set[str]) -> bool:
+    return e.kind == "concave" and e.axis in along and (e.a in feature or e.b in feature)
+
+
+def _with_radius(facts: PartFacts, feature: set[int], along: set[str], r: float) -> PartFacts:
+    """Raise the feature's corner radii parallel to `along` to at least r; sharp corners get filleted."""
     new = copy.deepcopy(facts)
     for f in new.faces:
-        if f.id in feature and f.concave_radius is not None and f.concave_radius < r:
+        if f.id in feature and f.concave_axis in along and f.concave_radius is not None and f.concave_radius < r:
             f.concave_radius = r
-    new.edges = [replace(e, radius=r) if e.kind == "concave" and e.axis and (e.a in feature or e.b in feature)
-                 and (e.radius or 0.0) < r else e for e in new.edges]
+    new.edges = [replace(e, radius=r) if _corner(e, feature, along) and (e.radius or 0.0) < r else e
+                 for e in new.edges]
     return new
 
 
@@ -218,7 +227,9 @@ def _score(key, kind, label, side, params, facts, base: SetupPlan, new_facts, ne
                   before=Summary(base.count, len(base.unreachable)),
                   after=Summary(after.count, len(after.unreachable)),
                   tool_changes=changes,
-                  removed_faces=sorted({f.id for f in facts.faces} - present))
+                  removed_faces=sorted({f.id for f in facts.faces} - present),
+                  changes_plan=(after.count, len(after.unreachable)) != (base.count, len(base.unreachable))
+                  or bool(changes))
 
 
 def _tools(plan: SetupPlan) -> dict[int, str]:

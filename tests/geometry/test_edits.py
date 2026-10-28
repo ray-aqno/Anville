@@ -39,6 +39,17 @@ def test_raising_corner_radius_lets_the_big_tool_in(facts, shop):
     assert best.side == "part" and best.basis == "predicted"
 
 
+def test_radius_edit_leaves_floor_edges_sharp(facts, shop):
+    """Floor-to-wall edges run across the tool axis: a flat endmill cuts them, so the edit doesn't round them."""
+    f = facts("tight_corner")
+    corner = next(x.id for x in f.faces if x.concave_radius == pytest.approx(2.0))
+    floor_edges = {(e.a, e.b) for e in f.edges if e.kind == "concave" and e.axis in ("X", "Y")}
+    assert floor_edges
+    from anville.geometry.edits import _with_radius, feature_faces as feature
+    edited = _with_radius(f, feature(f, _group_of(f, corner)), {"Z"}, 6.0)
+    assert all(e.radius is None for e in edited.edges if (e.a, e.b) in floor_edges)
+
+
 def test_shallower_slot_becomes_reachable(facts, shop):
     f = facts("deep_slot")
     slot = _group_of(f, next(x.id for x in f.faces if x.concave_radius))
@@ -146,3 +157,25 @@ def test_long_reach_tool_gets_a_name_no_shop_tool_has():
 def test_unknown_group_is_rejected_for_every_kind(kind, facts, shop):
     with pytest.raises(ValueError, match="G99"):
         evaluate_edits(facts("two_pockets"), shop, [{"kind": kind, "face_group": "G99"}])
+
+
+def test_options_that_leave_the_plan_unchanged_are_returned_and_flagged():
+    """Removing one of two top features saves no setup; the caller still sees it, and decides."""
+    faces = [FaceFacts(id=i, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False,
+                       access={"+Z": Access(1.0, 5.0)}) for i in (1, 2)]
+    f = PartFacts(source_sha256="t", bbox=((0, 0, 0), (1, 1, 1)), faces=faces, edges=[],
+                  groups=face_groups(faces, []), extract_s=0.0)
+    result = evaluate_edits(f, ShopProfile([Tool("EM6", 6.0, 4.0)]), [{"kind": "set_depth", "face_group": "G1"}])
+    (removal,) = result.options
+    assert removal.params["depth"] == 0.0 and removal.removed_faces == [1]
+    assert (removal.before, removal.after) == (removal.before, removal.before)
+    assert removal.changes_plan is False
+    assert result.skipped == []
+
+
+def test_plan_changing_options_sort_first(facts, shop):
+    f = facts("two_pockets")
+    result = evaluate_edits(f, shop, [{"kind": k, "face_group": g} for g in f.labelled_groups()
+                                      for k in ("set_min_radius", "set_depth")])
+    flags = [o.changes_plan for o in result.options]
+    assert flags == sorted(flags, reverse=True) and flags[0]
