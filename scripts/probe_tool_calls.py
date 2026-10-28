@@ -107,11 +107,11 @@ CASES = [
     ("G1 internal pocket corners R1.5 mm need a 3 mm tool; smallest on hand is 6 mm. Pocket is non-mating.",
      "evaluate_edits"),
     ("G2 slot is 40 mm deep, 8 mm wide: needs 8 mm tool at L:D 5. Drawing marks G2 depth as a fit dimension.",
-     "ask_designer"),
+     "evaluate_edits"),  # relabeled 2026-10-28: intent is stated (protected), so score shop-side fixes
     ("Holes G3 (x6, 6.76 mm) reached only from +Z; side hole G4 forces a second setup from +X.",
      "evaluate_edits"),
     ("G5 boss has a 0.5 mm corner radius. The designer's note says 'G5 sharp corner seals against gasket'.",
-     "ask_designer"),
+     "evaluate_edits"),  # relabeled 2026-10-28: intent is stated (protected), so score shop-side fixes
     ("Part needs 3 setups on vmc1 (+Z, -Z, +X). On umc5 it needs 1. umc5 rate is 1.8x vmc1.",
      "evaluate_edits"),
     ("G6 pocket floor depth 22 mm with 6 mm corner radius. No drawing. Pocket is a weight-reduction cut.",
@@ -121,7 +121,7 @@ CASES = [
     ("G8 thin wall 0.9 mm between pockets G9 and G10. Unknown whether G8 is structural.",
      "ask_designer"),
     ("Undercut G11 is unreachable from all 6 directions on vmc1 or umc5 with any listed tool.",
-     "evaluate_edits"),
+     "ask_designer"),  # relabeled 2026-10-28: no tool fixes "no direction"; only a design change can
     ("G12 and G13 are mirrored pockets each with R2 corners; 4 mm tool would fit, shop has none under 6 mm.",
      "evaluate_edits"),
     ("G14 has two M3 tapped holes 18 mm deep; longest tap on hand reaches 12 mm.",
@@ -148,6 +148,26 @@ CASES = [
     ("Quantity rises from 50 to 500. Part needs 2 setups on vmc1; a dedicated fixture would hold 6 parts per setup.",
      "evaluate_edits"),
 ]
+
+
+# Face groups whose intent the situation states (RFC 0001: "protected"). A part edit on one of
+# these contradicts the designer, whatever tool the model picked. Rayyan owns these labels.
+PROTECTED = {
+    "G2 slot": {"G2"},       # drawing: fit dimension
+    "G5 boss": {"G5"},       # note: sharp corner seals against a gasket
+    "G15 pocket": {"G15"},   # a mating part's square corner sits in it
+}
+PART_EDITS = {"set_min_radius", "set_depth"}
+
+
+def _protected(situation: str) -> set[str]:
+    return next((faces for prefix, faces in PROTECTED.items() if situation.startswith(prefix)), set())
+
+
+def _violations(args: dict, protected: set[str]) -> list[str]:
+    """Part edits proposed on protected face groups."""
+    return [f"{e['kind']} on {e['face_group']}" for e in args.get("edits", [])
+            if isinstance(e, dict) and e.get("kind") in PART_EDITS and e.get("face_group") in protected]
 
 
 def _validate(value, schema, path="$") -> list[str]:
@@ -229,7 +249,8 @@ def judge(response: dict, situation: str, expected: str) -> dict:
     choice = response["choices"][0]
     msg = choice["message"]
     calls = msg.get("tool_calls") or []
-    out = {"n_calls": len(calls), "valid": False, "expected_tool": False, "grounded": False, "errors": [],
+    out = {"n_calls": len(calls), "valid": False, "expected_tool": False, "grounded": False,
+           "respects_intent": False, "violations": [], "errors": [],
            "finish_reason": choice.get("finish_reason"),
            "completion_tokens": (response.get("usage") or {}).get("completion_tokens")}
     if len(calls) != 1:
@@ -257,6 +278,8 @@ def judge(response: dict, situation: str, expected: str) -> dict:
         return out  # grounding only means something for schema-valid arguments
     allowed = set(re.findall(r"G[0-9]+", situation))
     out["grounded"] = _face_groups(args) <= allowed
+    out["violations"] = _violations(args, _protected(situation))
+    out["respects_intent"] = not out["violations"]
     return out
 
 
@@ -277,10 +300,11 @@ def run(label: str, base_url: str, key: str, model: str, effort: str | None = No
         try:
             res = judge(_call(base_url, key, model, situation, effort), situation, expected)
         except urllib.error.HTTPError as e:
-            res = {"valid": False, "expected_tool": False, "grounded": False,
+            res = {"valid": False, "expected_tool": False, "grounded": False, "respects_intent": False,
                    "errors": [f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}"]}
         except Exception as e:  # timeouts, malformed responses
-            res = {"valid": False, "expected_tool": False, "grounded": False, "errors": [repr(e)[:200]]}
+            res = {"valid": False, "expected_tool": False, "grounded": False, "respects_intent": False,
+                   "errors": [repr(e)[:200]]}
         res.update(case=i, expected=expected, seconds=round(time.monotonic() - t0, 1))
         rows.append(res)
         mark = "OK " if res["valid"] else "BAD"
@@ -290,10 +314,11 @@ def run(label: str, base_url: str, key: str, model: str, effort: str | None = No
     v = sum(r["valid"] for r in rows)
     e = sum(r["expected_tool"] for r in rows)
     g = sum(r["grounded"] for r in rows if r["valid"])
+    ri = sum(r["respects_intent"] for r in rows if r["valid"])
     secs = sorted(r["seconds"] for r in rows)
     bar = math.ceil(0.9 * n)
     print(f"[{label}] valid {v}/{n} (95% lower bound {wilson_lower(v, n):.0%}) | expected tool {e}/{n} | "
-          f"grounded {g}/{v} | median {secs[n // 2]}s, max {secs[-1]}s | "
+          f"grounded {g}/{v} | respects intent {ri}/{v} | median {secs[n // 2]}s, max {secs[-1]}s | "
           f"{'PASS' if v >= bar else 'FAIL'} (bar: {bar}/{n})")
     return rows
 

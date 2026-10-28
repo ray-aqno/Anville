@@ -90,3 +90,16 @@ The model-driven loop stays the primary path. The bar is raised to **at least 18
 3. **Results are committed** as summary JSON (pass rates, p50/max latency, and token use per scenario). They are evidence for the writeup, the same way the probe's results are.
 
 The gate runs locally, not in CI: it needs API keys and spends credits. It costs cents per run.
+
+**Relabel (2026-10-28, ruled by Rayyan).** Every model run disagreed with three labels in the same direction. The RFC 0001 gate shows the labels were wrong:
+- **Cases 2 and 4 → score options.** The intent is stated (a fit dimension; a corner that seals), so the face is *protected* and there's nothing to ask. The right move is a shop-side fix.
+- **Case 9 → ask.** No tool fixes "no direction", so only a design change can, and its intent is unknown.
+
+The probe now also grades **respects intent**: no part edit (`set_min_radius`, `set_depth`) on a protected face group. Re-scoring the saved n = 20 runs offline:
+
+| Model | Expected tool | Respects intent |
+|---|---|---|
+| Spark Open `-1026` | 19/20 | **18/20**: it changed G2's fit-dimension depth and rounded G5's sealing corner |
+| `muse-spark-1.3` (low and medium) | 17/20: it asked on 3 shop-only cases | **20/20** |
+
+So Spark Open's real weakness is not asking versus acting; it ignores stated intent when it proposes part edits. RFC 0001's protected-face filter removes that in code, before the planner scores anything.
