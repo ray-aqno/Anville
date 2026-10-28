@@ -57,3 +57,36 @@ ADR 0002 defines a deterministic planner and an edit catalog. Something has to d
 - **Easier:** the fixed script and the agent share one tested tool layer, so the fallback costs nothing extra. Every claim in a comment can be traced to a tool result.
 - **Harder:** prompt and tool-schema changes need regression runs against recorded fixtures with a scripted fake model.
 - **Revisit:** if the tool-calling probe fails, or if 8 calls aren't enough for parts with several constraints.
+
+## Amendment 1 (Proposed, 2026-10-27): probe result and the agent eval gate
+
+**Probe result (measured 2026-10-27, `scripts/probe_tool_calls.py`).** Setup: 2 tools (`evaluate_edits`, `ask_designer`) with JSON schemas, 20 synthetic review situations, one request each. A call is valid when there is exactly one tool call, its name is known, and its arguments parse and pass the schema.
+
+| Model | Setting | Valid | 95% lower bound | Expected tool | Grounded | p50 / max latency |
+|---|---|---|---|---|---|---|
+| `meta-models/muse-spark-open-1026` | `max_tokens` 4096 | **20/20** | 84% | 16/20 | 20/20 | 4.4 s / 8.6 s |
+| `muse-spark-1.3` | `max_tokens` 4096, default effort | 15/20 | 53% | 11/20 | 15/15 | 6.9 s / 16.3 s |
+| `muse-spark-1.3` | `reasoning_effort: low` | **20/20** | 84% | 14/20 | 20/20 | 4.4 s / 7.2 s |
+| `muse-spark-1.3` | `reasoning_effort: medium` | **20/20** | 84% | 14/20 | 20/20 | 6.0 s / 12.4 s |
+
+The model-driven loop stays the primary path. The bar is raised to **at least 18/20 (90%)** at n = 20, because 9/10 has a 95% lower bound of only about 60%.
+
+**What we learned:**
+1. **`max_tokens` covers reasoning as well as output** (Meta Model API docs, "Reasoning"). With 1024, Spark Open managed 3/10. Every failure had `content: null`, and the same cases needed 1,178–2,304 tokens with a larger cap. All 5 failures of `muse-spark-1.3` at default effort were `finish_reason: length` at 4096. **Rule:** `max_tokens` is at least 4096 for every agent call, and `finish_reason: length` is logged as a budget failure, not a model failure. `muse-spark-1.3` runs with `reasoning_effort: low`.
+2. **The models disagree on when to ask the designer.** Spark Open tends to act: it skipped 3 expected questions. `muse-spark-1.3` tends to ask: it asked on 4 cases labeled "evaluate". Both proposed edits that contradicted stated intent, such as changing the depth of a fit dimension or rounding a corner marked as a seal. **Code must reject edits that violate a recorded constraint before the planner scores them.** That can't be left to the prompt.
+3. **The models invent edit values** (for example, depths of 32 mm and 24 mm). Under locked decision 3, the agent's `evaluate_edits` schema should take an edit *kind* and a *face group*. The planner generates candidate values from the shop's tool library and the geometry.
+4. **Latency:** about 4–5 s per call, against a cap of 8 calls, takes most of the 60 s budget. The loop should batch scoring into one `evaluate_edits` call per review step.
+
+**The agent eval gate (built alongside the agent loop, then run on every prompt, schema, model, or effort change, and before recording the demo):**
+1. **Single-turn validity:** this probe, rebuilt to use the real tool schemas from the agent module, at n = 20. The bar is 18/20 for each model at its configured effort.
+2. **Multi-turn scenarios:** the real model drives the real loop against a **scripted fake tool layer**, with fixtures that return fixed planner and ledger results. There is one scenario per demo beat (first review, designer reply → re-plan, fix branch, shop note, second part informed by the ledger), plus adversarial ones (intent conflicts, an unreachable feature, nothing to say). Each scenario runs k = 5 times. Checks:
+   - every call is valid;
+   - at most 8 calls, and the run ends with a comment or `stay_quiet`;
+   - every number in the comment is a slot that resolves to a tool result;
+   - no edit that violates a constraint reaches `execute`;
+   - `execute` only uses an option ID that was offered;
+   - after a designer reply, the next plan respects the captured constraint.
+   - **Pass:** all checks hold in at least 4 of 5 runs of every scenario, and in 5 of 5 for the demo-beat scenarios.
+3. **Results are committed** as summary JSON (pass rates, p50/max latency, and token use per scenario). They are evidence for the writeup, the same way the probe's results are.
+
+The gate runs locally, not in CI: it needs API keys and spends credits. It costs cents per run.
