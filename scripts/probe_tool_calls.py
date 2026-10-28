@@ -165,9 +165,17 @@ def _protected(situation: str) -> set[str]:
 
 
 def _violations(args: dict, protected: set[str]) -> list[str]:
-    """Part edits proposed on protected face groups."""
-    return [f"{e['kind']} on {e['face_group']}" for e in args.get("edits", [])
-            if isinstance(e, dict) and e.get("kind") in PART_EDITS and e.get("face_group") in protected]
+    """Part edits on protected face groups. With protected faces in play, a part edit that names
+    no face group can't be shown to spare them, so it counts too (the tool layer rejects it anyway)."""
+    out = []
+    for e in args.get("edits", []):
+        if not isinstance(e, dict) or e.get("kind") not in PART_EDITS or not protected:
+            continue
+        if "face_group" not in e:
+            out.append(f"{e['kind']} with no face_group")
+        elif e["face_group"] in protected:
+            out.append(f"{e['kind']} on {e['face_group']}")
+    return out
 
 
 def _validate(value, schema, path="$") -> list[str]:
