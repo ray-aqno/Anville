@@ -100,8 +100,13 @@ class OpenAICompatModel:
             headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                return parse_reply(json.loads(resp.read()))
+                raw = resp.read()
         except urllib.error.HTTPError as e:
             raise ModelUnavailable(f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}") from None
         except (urllib.error.URLError, TimeoutError) as e:
             raise ModelUnavailable(repr(e)[:200]) from None
+        try:
+            return parse_reply(json.loads(raw))
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+            # A 200 with a body we can't read is still an unusable host reply: the stage falls back.
+            raise ModelUnavailable(f"malformed response ({type(e).__name__}): {raw[:120]!r}") from None

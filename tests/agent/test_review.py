@@ -90,7 +90,7 @@ def test_part_edits_on_a_protected_face_never_reach_the_planner(chamfer):
                                       {"kind": "route_machine"}], intents)
     assert [r["kind"] for r in kept] == ["add_tool", "route_machine"]
     assert rejected == [{"kind": "remove_feature", "face_group": chamfer,
-                         "reason": "protected: Weld clearance chamfer"}]
+                         "reason": f"{chamfer} is protected: Weld clearance chamfer"}]
 
 
 def test_ask_is_allowed_only_when_the_answer_changes_the_plan(part_a, shop, chamfer):
@@ -230,3 +230,73 @@ def test_the_writing_stage_gets_the_larger_token_budget(part_a, shop, chamfer):
                                  "reason": "x"})
     run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
     assert [budget for _, _, budget in model.sent] == [4096, 4096, 4096, 8192]
+
+
+# --- Greptile on PR #14 ---------------------------------------------------------
+
+
+def test_a_part_edit_is_rejected_when_it_touches_a_protected_neighbour(part_a):
+    # A part edit acts on a feature: the named group plus groups sharing a concave edge with it.
+    from anville.geometry.edits import feature_faces
+
+    groups = part_a.labelled_groups()
+    named, neighbour = next((g, h) for g in groups for h in groups if h != g
+                            and set(groups[h]) <= feature_faces(part_a, g))
+    intents = {neighbour: Intent("protected", "sealing face", "cad_feature_name")}
+    kept, rejected = filter_requests([{"kind": "remove_feature", "face_group": named}], intents, part_a)
+    assert kept == [] and neighbour in rejected[0]["reason"]
+
+
+def test_stated_intent_is_tagged_even_for_groups_without_an_issue(part_a, shop, chamfer):
+    issues = find_issues(part_a, min_setups(part_a, shop))
+    assert tag_intents(issues, {"G1": "datum face"})["G1"].status == "protected"
+
+
+def test_a_question_in_the_comment_needs_an_ask_decision(part_a, shop, chamfer):
+    asks = call("write_comment", text=f"Can you remove the chamfer on {chamfer}?")
+    model = Scripted(
+        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
+        call("evaluate_edits", requests=[{"kind": "route_machine"}]),
+        call("decide", decisions=[{"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
+                                   "reason": "x"}]),
+        asks, asks,
+    )
+    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
+    assert r.fallbacks == ["communicate"] and "?" not in r.comment
+
+
+def test_a_question_with_a_number_is_rejected_and_the_comment_is_never_empty(part_a, shop, chamfer):
+    numbered = call("decide", decisions=[{"issue_id": "I1", "action": "ask",
+                                          "question": "Is the 10 mm clearance required?", "reason": "x"}])
+    model = Scripted(
+        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
+        call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
+                                         {"kind": "route_machine"}]),
+        numbered, numbered,
+        ModelUnavailable("HTTP 503"),
+    )
+    r = run_review(part_a, shop, model)
+    assert r.fallbacks == ["decide", "communicate"]
+    assert r.comment and "10 mm" not in r.comment
+
+
+@pytest.mark.parametrize("body", [b"not json", b'{"choices": []}', b'{"no_choices": 1}'])
+def test_a_malformed_host_reply_becomes_model_unavailable(monkeypatch, body):
+    from anville.agent import model as m
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return body
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", lambda req, timeout: Resp())
+    with pytest.raises(ModelUnavailable):
+        m.OpenAICompatModel("https://x.invalid/v1", "k", "model").call([], [])
+
+
+def test_when_triage_drops_everything_the_review_stops_there(part_a, shop):
+    # Live run, 2026-10-28: the model dropped the only issue, and the later stages failed on nothing.
+    model = Scripted(call("triage", selected=[], dropped=[{"issue_id": "I1", "why": "minor"}]))
+    r = run_review(part_a, shop, model)
+    assert r.model_calls == 1 and r.fallbacks == [] and r.decisions == []
+    assert r.comment == "Anville reviewed this version: it machines in 2 setup(s)."

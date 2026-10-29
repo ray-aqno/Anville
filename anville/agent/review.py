@@ -19,12 +19,13 @@ from typing import Callable
 
 from anville.agent.model import ChatModel, ModelUnavailable
 from anville.geometry import PartFacts, SetupPlan, ShopProfile, min_setups
-from anville.geometry.edits import CATALOG, NEEDS_GROUP, Option, evaluate_edits
+from anville.geometry.edits import CATALOG, NEEDS_GROUP, Option, evaluate_edits, feature_faces
 
 PART_EDITS = frozenset({"remove_feature", "set_depth", "set_min_radius"})
 FORCES_SETUP_MAX_GROUPS = 2   # a setup that exists for this many face groups or fewer is an issue
 MAX_MODEL_CALLS = 8           # ADR 0003
 MAX_COMMENT_CHARS = 1200
+NOTHING_TO_RAISE = "Anville reviewed this version: it machines in {{plan.setups}} setup(s)."
 # Writing prose costs more reasoning than picking from a menu: the live run on Part A ran out of
 # tokens at 4096 in the communicate stage (2026-10-28), so that stage gets more room.
 STAGE_MAX_TOKENS = {"triage": 4096, "options": 4096, "decide": 4096, "communicate": 8192}
@@ -103,9 +104,12 @@ def tag_intents(issues: list[Issue], stated: dict[str, str] | None = None,
     `constraints`: ledger entries {"id", "face_group", "rule": "keep" | "may_change", "reason"}, oldest first.
     """
     stated, constraints = stated or {}, constraints or []
+    # Every group with something on record is tagged, not just issue groups: a part edit on one
+    # group can reach a protected neighbour (Greptile, PR #14).
+    groups = [i.face_group for i in issues] + list(stated) + [c["face_group"] for c in constraints
+                                                             if c.get("face_group")]
     out: dict[str, Intent] = {}
-    for issue in issues:
-        g = issue.face_group
+    for g in dict.fromkeys(groups):
         intent = Intent("unknown")
         if g in stated:
             intent = Intent("protected", stated[g], "cad_feature_name")
@@ -117,13 +121,27 @@ def tag_intents(issues: list[Issue], stated: dict[str, str] | None = None,
     return out
 
 
-def filter_requests(requests: list[dict], intents: dict[str, Intent]) -> tuple[list[dict], list[dict]]:
-    """ADR 0002 Amendment 1: a part edit on a protected group is rejected, not scored."""
+def touched_groups(facts: PartFacts | None, req: dict) -> list[str]:
+    """Groups a request changes. A part edit acts on a feature: the named group plus concave neighbours."""
+    group = req.get("face_group")
+    if group is None:
+        return []
+    if facts is None or req["kind"] not in PART_EDITS:
+        return [group]
+    faces = feature_faces(facts, group)
+    return [g for g, ids in facts.labelled_groups().items() if set(ids) & faces]
+
+
+def filter_requests(requests: list[dict], intents: dict[str, Intent],
+                    facts: PartFacts | None = None) -> tuple[list[dict], list[dict]]:
+    """ADR 0002 Amendment 1: a part edit touching a protected group is rejected, not scored."""
     kept, rejected = [], []
     for req in requests:
-        intent = intents.get(req.get("face_group", ""))
-        if req["kind"] in PART_EDITS and intent and intent.status == "protected":
-            rejected.append({**req, "reason": f"protected: {intent.reason}"})
+        hits = [g for g in touched_groups(facts, req)
+                if req["kind"] in PART_EDITS and intents.get(g) and intents[g].status == "protected"]
+        if hits:
+            why = "; ".join(f"{g} is protected: {intents[g].reason}" for g in hits)
+            rejected.append({**req, "reason": why})
         else:
             kept.append(req)
     return kept, rejected
@@ -278,8 +296,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                        for s in plan.setups],
             "issues": [{"id": i.id, "kind": i.kind, "face_group": i.face_group, **i.detail} for i in issues]}
     if not issues:
-        comment = "Anville reviewed this version: nothing to raise. It machines in {{plan.setups}} setup(s)."
-        text, _ = fill_slots(comment, slot_values(plan, issues, {}), [])
+        text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, issues, {}), [])
         return ReviewResult(plan, [], {}, [], {}, [], {}, [], text or "", run.calls, run.fallbacks)
 
     # Triage (model)
@@ -293,6 +310,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     if selected is None:
         selected = [i.id for i in issues]
     emit("decision", "Issues chosen", stage="triage", selected=selected)
+    if not selected:
+        # Nothing chosen: the later stages would have nothing to work on (live run, 2026-10-28).
+        text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, [], {}), [])
+        return ReviewResult(plan, issues, {}, [], {}, [], {}, [], text or "", run.calls, run.fallbacks)
 
     # Intent (code)
     chosen = [by_id[i] for i in selected]
@@ -315,13 +336,13 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
             if r["kind"] in NEEDS_GROUP and r.get("face_group") not in groups:
                 return None, f"{r['kind']} must name one of the selected issues' groups {sorted(groups)}"
         return a["requests"], ""
-    ctx = {**base, "selected": selected, "intents": intent_view,
-           "note": "Part edits on protected groups will be rejected; shop-side edits are always allowed."}
-    requests = run.ask("options", "Choose which edit kinds the planner should score for the selected issues.",
+    ctx = {**base, "selected": selected, "intents": intent_view}
+    requests = run.ask("options", "Choose which edit kinds the planner should score for the selected issues. "
+                       "Part edits touching a protected group will be rejected; shop-side edits are always allowed.",
                        ctx, OPTIONS_TOOL, v_options)
     if requests is None:
         requests = [r for g in sorted(groups, key=_group_order) for r in all_requests(g)]
-    kept, rejected = filter_requests(requests, intents)
+    kept, rejected = filter_requests(requests, intents, facts)
     result = evaluate_edits(facts, shop, kept, axes=axes) if kept else None
     options = {o.key: o for o in (result.options if result else [])}
     for r in rejected:
@@ -333,6 +354,9 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Decide (model + gate)
     issue_of_option = {k: o.face_group for k, o in options.items()}
+
+    values = slot_values(plan, chosen, options)
+    keys = list(options)
 
     def v_decide(a):
         out = []
@@ -348,9 +372,14 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     return None, f"{key!r} was not offered; offered: {sorted(options)}"
                 if issue_of_option[key] not in (None, issue.face_group):
                     return None, f"{key} belongs to another face group"
-            if d["action"] == "ask" and (not gates[issue.id] or not d.get("question")):
-                return None, f"asking about {issue.id} is not allowed: the answer would not change the plan"
-            out.append(Decision(d["issue_id"], d["action"], d.get("option_key"), d.get("question"), d["reason"]))
+            question = d.get("question")
+            if d["action"] == "ask":
+                if not gates[issue.id] or not question:
+                    return None, f"asking about {issue.id} is not allowed: the answer would not change the plan"
+                question, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
+                if err:
+                    return None, f"question for {issue.id}: {err}"
+            out.append(Decision(d["issue_id"], d["action"], d.get("option_key"), question, d["reason"]))
         return out, ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
@@ -365,11 +394,13 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
              option_key=d.option_key)
 
     # Communicate (model)
-    values = slot_values(plan, chosen, options)
-    keys = list(options)
+    asking = any(d.action == "ask" for d in decisions)
 
     def v_comment(a):
         text, err = fill_slots(a["text"], values, keys)
+        if not err and "?" in text and not asking:
+            # The comment may only ask what Decide was allowed to ask (Greptile, PR #14).
+            return None, "the comment asks a question, but no decision asks one; state the decisions instead"
         return text, err
     comment = run.ask("communicate", "Write the comment the designer will read: two to four plain sentences. "
                       "Use only these slots for numbers.",
@@ -377,6 +408,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                       COMMENT_TOOL, v_comment)
     if comment is None:
         comment, _ = fill_slots(_fallback_comment(decisions, by_id), values, keys)
+    if not comment:  # the template is built from validated parts; this is a last resort, never an empty post
+        comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     return ReviewResult(plan, issues, intents, selected, options, rejected, gates, decisions,
                         comment or "", run.calls, run.fallbacks)
 
