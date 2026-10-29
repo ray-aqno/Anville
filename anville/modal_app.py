@@ -80,6 +80,14 @@ UNCONFIRMED_POST_S = 120
 # Placeholder shop until the shop-profile format is decided (CLAUDE.md §4); same tools as the geometry tests.
 DEFAULT_TOOLS = (("EM12", 12.0, 4.0), ("EM6", 6.0, 4.0), ("EM3", 3.0, 4.0))
 
+
+def _shop():
+    """The shop the plan is made for: end mills it owns, no back-chamfer cutter yet, relieved soft
+    jaws (RFC 0002 §3). The catalog's cutters are offered as purchases, never counted as owned."""
+    from anville.geometry import ShopProfile, SoftJaws, Tool
+
+    return ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS], fixture=SoftJaws())
+
 # The Store methods a remote caller may run.
 STORE_OPS = frozenset({
     "record", "claim", "finish", "reapable", "event", "is_current",
@@ -329,7 +337,7 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
               directions=[s["directions"] for s in plan["setups"]],
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
-    message = _agent_comment(result["facts"], trace, timing, deadline) or _review_message(vid, plan)
+    message = _agent_comment(result["facts"], result["back_chamfer"], trace, timing, deadline) or _review_message(vid, plan)
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
@@ -368,13 +376,13 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     _log("timing", **timing)
 
 
-def _agent_comment(facts: dict, trace: "_Trace", timing: dict, deadline: float) -> str | None:
+def _agent_comment(facts: dict, back_chamfer: list[dict], trace: "_Trace", timing: dict,
+                   deadline: float) -> str | None:
     """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
     from anville.agent.job import agent_comment
-    from anville.geometry import ShopProfile, Tool
 
-    comment, stats = agent_comment(facts, ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS]),
-                                   os.environ, trace.add, deadline=deadline)
+    comment, stats = agent_comment(facts, _shop(), os.environ, trace.add, deadline=deadline,
+                                   back_chamfer=back_chamfer)
     trace.flush()
     usage = stats.pop("agent_usage", [])
     timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))
@@ -400,15 +408,28 @@ def _review_message(vid: str, plan: dict) -> str:
 @app.function(image=geo_image, volumes={"/data": data}, timeout=300)
 def analyze(version_id: str) -> dict:
     """STEP → PartFacts → SetupPlan (ADR 0008). PartFacts are kept on the Volume for later stages."""
-    from anville.geometry import ShopProfile, Tool, extract, min_setups
+    from dataclasses import replace
+
+    from anville.geometry import BACK_CHAMFER_CATALOG, assess_back_chamfer, extract, min_setups
 
     data.reload()  # the STEP was committed by handle_event's container
-    facts = extract(f"/data/step/{version_id}.step")
-    plan = min_setups(facts, ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS]))
+    step = f"/data/step/{version_id}.step"
+    facts = extract(step)
+    shop = _shop()
+    try:
+        # Checks a-f for the shop's cutters and the catalog's (RFC 0002), on this part. The review gives
+        # the same list to the plan, the options and the ask gate; a catalog cutter is a purchase to offer.
+        access = assess_back_chamfer(step, facts, replace(
+            shop, back_chamfer_tools=[*shop.back_chamfer_tools, *BACK_CHAMFER_CATALOG]))
+    except Exception as e:  # a back-chamfer bug costs only the buy option, never the review
+        _log("back_chamfer_failed", error=repr(e)[:300])
+        access = []
+    plan = min_setups(facts, shop, back_chamfer=access)
     Path("/data/facts").mkdir(parents=True, exist_ok=True)
     Path(f"/data/facts/{version_id}.json").write_text(json.dumps(facts.to_dict()))
     data.commit()
-    return {"plan": plan.to_dict(), "facts": facts.to_dict(), "faces": len(facts.faces),
+    return {"plan": plan.to_dict(), "facts": facts.to_dict(), "back_chamfer": [a.to_dict() for a in access],
+            "faces": len(facts.faces),
             "groups": len(facts.groups), "extract_s": round(facts.extract_s, 2)}
 
 

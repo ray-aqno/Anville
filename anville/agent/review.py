@@ -167,7 +167,7 @@ def best_option(options: list[Option], *, part_edits: bool) -> Option | None:
 
 
 def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Intent, *,
-                intents: dict[str, Intent] | None = None, axes: int = 3) -> bool:
+                intents: dict[str, Intent] | None = None, axes: int = 3, back_chamfer=()) -> bool:
     """The value-of-information gate (ADR 0009 §5): ask only if the answer changes the best option.
 
     A part edit that would also change a protected neighbour isn't a real option whatever the
@@ -176,7 +176,8 @@ def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Inten
     if intent.status != "unknown":
         return False
     intents = intents or {}
-    options = [o for o in evaluate_edits(facts, shop, all_requests(issue.face_group), axes=axes).options
+    options = [o for o in evaluate_edits(facts, shop, all_requests(issue.face_group), axes=axes,
+                                         back_chamfer=back_chamfer).options
                if o.side != "part" or not any(
                    g != issue.face_group and intents.get(g) and intents[g].status == "protected"
                    for g in touched_groups(facts, {"kind": o.kind, "face_group": o.face_group}))]
@@ -336,18 +337,20 @@ class _Runner:
 def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                verifier: ChatModel | None = None, stated: dict[str, str] | None = None,
                constraints: list[dict] | None = None, emit: Emit | None = None, axes: int = 3,
-               deadline: float | None = None) -> ReviewResult:
+               deadline: float | None = None, back_chamfer=()) -> ReviewResult:
     """Review one part version in three model calls: plan, decide-and-write, verify.
 
     `model=None` runs every model stage as its fixed-script step. Without a `verifier`, no model
     prose is published: the comment is rendered by code. `deadline` is a `time.monotonic()` value
     that no model call runs past; once too little time is left, stages fall back to code.
+    `back_chamfer` is `assess_back_chamfer` for the shop's cutters plus the catalog's; the plan, the
+    options and the ask gate all get this one list, so they can't disagree about what's reachable.
     """
     emit = emit or (lambda *a, **k: None)
     run = _Runner(model, emit, deadline)
 
     # Facts and intent (code), for every issue up front so planning is one call
-    plan = min_setups(facts, shop, axes=axes)
+    plan = min_setups(facts, shop, axes=axes, back_chamfer=back_chamfer)
     issues = find_issues(facts, plan)
     by_id = {i.id: i for i in issues}
     emit("verify", "Setup plan and issues computed", stage="facts", setups=plan.count,
@@ -356,7 +359,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, issues, {}), [])
         return ReviewResult(plan, [], {}, [], {}, [], {}, [], text or "", run.calls, run.fallbacks, run.usage)
     intents = tag_intents(issues, stated, constraints)
-    gates = {i.id: ask_allowed(facts, shop, i, intents[i.face_group], intents=intents, axes=axes) for i in issues}
+    gates = {i.id: ask_allowed(facts, shop, i, intents[i.face_group], intents=intents, axes=axes,
+                             back_chamfer=back_chamfer) for i in issues}
     intent_view = {g: {"status": t.status, "reason": t.reason} for g, t in intents.items()}
     emit("verify", "Intent tagged and ask gate computed", stage="intent", intents=intent_view, ask_allowed=gates)
     base = {"setups": [{"directions": s.directions,
@@ -397,7 +401,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                             run.usage)
     chosen = [by_id[i] for i in selected]
     kept, rejected = filter_requests(requests, intents, facts)
-    result = evaluate_edits(facts, shop, kept, axes=axes) if kept else None
+    result = evaluate_edits(facts, shop, kept, axes=axes, back_chamfer=back_chamfer) if kept else None
     options = {o.key: o for o in (result.options if result else [])}
     for r in rejected:
         emit("tool_result", "Edit rejected: the face's intent is stated", stage="plan",
