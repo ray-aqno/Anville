@@ -109,7 +109,7 @@ def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3, back_chamf
     `back_chamfer` takes the results of `assess_back_chamfer` (RFC 0002): a chamfer whose checks a-f
     all pass, for a cutter this shop owns, can also be finished from +Z with that cutter. The jaws
     grip across the chamfered edge, so one setup back-chamfers along one edge axis only: each axis is
-    tried and the plan with the fewest setups wins (ties go to X).
+    tried and the plan that finishes the most faces wins, then the one with the fewest setups (ties go to X).
     """
     if axes not in (3, 5):
         raise ValueError(f"axes must be 3 or 5, got {axes}")
@@ -121,7 +121,7 @@ def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3, back_chamf
         return _plan(facts, shop, axes, from_top)
     plans = [_plan(facts, shop, axes, {fid: t for fid, t in from_top.items() if jaw_axis.get(fid, "") == ax})
              for ax in options]
-    return min(plans, key=lambda p: (p.count, len(p.unreachable)))
+    return min(plans, key=lambda p: (len(p.unreachable), p.count))  # a shorter plan that skips a face is worse
 
 
 def _plan(facts: PartFacts, shop: ShopProfile, axes: int, from_top: dict) -> SetupPlan:

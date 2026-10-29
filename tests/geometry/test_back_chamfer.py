@@ -188,3 +188,20 @@ def test_reliefs_must_leave_enough_grip(fixture, step, facts):
     shop = replace(DEMO_SHOP, fixture=fixture)
     f = _check(_assess(step, facts, "demo_bracket", shop), "f")
     assert not f.passed and "grip" in f.detail
+
+
+def test_a_complete_plan_beats_a_shorter_incomplete_one():
+    """The X chamfer can also be milled from -Z; the Y chamfer has only the back-chamfer cutter. Picking the
+    X jaws gives 1 setup with the Y chamfer unfinished; picking the Y jaws finishes everything in 2."""
+    def face(fid, access):
+        return FaceFacts(id=fid, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False, access=access)
+    faces = [face(1, {"+Z": Access(1.0, 5.0)}), face(2, {"-Z": Access(1.0, 1.0)}), face(3, {})]
+    chamfers = [EdgeChamfer(2, 9, 9, "X", "-Y", 45.0, 1.5, (0, 1.5, 0), (100, 1.5, 0)),
+                EdgeChamfer(3, 9, 9, "Y", "-X", 45.0, 1.5, (1.5, 0, 0), (1.5, 60, 0))]
+    f = PartFacts(source_sha256="t", bbox=((0, 0, 0), (100, 60, 20)), faces=faces, edges=[],
+                  groups=face_groups(faces, []), extract_s=0.0, edge_chamfers=chamfers)
+    plan = min_setups(f, DEMO_SHOP, back_chamfer=[_Pass(2), _Pass(3)])
+    assert plan.unreachable == []
+    assert sorted(s.directions[0] for s in plan.setups) == ["+Z", "-Z"]
+    tools = {a.face_id: a.tool for s in plan.setups for a in s.faces}
+    assert tools[3] == HARVEY_910480.name and tools[2] != HARVEY_910480.name
