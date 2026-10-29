@@ -200,7 +200,7 @@ That last one is a design choice: move the hole away from the flange. The holder
 
 **Decision.**
 1. **Facts carry a reach curve.** Add `reach` to each `access[d]`: a list of `[clearance, stickout]` steps, non-decreasing in both values.
-   - It reads as: "a holder whose edge stays within `clearance` mm of the face needs `stickout` mm".
+   - **`clearance` marks where a step starts.** `[c, s]` reads: "material that begins `c` mm beyond the face needs `s` mm of stick-out to pass over it". A holder whose edge sweeps `w` mm beyond the face meets every step with `c ≤ w`, so it needs the `s` of the last such step.
    - The first step is the local depth; the last always equals `depth`, so `depth` keeps its meaning as the worst case.
    - A face whose curve reaches `depth` within 1 mm of clearance stores `[[0, depth]]`. Every flat-topped part reads exactly as today.
    - The field is additive, so `schema_version` stays 1 (§8).
@@ -213,10 +213,18 @@ That last one is a design choice: move the hole away from the flange. The holder
    - Proposed default: 50 mm, roughly an ER32 collet nut (prior, not measured). Rayyan's shop confirms or replaces it.
 4. **Fit uses the curve.** A tool of radius `r` in a holder of radius `R` sweeps the holder's edge `R − r` beyond the face. The fit rule becomes:
    ```
-   stickout(f, d, tool) = first step of reach[d] whose clearance ≥ R − r + 1 mm, else depth[d]
+   sweep(tool)          = R − r + 1 mm
+   stickout(f, d, tool) = s of the last step [c, s] in reach[d] with c ≤ sweep(tool)   (the first step has c = 0)
    fits(tool)           = tool.diameter ≤ limit  and  stickout(f, d, tool) ≤ tool.diameter × tool.max_ld
    ```
    - The 1 mm is a margin for the clearance being measured on a 1 mm grid.
+   - **Worked example, the bracket's hole F13 from +Z:** `reach = [[0, 12.7], [31.9, 38.1]]`, meaning the web is 12.7 mm deep and the flange starts 31.9 mm away. EM6 (r = 3, reach 6 × 4 = 24 mm):
+
+     | Holder | sweep = R − r + 1 | Steps with c ≤ sweep | Stick-out | Fits? |
+     |---|---|---|---|---|
+     | Ø50 | 25 − 3 + 1 = 23 | `[0, 12.7]` | 12.7 | yes, 12.7 ≤ 24 |
+     | Ø67 | 33.5 − 3 + 1 = 31.5 | `[0, 12.7]` | 12.7 | yes |
+     | Ø70 | 35 − 3 + 1 = 33 | `[0, 12.7]`, `[31.9, 38.1]` | 38.1 | no, 38.1 > 24 |
 5. **Each side's decision is a computed number.** When the curve decides fit:
    - **Unreachable detail:** the `no_tool` reason gives both ends of the curve, e.g. "EM6 needs 12.7 mm of stick-out in a holder up to Ø67, which clears the flange 31.9 mm away, and 38.1 mm in a wider one". The model can then cite the trade-off without inventing a number (ADR 0003).
    - **Shop-side edit:** `evaluate_edits` gains an `add_tool` variant for a slimmer holder on an owned tool, with params `{name, holder_diameter}` and side `shop`. It is offered only when it changes the plan, like every other option.
