@@ -48,7 +48,7 @@ Constraints on the design: setup count is computed from geometry, never guessed 
 - **Harder:** the planner is load-bearing. A bug there skews every recommendation, so it needs oracle tests on known parts.
 - **Revisit:** when demo parts need reach beyond the 6 axes, or when real outcomes show cycle-time error dominating decisions.
 
-## Amendment 1 (Proposed, 2026-10-28): `remove_feature` joins the catalog
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-28): `remove_feature` joins the catalog
 
 **Context.** PR #8 (`evaluate_edits`) found that, among predicted edits, only removing a feature or routing to 5-axis lowers the setup count. Radius and depth edits change *how* a face is cut, never *from which side*. The demo parts were therefore built around a removable bottom chamfer (2 → 1 setups). Rayyan has since given that chamfer a stated intent (weld clearance). The intent protects the face, so the demo's fix became shop-side, and `remove_feature` stays as a capability for features whose intent allows it. Removal was first expressed as `set_depth` with depth 0. Three problems:
 - **Depth means nothing for a chamfer.** "Set the depth of this chamfer to 0" reads as nonsense to the designer and to the model.
