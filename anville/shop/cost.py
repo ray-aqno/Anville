@@ -41,7 +41,8 @@ class Route:
     chamfers: int     # faces finished with a back-chamfer cutter, each paying back_chamfer_pass
     one_time: tuple[float, float] = (0.0, 0.0)              # $, min and max over the corners
     costs: dict[int, tuple[float, float]] = field(default_factory=dict)  # quantity -> $, min and max
-    payback: tuple[int, int | None] | None = None  # parts until a purchase beats the current plan; None if no purchase
+    payback: tuple[int, int | None] | None = None  # parts from which a purchase stays ahead; None if no purchase
+    payback_mid: int | None = None  # the same with every input at its midpoint: one number, shown with the range
     unpriced: list[str] = field(default_factory=list)  # what the dollars leave out
 
 
@@ -77,6 +78,7 @@ def cost_options(facts: PartFacts, shop: Shop, options: list[Option], *, plan: S
 
     ranged = _ranged(costs)
     corners = list(_corners(ranged))
+    mid = {name: (i.lo + i.hi) / 2 for name, i in ranged.items()}
     for r in routes:
         one = [_one_time(r, c, costs) for c in corners]
         r.one_time = (round(min(one), 2), round(max(one), 2))
@@ -87,9 +89,9 @@ def cost_options(facts: PartFacts, shop: Shop, options: list[Option], *, plan: S
             paid = [_payback_at(r, routes[0], c, costs) for c in corners]
             known = [p for p in paid if p is not None]
             r.payback = (min(known), None if None in paid else max(known)) if known else (PAYBACK_CAP, None)
+            r.payback_mid = _payback_at(r, routes[0], mid, costs)
 
     complete = [r for r in routes if r.complete]
-    mid = {name: (i.lo + i.hi) / 2 for name, i in ranged.items()}
     verdicts = [_verdict(complete, corners, mid, q, costs) for q in costs.scenarios.quantities]
     return CostResult(facts.source_sha256, routes, verdicts,
                       {name: asdict(i) for name, i in _inputs(costs).items()}, asdict(costs.scenarios))
@@ -169,16 +171,18 @@ def _route_cost(r: Route, point: dict, q: int, costs: ShopCosts) -> float:
 
 
 def _payback_at(r: Route, current: Route, point: dict, costs: ShopCosts) -> int | None:
-    """The fewest parts at which buying costs no more than the current plan, at one point; None past the cap.
+    """The quantity from which buying stays no dearer than the current plan, up to the cap; None if it never does.
 
-    The cost terms are worked out once per point and only their difference is scanned (Greptile, PR #20).
+    Not the first such quantity: when the pass costs more than the load it saves, savings fall within a
+    batch and rise at the next one's saved setup, so buying can lead and then trail again. The cost terms are worked out once per point
+    and only their difference is scanned (Greptile, PR #20).
     """
     (o1, b1, p1), (o0, b0, p0) = _terms(r, point, costs), _terms(current, point, costs)
     n = costs.scenarios.batch_size
-    for q in range(1, PAYBACK_CAP + 1):
-        if (o1 - o0) + math.ceil(q / n) * (b1 - b0) + q * (p1 - p0) <= 1e-9:
-            return q
-    return None
+    for q in range(PAYBACK_CAP, 0, -1):
+        if (o1 - o0) + math.ceil(q / n) * (b1 - b0) + q * (p1 - p0) > 1e-9:
+            return None if q == PAYBACK_CAP else q + 1
+    return 1
 
 
 def _verdict(routes: list[Route], corners: list[dict], mid: dict, q: int, costs: ShopCosts) -> Verdict:

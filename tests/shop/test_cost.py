@@ -163,6 +163,24 @@ def test_a_purchase_reports_its_payback_in_parts():
     assert buy.payback == (51, 51)
 
 
+def test_payback_is_where_buying_stays_cheaper_not_where_it_first_is():
+    """A pass slower than the load it saves: within a batch, savings fall; each new batch's saved setup lifts them.
+    Savings = $30 × batches − $0.60 × q − $313.50. q = 121 (13 batches): 390 − 72.6 = 317.4, ahead; but
+    q = 130: 390 − 78 = 312, behind again. From q = 131 (14 batches) on it stays ahead: at a batch's end, 24 × b ≥ 313.5."""
+    costs = replace(COSTS, load_time=fixed(0.05, "hr"), back_chamfer_pass=fixed(0.06, "hr"))
+    buy = route(cost_options(FACTS, replace(SHOP, costs=costs), [BUY], plan=PLAN), BUY.key)
+    assert buy.payback == (131, 131) and buy.payback_mid == 131
+
+
+def test_the_midpoint_payback_is_one_number_inside_the_corner_range():
+    """For a slot like "pays off past N parts, at mid-range inputs": always shown with the range."""
+    buy = route(cost_options(FACTS, Shop(tools=[], name="dll", costs=DLL_COSTS), [BUY], plan=PLAN), BUY.key)
+    lo, hi = buy.payback
+    assert lo <= buy.payback_mid and (hi is None or buy.payback_mid <= hi)
+    assert route(cost_options(FACTS, SHOP, [BUY], plan=PLAN), BUY.key).payback_mid == 51
+    assert route(cost_options(FACTS, SHOP, [], plan=PLAN), "current").payback_mid is None
+
+
 def test_an_unknown_cutter_price_is_an_error_not_a_free_tool():
     other = option("add_tool/G3/+Z/BC45-999", "add_tool", "shop", 1, {"type": "back_chamfer", "name": "999"})
     with pytest.raises(ValueError, match="999"):
