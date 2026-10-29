@@ -112,10 +112,11 @@ anville/geometry/
 `PartFacts` is versioned by `schema_version: 1`. Fields are only ever added; any rename or removal bumps the version.
 
 ```
-PartFacts   schema_version, source_sha256, units="mm", bbox, faces[], edges[], groups[[face_id]], extract_s
+PartFacts   schema_version, source_sha256, units="mm", bbox, faces[], edges[], groups[[face_id]], extract_s,
+            edge_chamfers[]   ← RFC 0002 §1: face_id, side_face, bottom_face, axis, outward, angle, leg, start, end
 FaceFacts   id, surface (plane|cylinder|cone|sphere|torus|bspline|other), area, centroid, normal?,
             axis?, radius?            ← geometric signature for matching faces to Onshape face IDs
-            stock, concave_radius?, concave_axis?, n_samples,
+            stock, concave_radius?, concave_axis?, n_samples, stock_neighbors[],
             access{dir: {fraction, depth, gap?}}
 Edge        a, b, kind (tangent|concave|convex), axis? (concave straight edges along a principal axis), radius? (set by a fillet edit; absent = sharp)
 SetupPlan   axes, count, setups: [{directions: [dir], faces: [{face_id, tool}]}], unreachable: [{face_id, reason, detail}]
