@@ -15,12 +15,13 @@ all of it (in CAD: suppress the feature that made those faces; ADR 0002 Amendmen
 """
 
 import copy
+import json
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 
 from anville.geometry.facts import DIRECTIONS, PartFacts, face_groups
 from anville.geometry.plan import SetupPlan, _Part, min_setups
-from anville.geometry.shop import ShopProfile, Tool
+from anville.geometry.shop import BACK_CHAMFER_CATALOG, ShopProfile, Tool
 
 CATALOG = ("set_min_radius", "set_depth", "remove_feature", "add_tool", "add_fixture", "route_machine")
 NEEDS_GROUP = ("set_min_radius", "set_depth", "remove_feature", "add_tool")
@@ -82,11 +83,17 @@ def feature_faces(facts: PartFacts, label: str) -> set[int]:
     return out
 
 
-def evaluate_edits(facts: PartFacts, shop: ShopProfile, requests: list[dict], *, axes: int = 3) -> EvaluateResult:
-    """Score every candidate value for each `{kind, face_group}` request against the current plan."""
+def evaluate_edits(facts: PartFacts, shop: ShopProfile, requests: list[dict], *, axes: int = 3,
+                   back_chamfer=()) -> EvaluateResult:
+    """Score every candidate value for each `{kind, face_group}` request against the current plan.
+
+    `back_chamfer`: `assess_back_chamfer` results for the shop's cutters and the catalog's
+    (RFC 0002). Owned cutters that pass shape the current plan; catalog cutters that pass are
+    offered as `add_tool` purchases; catalog cutters that fail say why in `skipped`.
+    """
     for req in requests:
         _validate(facts, req)
-    base = min_setups(facts, shop, axes=axes)
+    base = min_setups(facts, shop, axes=axes, back_chamfer=back_chamfer)
     options, skipped, seen = [], [], set()
     for req in requests:
         kind, label = req["kind"], req.get("face_group")
@@ -95,19 +102,24 @@ def evaluate_edits(facts: PartFacts, shop: ShopProfile, requests: list[dict], *,
             continue
         found, duplicates = [], 0
         scope = frozenset(feature_faces(facts, label)) if kind in NEEDS_GROUP else None
-        for key, side, params, world in _candidates(facts, shop, axes, base, kind, label):
-            same = (kind, scope, tuple(sorted(params.items())))
+        for key, side, params, world in _candidates(facts, shop, axes, base, kind, label, back_chamfer):
+            same = (kind, scope, json.dumps(params, sort_keys=True))
             if same in seen:
                 duplicates += 1  # another group of the same feature already produced this option
                 continue
             seen.add(same)
             found.append(_score(key, kind, label, side, params, facts, base, *world))
+        # A catalog cutter that fails is reported even when other add_tool values were found.
+        rejected = _catalog_rejections(scope, shop, back_chamfer) if kind == "add_tool" else []
         if found:
             options += found
+            if rejected:
+                skipped.append(Skipped(kind, label, "; ".join(rejected)))
         elif duplicates:
             skipped.append(Skipped(kind, label, "same feature as an earlier request: its options are listed once"))
         else:
-            skipped.append(Skipped(kind, label, "no candidate values: the shop's tools and the geometry leave none"))
+            why = "no candidate values: the shop's tools and the geometry leave none"
+            skipped.append(Skipped(kind, label, "; ".join([why, *rejected])))
     options.sort(key=lambda o: (not o.changes_plan, o.after.unreachable, o.after.setups))
     return EvaluateResult(options, skipped)
 
@@ -124,11 +136,11 @@ def _validate(facts: PartFacts, req: dict) -> None:
         facts.group_faces(req["face_group"])
 
 
-def _candidates(facts, shop, axes, base, kind, label):
-    """Yield (key, side, params, (facts', shop', axes')) for each value worth trying."""
+def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
+    """Yield (key, side, params, (facts', shop', axes', back_chamfer')) for each value worth trying."""
     if kind == "route_machine":
         if axes != 5:
-            yield "route_machine/5", "shop", {"axes": 5}, (facts, shop, 5)
+            yield "route_machine/5", "shop", {"axes": 5}, (facts, shop, 5, back_chamfer)
         return
     feature = feature_faces(facts, label)
     part = _Part(facts)
@@ -143,7 +155,7 @@ def _candidates(facts, shop, axes, base, kind, label):
         for r in sorted({t.diameter / 2 for t in tools}):
             if r > current:
                 yield (f"set_min_radius/{label}/r{r:g}", "part", {"radius": r},
-                       (_with_radius(facts, feature, r), shop, axes))
+                       (_with_radius(facts, feature, r), shop, axes, back_chamfer))
 
     elif kind == "set_depth":
         for d in DIRECTIONS:
@@ -156,10 +168,10 @@ def _candidates(facts, shop, axes, base, kind, label):
             for depth in reaches:
                 params = {"direction": d, "depth": depth}
                 yield (f"set_depth/{label}/{d}/{depth:g}", "part", params,
-                       (_with_depth(facts, feature, d, deepest - depth), shop, axes))
+                       (_with_depth(facts, feature, d, deepest - depth), shop, axes, back_chamfer))
 
     elif kind == "remove_feature":
-        yield f"remove_feature/{label}", "part", {}, (_without(facts, feature), shop, axes)
+        yield f"remove_feature/{label}", "part", {}, (_without(facts, feature), shop, axes, back_chamfer)
 
     elif kind == "add_tool":
         for d in DIRECTIONS:
@@ -177,7 +189,41 @@ def _candidates(facts, shop, axes, base, kind, label):
                         base_tool.diameter, max_ld)
             params = {"name": tool.name, "diameter": tool.diameter, "max_ld": tool.max_ld, "direction": d}
             yield f"add_tool/{label}/{d}/{tool.name}", "shop", params, \
-                (facts, ShopProfile(list(shop.tools) + [tool]), axes)
+                (facts, replace(shop, tools=[*shop.tools, tool]), axes, back_chamfer)
+        jaw_axis = {c.face_id: c.axis for c in facts.edge_chamfers}
+        for access in _catalog_passes(feature, shop, back_chamfer):
+            cutter = _CATALOG[access.tool]
+            # The reliefs were checked for this chamfer's jaw axis: score the plan with those jaws only.
+            same_jaws = [a for a in back_chamfer if jaw_axis.get(a.face_id) == jaw_axis.get(access.face_id)]
+            params = {"type": "back_chamfer", "name": cutter.name, "angle": cutter.angle,
+                      "head_diameter": cutter.head_diameter, "neck_diameter": cutter.neck_diameter,
+                      "neck_length": cutter.neck_length, "length_of_cut": cutter.length_of_cut,
+                      "direction": "+Z", "owned": False, "fixture": "relieved soft jaws",
+                      "reliefs": [asdict(r) for r in access.reliefs]}
+            yield (f"add_tool/{label}/+Z/BC{cutter.angle:g}-{cutter.name}", "shop", params,
+                   (facts, replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, cutter]), axes, same_jaws))
+
+
+_CATALOG = {c.name: c for c in BACK_CHAMFER_CATALOG}
+
+
+def _catalog_passes(feature: set[int], shop: ShopProfile, back_chamfer) -> list:
+    """Catalog cutters, not yet owned, that pass checks a-f on a chamfer of this feature: one per cutter."""
+    owned = {t.name for t in shop.back_chamfer_tools}
+    out, seen = [], set()
+    for a in back_chamfer:
+        if a.face_id in feature and a.ok and a.tool in _CATALOG and a.tool not in owned and a.tool not in seen:
+            seen.add(a.tool)
+            out.append(a)
+    return out
+
+
+def _catalog_rejections(feature, shop: ShopProfile, back_chamfer) -> list[str]:
+    """Why each catalog cutter can't finish a chamfer of this feature, check by check."""
+    owned = {t.name for t in shop.back_chamfer_tools}
+    return [f"{a.tool} fails check {c.name}: {c.detail}"
+            for a in back_chamfer if feature and a.face_id in feature and a.tool in _CATALOG
+            and a.tool not in owned for c in a.checks if not c.passed]
 
 
 def _unique_name(name: str, shop: ShopProfile) -> str:
@@ -234,8 +280,9 @@ def _with_depth(facts: PartFacts, feature: set[int], d: str, shift: float) -> Pa
     return new
 
 
-def _score(key, kind, label, side, params, facts, base: SetupPlan, new_facts, new_shop, new_axes) -> Option:
-    after = min_setups(new_facts, new_shop, axes=new_axes)
+def _score(key, kind, label, side, params, facts, base: SetupPlan, new_facts, new_shop, new_axes,
+           new_back_chamfer) -> Option:
+    after = min_setups(new_facts, new_shop, axes=new_axes, back_chamfer=new_back_chamfer)
     t0, t1 = _tools(base), _tools(after)
     present = {f.id for f in new_facts.faces}
     changes = [ToolChange(fid, t0.get(fid), t1.get(fid)) for fid in sorted((t0.keys() | t1.keys()) & present)

@@ -34,6 +34,9 @@ class BackChamferTool:
 # 2.5" neck length, 0.088" length of cut, 45°, $243.50.
 HARVEY_910480 = BackChamferTool("910480", 45.0, 12.70, 8.05, 63.5, 2.24)
 
+# Cutters the shop could buy. evaluate_edits offers one only after it passes checks a-f on the part.
+BACK_CHAMFER_CATALOG = (HARVEY_910480,)
+
 
 @dataclass(frozen=True)
 class SoftJaws:
