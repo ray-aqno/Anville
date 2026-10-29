@@ -369,3 +369,52 @@ def test_planning_sees_geometry_but_not_intent(part_a, shop, chamfer):
     plan_prompt, decide_prompt = (m[1]["content"] for m, _, _ in model.sent)
     assert "Weld clearance chamfer" not in plan_prompt and "Weld clearance chamfer" in decide_prompt
 
+
+
+# --- Greptile on PR #14, round 4 -------------------------------------------------------
+
+
+def test_an_action_sentence_that_hides_the_proposal_does_not_replace_it(part_a, shop, chamfer):
+    # "G3 stays as designed." cites the decision truthfully but never states the machine change.
+    hiding = {"text": f"{chamfer} stays as designed.", "role": "action", "cites": ["decision:I1", f"intent:{chamfer}"]}
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=[sentences(chamfer)[0], hiding]))
+    verifier = Scripted(verdicts(True), name="verifier")
+    r = run_review(part_a, shop, model, verifier=verifier, stated={chamfer: "Weld clearance chamfer"})
+    assert f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s)." in r.comment
+
+
+@pytest.mark.parametrize("comment", [["just text"], [{"text": "x", "role": "context"}],
+                                     [{"text": 5, "role": "context", "cites": ["issue:I1"]}],
+                                     [{"text": "x", "role": "boast", "cites": ["issue:I1"]}],
+                                     [{"text": "x", "role": "context", "cites": "issue:I1"}]])
+def test_malformed_comment_entries_are_rejected_inside_the_stage(part_a, shop, chamfer, comment):
+    bad = decide(propose_route(), comment=comment)
+    model = Scripted(plan(*requests_for(chamfer)), bad, bad)
+    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})  # must not raise
+    assert r.fallbacks == ["decide"] and r.decisions[0].option_key == ROUTE
+
+
+@pytest.mark.parametrize("verdict", [{"index": 0, "supported": "false", "why": "x"},
+                                     {"index": 0, "why": "x"}, {"index": 0, "supported": True}])
+def test_malformed_verdicts_are_rejected_and_no_prose_is_published(part_a, shop, chamfer, verdict):
+    bad = call("verify", verdicts=[verdict, {"index": 1, "supported": True, "why": "x"}])
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=sentences(chamfer)))
+    r = run_review(part_a, shop, model, verifier=Scripted(bad, bad, name="verifier"),
+                   stated={chamfer: "Weld clearance chamfer"})  # must not raise
+    assert r.fallbacks == ["verify"] and "Routing to a five-axis" not in r.comment
+
+
+def test_a_protected_face_with_no_stated_reason_keeps_the_proposal(part_a, shop, chamfer):
+    keep = [{"id": 3, "face_group": chamfer, "rule": "keep", "reason": ""}]
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), decide(propose_route())), constraints=keep)
+    assert r.comment.splitlines()[-1] == (f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s). It changes the shop, "
+                                          f"not the part. {chamfer} stays as designed.")
+
+
+def test_the_verifier_sees_how_many_faces_an_option_leaves_unreachable(part_a, shop, chamfer):
+    s = {"text": f"Routing leaves {{{{option.{ROUTE}.unreachable_after}}}} faces unreachable.", "role": "reason",
+         "cites": [f"option:{ROUTE}"]}
+    verifier = Scripted(verdicts(True), name="verifier")
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=[s]))
+    run_review(part_a, shop, model, verifier=verifier, stated={chamfer: "Weld clearance chamfer"})
+    assert verifier_input(verifier)[0]["cites"][f"option:{ROUTE}"]["unreachable_after"] == 0

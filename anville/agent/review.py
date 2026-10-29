@@ -273,8 +273,9 @@ DECIDE_TOOL = _tool(
              "reason": {"type": "string", "maxLength": 300}})},
         "comment": {"type": "array", "maxItems": MAX_SENTENCES, "items": _SENTENCE}}))
 VERIFY_TOOL = _tool(
-    "verify", "For each sentence: is everything it states supported by the nodes it cites, and does it ask for "
-    "or suggest nothing beyond the accepted decisions?",
+    "verify", "For each sentence: is everything it states supported by the nodes it cites, does it ask for or "
+    "suggest nothing beyond the accepted decisions, and, if its role is action, does it state the cited "
+    "decision's action (what changes), not just something true about it?",
     _obj(["verdicts"], {"verdicts": {"type": "array", "items": _obj(
         ["index", "supported", "why"], {"index": {"type": "integer"}, "supported": {"type": "boolean"},
                                         "why": {"type": "string", "maxLength": 200}})}}))
@@ -423,6 +424,11 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     return None, f"question for {issue.id}: {err}"
                 # Kept as a template, so rendering re-checks slots, not filled numbers (Greptile, PR #14).
             out.append(Decision(d["issue_id"], d["action"], d.get("option_key"), question, d["reason"]))
+        for i, sent in enumerate(a["comment"]):  # inside the stage, so a malformed entry is retried, not a crash
+            if not (isinstance(sent, dict) and isinstance(sent.get("text"), str)
+                    and sent.get("role") in ("context", "action", "reason") and isinstance(sent.get("cites"), list)
+                    and all(isinstance(c, str) for c in sent["cites"])):
+                return None, f"comment entry {i} needs text (string), role (context|action|reason) and cites (strings)"
         return (out, list(a["comment"])), ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
@@ -474,7 +480,7 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
         nodes[f"intent:{g}"] = {"status": t.status, "reason": t.reason}
     for k, o in options.items():
         nodes[f"option:{k}"] = {"side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
-                                "setups_after": o.after.setups}
+                                "setups_after": o.after.setups, "unreachable_after": o.after.unreachable}
     return nodes
 
 
@@ -496,11 +502,19 @@ def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, val
     cited = [decided_by[c.split(":", 1)[1]] for c in cites if c.startswith("decision:")]
     if sent["role"] == "action" and (len(cited) != 1 or cited[0].action == "ask"):
         return "an action sentence cites exactly one propose or quiet decision"
-    allowed = {d.option_key for d in cited if d.option_key}
-    stray = [k for k in keys if k in sent["text"] and k not in allowed]
+    if sent["role"] == "action" and cited[0].action == "propose":
+        # It replaces the rendered proposal, so it must state the outcome, not just avoid overclaiming
+        # (Greptile, PR #14: "G3 stays as designed." cited the decision and hid the machine change).
+        slot = f"{{{{option.{cited[0].option_key}.setups_after}}}}"
+        if slot not in sent["text"]:
+            return f"an action sentence for a proposal states its result with {slot}"
+    # Options the sentence may name: those of its cited decisions and the option nodes it cites.
+    allowed = {d.option_key for d in cited if d.option_key} | {c.split(":", 1)[1] for c in cites
+                                                               if c.startswith("option:")}
+    words = _SLOT.sub("", sent["text"])  # slot names aren't mentions
+    stray = [k for k in keys if k in words and k not in allowed]
     # Edit kinds count too: a rejected request (say, removing a protected face) is in no offered key.
-    stray += [k for k in CATALOG if re.search(rf"\b{k}\b", sent["text"])
-              and not any(o.startswith(k) for o in allowed)]
+    stray += [k for k in CATALOG if re.search(rf"\b{k}\b", words) and not any(o.startswith(k) for o in allowed)]
     if stray:
         return f"mentions options no cited decision accepted: {sorted(set(stray))}"
     return ""
@@ -526,6 +540,10 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
                       "cites": cited})
 
     def v_verify(a):
+        for v in a["verdicts"]:
+            if not (isinstance(v, dict) and isinstance(v.get("index"), int) and isinstance(v.get("supported"), bool)
+                    and isinstance(v.get("why"), str)):
+                return None, "each verdict needs index (integer), supported (true or false) and why (string)"
         verdicts = {v["index"]: v for v in a["verdicts"]}
         if sorted(verdicts) != list(range(len(items))):
             return None, f"give one verdict per sentence index 0..{len(items) - 1}"
@@ -589,7 +607,8 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
         if o.side == "shop":
             line += " It changes the shop, not the part."
         if intent and intent.status == "protected":
-            line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}."
+            # A keep constraint may carry no reason; its slot then doesn't exist (Greptile, PR #14).
+            line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {g} stays as designed."
         return line
     return f"{g}: no change proposed."
 
