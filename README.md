@@ -1,5 +1,9 @@
 # Anville
 
+**A home for manufacturing infrastructure.**
+
+*Anvil + -ville, the way Nashville is a town: the place where everything that makes parts comes to live.*
+
 Anville closes the design loop between engineers and the shop floor, and every loop makes the next one shorter.
 
 *Built during Meta's 2026 Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). Every commit in this repo is from the event.*
