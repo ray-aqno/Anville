@@ -13,27 +13,9 @@ from anville.agent.model import ModelUnavailable, Reply, parse_reply
 from anville.agent.review import (
     Intent, ask_allowed, fill_slots, filter_requests, find_issues, run_review, tag_intents,
 )
-from anville.geometry import ShopProfile, Tool, extract, min_setups
+from anville.geometry import extract, min_setups
 
 ROUTE = "route_machine/5"
-
-
-@pytest.fixture(scope="module")
-def shop():
-    return ShopProfile(tools=[Tool("EM12", 12.0, 4.0), Tool("EM6", 6.0, 4.0), Tool("EM3", 3.0, 4.0)])
-
-
-@pytest.fixture(scope="module")
-def part_a(tmp_path_factory):
-    from tests.geometry.parts import PARTS, write_step  # OCP
-
-    return extract(write_step(PARTS["demo_bracket"](), tmp_path_factory.mktemp("agent") / "a.step"))
-
-
-@pytest.fixture(scope="module")
-def chamfer(part_a, shop):
-    (issue,) = find_issues(part_a, min_setups(part_a, shop))
-    return issue.face_group
 
 
 class Scripted:

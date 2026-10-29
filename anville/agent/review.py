@@ -74,7 +74,7 @@ class ReviewResult:
     comment: str
     model_calls: int = 0
     fallbacks: list[str] = field(default_factory=list)
-    usage: list[dict] = field(default_factory=list)  # per call: stage, model, prompt/completion/cached tokens
+    usage: list[dict] = field(default_factory=list)  # per call: stage, model, host, prompt/completion/cached tokens
 
 
 # --- code stages ---------------------------------------------------------------
@@ -306,7 +306,8 @@ class _Runner:
             except ModelUnavailable as e:
                 error = f"model unavailable: {e}"
                 break
-            self.usage.append({"stage": stage, "model": model.name, **(reply.usage or {})})
+            self.usage.append({"stage": stage, "model": model.name, "host": getattr(model, "host", None),
+                               **(reply.usage or {})})
             if reply.error:
                 error = reply.error
             elif reply.tool != name:

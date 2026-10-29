@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol
 
@@ -77,6 +78,7 @@ class OpenAICompatModel:
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._key = api_key
         self.name = model
+        self.host = urlparse(base_url).netloc  # which sponsor served the call, for the trace
         self._max_tokens = max(max_tokens, MIN_MAX_TOKENS)
         self._effort = reasoning_effort
         self._timeout = timeout_s
