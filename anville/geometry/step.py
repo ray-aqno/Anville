@@ -48,6 +48,8 @@ WALL_LIKE = 0.3          # |n projected ⟂ d| above this measures a gap
 TANGENT_DOT = math.cos(math.radians(0.5))  # n1·n2 above this: a smooth (tangent) edge; a 5° kink is sharp
 PRINCIPAL_DOT = 0.999
 STOCK_TOL = 1e-3         # mm
+REACH_GRID = 1.0         # mm between height-map rays (ADR 0008 Amendment 1)
+REACH_STEP = 0.05        # mm of extra stick-out that starts a new reach step
 CHAMFER_ANGLE, CHAMFER_TOL = 45.0, 0.5  # degrees from -Z (RFC 0002 §1)
 FAR = 1e9                # mm, ray length
 
@@ -150,6 +152,40 @@ def _access(isect, pts, d: Vec, depth: float, axis: int) -> Access | None:
             gap = min(gap, _first_hit(isect, _axpy(p, n, RAY_OFFSET), unit) + RAY_OFFSET)
     return Access(fraction=round(len(clear) / len(pts), 4), depth=round(depth, 4),
                   gap=None if math.isinf(gap) else round(gap, 4))
+
+
+def _height_map(isect, lo: Vec, hi: Vec, d: str, top: float) -> list[tuple[float, float, float]]:
+    """Top of material along d on a REACH_GRID grid over the stock footprint: (a, b, height along d)."""
+    vec, axis = VECTORS[d], _AXIS_INDEX[d[1]]
+    a, b = (i for i in range(3) if i != axis)
+    out = []
+    for i, j in itertools.product(range(math.ceil((hi[a] - lo[a]) / REACH_GRID)),
+                                  range(math.ceil((hi[b] - lo[b]) / REACH_GRID))):
+        p = [0.0, 0.0, 0.0]
+        p[a], p[b] = lo[a] + (i + 0.5) * REACH_GRID, lo[b] + (j + 0.5) * REACH_GRID
+        p[axis] = (top + 1.0) * vec[axis]
+        t = _first_hit(isect, tuple(p), tuple(-c for c in vec))
+        if not math.isinf(t):
+            out.append((p[a], p[b], top + 1.0 - t))
+    return out
+
+
+def _reach(hmap, flo: Vec, fhi: Vec, d: str, deepest: float, depth: float) -> list[list[float]]:
+    """Stick-out needed vs holder clearance (ADR 0008 Amendment 1). Each step starts where taller material
+    begins, measured to the face's bounding box, so a clearance can only be understated."""
+    axis = _AXIS_INDEX[d[1]]
+    a, b = (i for i in range(3) if i != axis)
+    taller = sorted((math.hypot(max(flo[a] - x, 0.0, x - fhi[a]), max(flo[b] - y, 0.0, y - fhi[b])), h - deepest)
+                    for x, y, h in hmap if h - deepest > REACH_STEP)
+    steps = [[0.0, 0.0]]
+    for c, need in taller:
+        if need > steps[-1][1] + REACH_STEP:
+            c = 0.0 if c < REACH_GRID else math.floor(c * 10) / 10
+            if c == steps[-1][0]:
+                steps[-1][1] = round(need, 4)
+            else:
+                steps.append([c, round(need, 4)])
+    return steps if len(steps) > 1 else [[0.0, round(depth, 4)]]
 
 
 def _concave_cylinder(surf, pts) -> tuple[float, str | None] | None:
@@ -293,7 +329,7 @@ def extract(step_path: str | Path) -> PartFacts:
     isect.Load(shape, 1e-6)
     fmap = ShapeMap()
     TopExp.MapShapes_s(shape, TopAbs_FACE, fmap)
-    faces = []
+    faces, hmaps = [], {}
     for fid in range(1, fmap.Extent() + 1):
         face = TopoDS.Face(fmap.FindKey(fid))
         surf = BRepAdaptor_Surface(face)
@@ -315,6 +351,9 @@ def extract(step_path: str | Path) -> PartFacts:
             deepest = flo[axis] if d[0] == "+" else -fhi[axis]
             a = _access(isect, pts, vec, top[d] - deepest, axis)
             if a:
+                if d not in hmaps:
+                    hmaps[d] = _height_map(isect, lo, hi, d, top[d])
+                a.reach = _reach(hmaps[d], flo, fhi, d, deepest, a.depth)
                 access[d] = a
         concave = _concave_cylinder(surf, pts)
         cyl = surf.Cylinder() if kind == "cylinder" else None

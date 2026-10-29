@@ -208,7 +208,7 @@ That last one is a design choice: move the hole away from the flange. The holder
    - One height map per direction: rays cast down along `d` on a 1 mm grid over the stock footprint give the top of material at each point.
    - For each face, every point higher than the face's deepest point becomes a step, at its 2D distance from the face's projected bounding box.
    - The distance is to the bounding box, not the face itself, so the clearance can only be understated, never overstated.
-   - Prototype on the bracket: 0.4 s for the six height maps, 1.05 s in total for all 17 faces × 6 directions, process start included (verified).
+   - Prototype on the bracket: 0.4 s for the six height maps, 1.05 s in total for all 17 faces × 6 directions, process start included (verified). As implemented, the curves add 0.26 s to `extract` on the bracket (1.25 s → 1.51 s).
 3. **The shop states its holders.** `Tool` gains `holder_diameter: float | None`. `None` takes `ShopProfile.holder_diameter`, a stated assumption that goes on the setup sheet the way the soft-jaw sizes do (RFC 0002 §3).
    - **Default: Ø50 mm, a standard ER32 collet nut, for every tool.** This is a realistic estimate, not a measurement. Rayyan's shop varies its holders by job, so no single size can be confirmed.
      - ER32 is the general-purpose collet that holds every tool in the demo shop (EM3 to EM12).
@@ -252,10 +252,10 @@ That last one is a design choice: move the hole away from the flange. The holder
   - Flags carry the numbers the designer and the shop each need.
   - The strict xfail `test_web_holes_are_reachable` becomes the regression test.
 - **Unchanged:**
-  - The demo. On Part A, Part B and `two_pockets`, every face reaches its stock-top depth within 0.8 mm of clearance (verified), so any real holder gives today's plans.
+  - The demo. As implemented, most faces on Part A, Part B and `two_pockets` store `[[0, depth]]`. The exception is the bevels (the 1.5 mm chamfers and the 1 mm edge break), which reach full depth at 1.5 mm, e.g. `[[0, 19.0], [1.5, 20.0]]`. Every real holder sweeps far past that (Ø50 with EM12 sweeps 20 mm), so the plans are unchanged: the full suite passes as before (verified). The prototype's "within 0.8 mm" measured to the face's samples; the bounding box is more conservative.
   - Setup counts on the bracket, since ±Z are needed anyway.
 - **Harder:**
-  - `extract` grows by about a second on a 7" part.
+  - `extract` grows by 0.26 s on the 7" bracket (verified), roughly in proportion to the stock footprint.
   - Each `access` entry carries a list.
   - The shop profile needs holder data.
 - **Main session:**

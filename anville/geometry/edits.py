@@ -20,7 +20,7 @@ import math
 from dataclasses import asdict, dataclass, field, replace
 
 from anville.geometry.facts import DIRECTIONS, PartFacts, face_groups
-from anville.geometry.plan import SetupPlan, _Part, min_setups
+from anville.geometry.plan import HOLDER_MARGIN, SetupPlan, _Part, min_setups, stickout
 from anville.geometry.shop import BACK_CHAMFER_CATALOG, ShopProfile, Tool
 
 CATALOG = ("set_min_radius", "set_depth", "remove_feature", "add_tool", "add_fixture", "route_machine")
@@ -164,7 +164,10 @@ def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
                 continue  # the feature isn't opened from d
             deepest = max(depths)
             limit = min(part.limit(by_id[fid], d).diameter for fid in feature)
-            reaches = sorted({t.reach for t in tools if t.diameter <= limit + 1e-6 and t.reach < deepest}, reverse=True)
+            # Raising the floor by `shift` lowers every reach step by `shift` (the material around stays put).
+            shifts = {max(stickout(by_id[fid], d, t, shop) for fid in feature) - t.reach
+                      for t in tools if t.diameter <= limit + 1e-6}
+            reaches = sorted({round(deepest - s, 4) for s in shifts if s > 1e-6}, reverse=True)
             for depth in reaches:
                 params = {"direction": d, "depth": depth}
                 yield (f"set_depth/{label}/{d}/{depth:g}", "part", params,
@@ -179,14 +182,23 @@ def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
             if len(faces) < len(feature):
                 continue
             limit = min(part.limit(f, d).diameter for f in faces)
-            depth = max(f.access[d].depth for f in faces)
             fitting = [t for t in tools if t.diameter <= limit + 1e-6]
-            if not fitting or depth <= fitting[0].reach:
-                continue  # nothing fits at all, or an existing tool already reaches
+            if not fitting:
+                continue  # nothing fits at all
             base_tool = fitting[0]
+            depth = max(stickout(f, d, base_tool, shop) for f in faces)
+            if depth <= base_tool.reach:
+                continue  # an existing tool already reaches
+            holder = _slimmer_holder(faces, d, base_tool, shop)
+            if holder:
+                params = {"type": "holder", "name": base_tool.name, "holder_diameter": holder, "direction": d}
+                slim = replace(base_tool, holder_diameter=holder)
+                yield (f"add_tool/{label}/{d}/{base_tool.name}-H{holder:g}", "shop", params,
+                       (facts, replace(shop, tools=[slim if t is base_tool else t for t in shop.tools]), axes,
+                        back_chamfer))
             max_ld = math.ceil(depth / base_tool.diameter)
-            tool = Tool(_unique_name(f"{base_tool.name}-L{base_tool.diameter * max_ld:g}", shop),
-                        base_tool.diameter, max_ld)
+            tool = replace(base_tool, name=_unique_name(f"{base_tool.name}-L{base_tool.diameter * max_ld:g}", shop),
+                           max_ld=max_ld)
             params = {"name": tool.name, "diameter": tool.diameter, "max_ld": tool.max_ld, "direction": d}
             yield f"add_tool/{label}/{d}/{tool.name}", "shop", params, \
                 (facts, replace(shop, tools=[*shop.tools, tool]), axes, back_chamfer)
@@ -224,6 +236,17 @@ def _catalog_rejections(feature, shop: ShopProfile, back_chamfer) -> list[str]:
     return [f"{a.tool} fails check {c.name}: {c.detail}"
             for a in back_chamfer if feature and a.face_id in feature and a.tool in _CATALOG
             and a.tool not in owned for c in a.checks if not c.passed]
+
+
+def _slimmer_holder(faces, d: str, tool: Tool, shop: ShopProfile) -> int | None:
+    """The widest whole-mm holder, slimmer than the current one and no slimmer than the tool, that lets
+    `tool` reach every face from d (ADR 0008 Amendment 1): its sweep must stop short of each face's first
+    reach step that needs more than the tool's reach."""
+    stops = [c for f in faces for c, s in (f.access[d].reach or [[0.0, f.access[d].depth]]) if s > tool.reach + 1e-6]
+    if not stops or min(stops) <= 0.0:
+        return None  # the tool can't reach even right beside the face
+    widest = math.ceil(2 * (min(stops) - HOLDER_MARGIN + tool.diameter / 2)) - 1  # sweep strictly below the stop
+    return widest if tool.diameter <= widest < shop.holder(tool) else None
 
 
 def _unique_name(name: str, shop: ShopProfile) -> str:
@@ -276,7 +299,10 @@ def _with_depth(facts: PartFacts, feature: set[int], d: str, shift: float) -> Pa
     new = copy.deepcopy(facts)
     for f in new.faces:
         if f.id in feature:
-            f.access[d].depth = max(0.0, f.access[d].depth - shift)
+            a = f.access[d]
+            a.depth = max(0.0, a.depth - shift)
+            if a.reach:
+                a.reach = [[c, max(0.0, s - shift)] for c, s in a.reach]
     return new
 
 
