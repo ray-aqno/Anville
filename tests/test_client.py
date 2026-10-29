@@ -152,3 +152,13 @@ def test_mapping_ledger_keeps_the_spike_key_so_deployed_counts_carry_over(monkey
 
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     assert ledger == {f"calls:{today}": 1}
+
+
+def test_a_bearer_token_replaces_the_key_pair(monkeypatch):
+    """ADR 0007, Amendment 1: Anville's comments go out on its OAuth token, so they carry its name."""
+    sent = _serve(monkeypatch, _Ok())
+    _client(auth_header="Bearer tok").post("/comments", {"message": "x"})
+    assert sent[0].get_header("Authorization") == "Bearer tok"
+    sent = _serve(monkeypatch, _Ok())
+    _client().get("/documents")
+    assert sent[0].get_header("Authorization").startswith("Basic ")

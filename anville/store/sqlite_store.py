@@ -17,7 +17,10 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import TYPE_CHECKING, Callable, Iterator
+
+if TYPE_CHECKING:
+    from anville.connectors.onshape.oauth import Grant
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -79,6 +82,17 @@ CREATE TRIGGER IF NOT EXISTS ledger_no_update BEFORE UPDATE ON ledger
     BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS ledger_no_delete BEFORE DELETE ON ledger
     BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+
+-- Anville's Onshape OAuth grant (ADR 0007, Amendment 1). One row, overwritten on every refresh,
+-- because each refresh rotates the refresh token.
+CREATE TABLE IF NOT EXISTS oauth_grant (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    refresh_token  TEXT NOT NULL,
+    access_token   TEXT NOT NULL,
+    expires_at     REAL NOT NULL,
+    user           TEXT NOT NULL,
+    updated_at     REAL NOT NULL
+);
 
 -- Onshape calls per UTC day, against our own cap (OnshapeClient's CallLedger).
 CREATE TABLE IF NOT EXISTS call_budget (
@@ -430,6 +444,25 @@ class Store:
     def calls(self, day: str) -> int:
         row = self._conn().execute("SELECT n FROM call_budget WHERE day = ?", (day,)).fetchone()
         return row[0] if row else 0
+
+    # --- Anville's OAuth grant (ADR 0007, Amendment 1) -------------------------
+
+    def get_grant(self) -> Grant | None:
+        from anville.connectors.onshape.oauth import Grant
+
+        r = self._conn().execute("SELECT * FROM oauth_grant WHERE id = 1").fetchone()
+        return Grant(r["refresh_token"], r["access_token"], r["expires_at"], r["user"]) if r else None
+
+    def put_grant(self, grant: Grant) -> None:
+        """Save the grant, durably: a rotated refresh token lost in a crash would kill the grant."""
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO oauth_grant (id, refresh_token, access_token, expires_at, user, updated_at)"
+                " VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET refresh_token = excluded.refresh_token,"
+                " access_token = excluded.access_token, expires_at = excluded.expires_at,"
+                " user = excluded.user, updated_at = excluded.updated_at",
+                (grant.refresh_token, grant.access_token, grant.expires_at, grant.user, self._clock()))
+        self._persist()
 
     def event(self, key: str) -> Event | None:
         row = self._conn().execute("SELECT * FROM events WHERE key = ?", (key,)).fetchone()
