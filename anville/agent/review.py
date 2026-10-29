@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -31,6 +32,7 @@ from anville.geometry.edits import CATALOG, NEEDS_GROUP, Option, evaluate_edits,
 PART_EDITS = frozenset({"remove_feature", "set_depth", "set_min_radius"})
 FORCES_SETUP_MAX_GROUPS = 2   # a setup that exists for this many face groups or fewer is an issue
 MAX_MODEL_CALLS = 8           # ADR 0003
+MIN_CALL_S = 10               # less time left than this: the stage falls back instead of calling
 NOTHING_TO_RAISE = "Anville reviewed this version: it machines in {{plan.setups}} setup(s)."
 STAGE_MAX_TOKENS = {"triage": 4096, "options": 4096, "decide": 4096}
 
@@ -74,7 +76,7 @@ class ReviewResult:
     comment: str
     model_calls: int = 0
     fallbacks: list[str] = field(default_factory=list)
-    usage: list[dict] = field(default_factory=list)  # per call: stage, model, prompt/completion/cached tokens
+    usage: list[dict] = field(default_factory=list)  # per call: stage, model, host, prompt/completion/cached tokens
 
 
 # --- code stages ---------------------------------------------------------------
@@ -282,8 +284,9 @@ VERIFY_TOOL = _tool(
 
 
 class _Runner:
-    def __init__(self, model: ChatModel | None, emit: Emit):
+    def __init__(self, model: ChatModel | None, emit: Emit, deadline: float | None = None):
         self.model, self.emit, self.calls, self.fallbacks, self.usage = model, emit, 0, [], []
+        self.deadline = deadline
 
     def ask(self, stage: str, instructions: str, base: dict, extra: dict, tool: dict, validate,
             model: ChatModel | None = None) -> object | None:
@@ -294,6 +297,10 @@ class _Runner:
             if model is None or self.calls >= MAX_MODEL_CALLS:
                 error = error if model is None else "call cap reached"
                 break
+            left = None if self.deadline is None else self.deadline - time.monotonic()
+            if left is not None and left < MIN_CALL_S:
+                error = "time budget spent"
+                break
             content = (json.dumps(base, sort_keys=True) + f"\n\nSTAGE {stage}: {instructions}\n"
                        + json.dumps(extra, sort_keys=True))
             if attempt == 2:
@@ -302,11 +309,12 @@ class _Runner:
             self.calls += 1
             try:
                 reply = model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage),
-                                   reasoning_effort=STAGE_EFFORT.get(stage))
+                                   reasoning_effort=STAGE_EFFORT.get(stage), timeout_s=left)
             except ModelUnavailable as e:
                 error = f"model unavailable: {e}"
                 break
-            self.usage.append({"stage": stage, "model": model.name, **(reply.usage or {})})
+            self.usage.append({"stage": stage, "model": model.name, "host": getattr(model, "host", None),
+                               **(reply.usage or {})})
             if reply.error:
                 error = reply.error
             elif reply.tool != name:
@@ -327,14 +335,16 @@ class _Runner:
 
 def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                verifier: ChatModel | None = None, stated: dict[str, str] | None = None,
-               constraints: list[dict] | None = None, emit: Emit | None = None, axes: int = 3) -> ReviewResult:
+               constraints: list[dict] | None = None, emit: Emit | None = None, axes: int = 3,
+               deadline: float | None = None) -> ReviewResult:
     """Review one part version in three model calls: plan, decide-and-write, verify.
 
     `model=None` runs every model stage as its fixed-script step. Without a `verifier`, no model
-    prose is published: the comment is rendered by code.
+    prose is published: the comment is rendered by code. `deadline` is a `time.monotonic()` value
+    that no model call runs past; once too little time is left, stages fall back to code.
     """
     emit = emit or (lambda *a, **k: None)
-    run = _Runner(model, emit)
+    run = _Runner(model, emit, deadline)
 
     # Facts and intent (code), for every issue up front so planning is one call
     plan = min_setups(facts, shop, axes=axes)

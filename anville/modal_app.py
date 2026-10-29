@@ -49,7 +49,11 @@ geo_image = (
 if modal.is_local():
     from anville.env import load_env
 
-    secrets = [modal.Secret.from_dict(load_env(REPO_ROOT / ".env"))]
+    _env = load_env(REPO_ROOT / ".env")
+    # ANVILLE_* variables set when deploying override .env, so one environment can differ
+    # (staging: the translation webhook goes to production's URL, so don't wait for it).
+    _env.update({k: v for k, v in os.environ.items() if k.startswith("ANVILLE_")})
+    secrets = [modal.Secret.from_dict(_env)]
 else:
     secrets = [modal.Secret.from_dict({})]
 # Ephemeral only (ADR 0006 §7): self-created IDs, translation-done flags, caches, timings.
@@ -59,7 +63,11 @@ data = modal.Volume.from_name("anville-data", create_if_missing=True)
 store_vol = modal.Volume.from_name("anville-store", create_if_missing=True)
 
 # How long handle_event waits for the translation.complete webhook before polling.
-TX_WEBHOOK_WAIT_S = 120
+TX_WEBHOOK_WAIT_S = float(os.environ.get("ANVILLE_TX_WAIT_S", 120))
+# handle_event's Modal timeout. The agent stops calling models POST_RESERVE_S before it, so the
+# version guard and the comment post (agent or setup-count fallback) always have time to run.
+JOB_TIMEOUT_S = 600
+POST_RESERVE_S = 60
 TX_POLL_INTERVAL_S = 15
 TX_POLL_MAX = 4
 # A webhook for our own comment can arrive before createComment returns (F1 race).
@@ -232,8 +240,9 @@ def web():
     return api
 
 
-@app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=600)
+@app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=JOB_TIMEOUT_S)
 def handle_event(key: str) -> None:
+    deadline = time.monotonic() + JOB_TIMEOUT_S - POST_RESERVE_S
     from anville.store import StaleClaim
 
     store = StoreSvc()
@@ -247,7 +256,7 @@ def handle_event(key: str) -> None:
     try:
         name = ev.payload.get("event")
         if name == CREATE_VERSION:
-            _on_create_version(store, ev)
+            _on_create_version(store, ev, deadline)
         elif name == COMMENT_CREATE:
             time.sleep(SELF_COMMENT_RECHECK_S)
             cid = ev.payload["commentId"]
@@ -267,7 +276,7 @@ def handle_event(key: str) -> None:
             handle_event.spawn(nxt)
 
 
-def _on_create_version(store, ev) -> None:
+def _on_create_version(store, ev, deadline: float) -> None:
     event = ev.payload
     did, vid = event["documentId"], event["versionId"]
     received_at = ev.received_at
@@ -276,7 +285,7 @@ def _on_create_version(store, ev) -> None:
     trace = _Trace(store, did, f"{vid[:8]}-{ev.attempts}", vid)
     trace.add("run_started", "Reviewing a new version")
     try:
-        _review(store, ev, trace, timing)
+        _review(store, ev, trace, timing, deadline)
     except Exception as e:
         # Close the trace so the panel shows a failed run, not one stuck mid-step.
         trace.add("error", "Review failed", error=type(e).__name__, message=str(e)[:300])
@@ -285,7 +294,7 @@ def _on_create_version(store, ev) -> None:
         raise
 
 
-def _review(store, ev, trace: "_Trace", timing: dict) -> None:
+def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     event = ev.payload
     did, vid = event["documentId"], event["versionId"]
     received_at = ev.received_at
@@ -320,6 +329,8 @@ def _review(store, ev, trace: "_Trace", timing: dict) -> None:
     trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
               directions=[s["directions"] for s in plan["setups"]],
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
+    message = _agent_comment(result["facts"], trace, timing, deadline) or _review_message(vid, plan)
+    timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
     if not store.call.remote("is_current", did, vid):
@@ -334,12 +345,12 @@ def _review(store, ev, trace: "_Trace", timing: dict) -> None:
             "documentId": did,
             "versionId": vid,
             "elementId": eid,
-            "message": _review_message(vid, plan),
+            "message": message,
         })
         state[f"self:{comment['id']}"] = time.time()
         store.call.remote("complete_post", ev.key, "review", comment["id"])
         timing["comment_posted_at"] = time.time()
-        trace.add("comment_posted", "Posted the setup count", comment_id=comment["id"])
+        trace.add("comment_posted", "Posted the review", comment_id=comment["id"])
     trace.add("run_finished", "Review finished")
     trace.flush()
 
@@ -348,12 +359,28 @@ def _review(store, ev, trace: "_Trace", timing: dict) -> None:
         export_s=round(timing["tx_done_at"] - timing["tx_started_at"], 2),
         receive_to_step_s=round(timing["downloaded_at"] - received_at, 2),
         analyze_s=round(timing["analyzed_at"] - timing["downloaded_at"], 2),
+        review_s=round(timing["reviewed_at"] - timing["analyzed_at"], 2),
         calls_today=client.calls_today(),
     )
     if "comment_posted_at" in timing:
         timing["receive_to_comment_s"] = round(timing["comment_posted_at"] - received_at, 2)
     state[f"timing:{vid}"] = timing
     _log("timing", **timing)
+
+
+def _agent_comment(facts: dict, trace: "_Trace", timing: dict, deadline: float) -> str | None:
+    """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
+    from anville.agent.job import agent_comment
+    from anville.geometry import ShopProfile, Tool
+
+    comment, stats = agent_comment(facts, ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS]),
+                                   os.environ, trace.add, deadline=deadline)
+    trace.flush()
+    usage = stats.pop("agent_usage", [])
+    timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))
+    if "agent_error" in stats:
+        _log("agent_failed", error=stats["agent_error"])
+    return comment
 
 
 def _review_message(vid: str, plan: dict) -> str:
@@ -381,8 +408,8 @@ def analyze(version_id: str) -> dict:
     Path("/data/facts").mkdir(parents=True, exist_ok=True)
     Path(f"/data/facts/{version_id}.json").write_text(json.dumps(facts.to_dict()))
     data.commit()
-    return {"plan": plan.to_dict(), "faces": len(facts.faces), "groups": len(facts.groups),
-            "extract_s": round(facts.extract_s, 2)}
+    return {"plan": plan.to_dict(), "facts": facts.to_dict(), "faces": len(facts.faces),
+            "groups": len(facts.groups), "extract_s": round(facts.extract_s, 2)}
 
 
 @app.function(image=image, schedule=modal.Period(minutes=REAPER_PERIOD_MIN), timeout=120)
