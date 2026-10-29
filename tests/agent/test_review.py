@@ -467,3 +467,46 @@ def test_a_trickling_host_cannot_hold_a_call_past_its_budget():
         m.call([], [], timeout_s=1)
     assert time.monotonic() - t0 < 1.5
     srv.shutdown()
+
+
+# --- the back-chamfer cutter the shop could buy (S3c, after PR #18) ----------------------------
+
+BUY = "add_tool/G3/+Z/BC45-910480"
+
+
+def test_the_buy_option_reaches_the_review_and_wins_when_the_chamfer_is_protected(
+        part_a, shop, chamfer, catalog_access):
+    stated = {chamfer: "Weld clearance chamfer"}
+    without = run_review(part_a, shop, None, stated=stated)
+    assert BUY not in without.options
+
+    r = run_review(part_a, shop, None, stated=stated, back_chamfer=catalog_access)
+    assert r.plan.count == 2  # the shop doesn't own the cutter yet: the base plan is unchanged
+    assert (r.options[BUY].side, r.options[BUY].after.setups) == ("shop", 1)
+    assert [d.option_key for d in r.decisions] == [BUY]  # the shop-side fix that keeps the chamfer
+
+
+def test_the_plan_the_options_and_the_ask_gate_see_the_same_assessments(
+        monkeypatch, part_a, shop, chamfer, catalog_access):
+    """If they saw different lists, the base plan, the options and the gate could disagree."""
+    import anville.agent.review as review
+
+    seen = []
+    for name in ("min_setups", "evaluate_edits"):
+        real = getattr(review, name)
+
+        def spy(*a, _real=real, _name=name, **k):
+            seen.append((_name, k.get("back_chamfer")))
+            return _real(*a, **k)
+
+        monkeypatch.setattr(review, name, spy)
+    run_review(part_a, shop, None, back_chamfer=catalog_access)  # intent unknown: the gate runs too
+    assert {n for n, _ in seen} == {"min_setups", "evaluate_edits"} and len(seen) >= 3
+    assert all(b is catalog_access for _, b in seen)
+
+
+def test_an_assessment_survives_the_trip_from_the_geometry_image(catalog_access):
+    from anville.geometry.backchamfer import BackChamferAccess
+
+    for a in catalog_access:
+        assert BackChamferAccess.from_dict(json.loads(json.dumps(a.to_dict()))) == a
