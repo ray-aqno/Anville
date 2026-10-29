@@ -59,9 +59,8 @@ def happy_path(chamfer, decision):
         call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
                                          {"kind": "route_machine"}]),
         call("decide", decisions=[decision]),
-        call("write_comment", text=f"{chamfer} forces setup {{{{issue.I1.directions}}}}. Routing it to 5-axis takes "
-                                   "the part from {{option.route_machine/5.setups_before}} to "
-                                   "{{option.route_machine/5.setups_after}} setups."),
+        call("write_comment", intro=f"{chamfer} alone forces the {{{{issue.I1.directions}}}} setup.",
+             reasons=[{"issue_id": "I1", "why": "The shop changes; the part doesn't."}]),
     )
 
 
@@ -125,7 +124,8 @@ def test_stated_intent_review_proposes_the_shop_side_fix_in_four_calls(part_a, s
     assert [x["kind"] for x in r.rejected] == ["remove_feature"]  # filtered before scoring
     assert list(r.options) == ["route_machine/5"]
     assert r.ask_allowed == {"I1": False}
-    assert r.comment.endswith("takes the part from 2 to 1 setups.")
+    assert r.comment.splitlines()[1].startswith(f"{chamfer}: route_machine/5 takes it from 2 to 1 setup(s).")
+    assert r.comment.splitlines()[0] == f"{chamfer} alone forces the -Z setup."
     assert {d["stage"] for _, _, d in events} >= {"facts", "triage", "intent", "options", "decide"}
     assert all(not any(c.isdigit() for c in title) for _, title, _ in events)  # ADR 0007: no numbers in titles
 
@@ -138,7 +138,7 @@ def test_proposing_an_option_that_was_not_offered_is_rejected_then_falls_back(pa
         call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
                                          {"kind": "route_machine"}]),
         bad, bad,
-        call("write_comment", text="Routing to 5-axis gives {{option.route_machine/5.setups_after}} setup."),
+        call("write_comment", intro="One issue.", reasons=[{"issue_id": "I1", "why": "Keeps the chamfer."}]),
     )
     events = []
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"},
@@ -156,7 +156,7 @@ def test_asking_where_the_gate_forbids_it_is_rejected(part_a, shop, chamfer):
         call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
         call("evaluate_edits", requests=[{"kind": "route_machine"}]),
         ask, ask,
-        call("write_comment", text="Done."),
+        call("write_comment", intro="Done.", reasons=[{"issue_id": "I1", "why": "Shop side."}]),
     )
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
     assert r.fallbacks == ["decide"] and r.decisions[0].action == "propose"
@@ -170,7 +170,8 @@ def test_unknown_intent_lets_the_model_ask(part_a, shop, chamfer):
 
 
 def test_an_invented_number_in_the_comment_is_regenerated_then_templated(part_a, shop, chamfer):
-    invented = call("write_comment", text="This saves 37 minutes per part.")
+    invented = call("write_comment", intro="This saves 37 minutes per part.",
+                    reasons=[{"issue_id": "I1", "why": "x"}])
     model = Scripted(
         call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
         call("evaluate_edits", requests=[{"kind": "route_machine"}]),
@@ -188,7 +189,7 @@ def test_values_in_a_request_are_rejected_before_the_planner(part_a, shop, chamf
     model = Scripted(call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
                      with_value, with_value,
                      call("decide", decisions=[{"issue_id": "I1", "action": "quiet", "reason": "x"}]),
-                     call("write_comment", text="Nothing to change."))
+                     call("write_comment", intro="Nothing to change.", reasons=[{"issue_id": "I1", "why": "x"}]))
     r = run_review(part_a, shop, model)
     assert r.fallbacks == ["options"]
 
@@ -199,7 +200,7 @@ def test_budget_failures_and_outages_degrade_one_stage_at_a_time(part_a, shop, c
     model = Scripted(out_of_tokens, out_of_tokens, ModelUnavailable("HTTP 503"),
                      call("decide", decisions=[{"issue_id": "I1", "action": "propose",
                                                 "option_key": "route_machine/5", "reason": "x"}]),
-                     call("write_comment", text="Route to 5-axis."))
+                     call("write_comment", intro="Route to 5-axis.", reasons=[{"issue_id": "I1", "why": "x"}]))
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
     assert r.fallbacks == ["triage", "options"]
     assert r.decisions[0].option_key == "route_machine/5"
@@ -253,7 +254,8 @@ def test_stated_intent_is_tagged_even_for_groups_without_an_issue(part_a, shop, 
 
 
 def test_a_question_in_the_comment_needs_an_ask_decision(part_a, shop, chamfer):
-    asks = call("write_comment", text=f"Can you remove the chamfer on {chamfer}?")
+    asks = call("write_comment", intro=f"Can you remove the chamfer on {chamfer}?",
+                reasons=[{"issue_id": "I1", "why": "x"}])
     model = Scripted(
         call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
         call("evaluate_edits", requests=[{"kind": "route_machine"}]),
@@ -300,3 +302,60 @@ def test_when_triage_drops_everything_the_review_stops_there(part_a, shop):
     r = run_review(part_a, shop, model)
     assert r.model_calls == 1 and r.fallbacks == [] and r.decisions == []
     assert r.comment == "Anville reviewed this version: it machines in 2 setup(s)."
+
+
+# --- Greptile on PR #14, round 2 -------------------------------------------------
+
+
+def test_actions_in_the_comment_are_rendered_from_accepted_decisions(part_a, shop, chamfer):
+    # The model writes only the framing; it can't put "remove the chamfer" in as an action.
+    model = happy_path(chamfer, {"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
+                                 "reason": "x"})
+    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
+    actions = r.comment.splitlines()[1:]
+    assert len(actions) == 1 and "remove_feature" not in r.comment
+
+
+def test_a_reason_that_asks_a_question_is_rejected(part_a, shop, chamfer):
+    sneaky = call("write_comment", intro="Review.", reasons=[{"issue_id": "I1", "why": "Could you drop it?"}])
+    model = Scripted(
+        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
+        call("evaluate_edits", requests=[{"kind": "route_machine"}]),
+        call("decide", decisions=[{"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
+                                   "reason": "x"}]),
+        sneaky, sneaky,
+    )
+    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
+    assert r.fallbacks == ["communicate"] and "?" not in r.comment
+
+
+def test_an_accepted_question_with_a_slot_survives_the_fallback(part_a, shop, chamfer):
+    ask = call("decide", decisions=[{"issue_id": "I1", "action": "ask", "reason": "x",
+                                     "question": f"Is {chamfer} worth {{{{plan.setups}}}} setups?"}])
+    model = Scripted(
+        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
+        call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
+                                         {"kind": "route_machine"}]),
+        ask, ModelUnavailable("HTTP 503"),
+    )
+    r = run_review(part_a, shop, model)
+    assert r.fallbacks == ["communicate"]
+    assert f"{chamfer}: Is {chamfer} worth 2 setups?" in r.comment
+
+
+def test_the_gate_ignores_part_edits_that_would_change_a_protected_neighbour(shop, tmp_path):
+    # two_pockets: the bottom pocket's floor and walls force the -Z setup. Removing the floor's
+    # feature also removes the walls, so if the walls are protected, removal isn't a real option
+    # and the answer about the floor can't change the plan.
+    from anville.geometry.edits import feature_faces
+    from tests.geometry.parts import PARTS, write_step
+
+    facts = extract(write_step(PARTS["two_pockets"](), tmp_path / "p.step"))
+    issues = find_issues(facts, min_setups(facts, shop))
+    groups = facts.labelled_groups()
+    floor, walls = next((i.face_group, j.face_group) for i in issues for j in issues if i is not j
+                        and set(groups[j.face_group]) <= feature_faces(facts, i.face_group))
+    issue = next(i for i in issues if i.face_group == floor)
+    assert ask_allowed(facts, shop, issue, Intent("unknown")) is True
+    protected = {walls: Intent("protected", "sealing walls")}
+    assert ask_allowed(facts, shop, issue, Intent("unknown"), intents=protected) is False

@@ -159,11 +159,20 @@ def best_option(options: list[Option], *, part_edits: bool) -> Option | None:
     return None
 
 
-def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Intent, *, axes: int = 3) -> bool:
-    """The value-of-information gate (ADR 0009 §5): ask only if the answer changes the best option."""
+def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Intent, *,
+                intents: dict[str, Intent] | None = None, axes: int = 3) -> bool:
+    """The value-of-information gate (ADR 0009 §5): ask only if the answer changes the best option.
+
+    A part edit that would also change a protected neighbour isn't a real option whatever the
+    designer answers, so it's dropped before comparing (the same check as filter_requests).
+    """
     if intent.status != "unknown":
         return False
-    options = evaluate_edits(facts, shop, all_requests(issue.face_group), axes=axes).options
+    intents = intents or {}
+    options = [o for o in evaluate_edits(facts, shop, all_requests(issue.face_group), axes=axes).options
+               if o.side != "part" or not any(
+                   g != issue.face_group and intents.get(g) and intents[g].status == "protected"
+                   for g in touched_groups(facts, {"kind": o.kind, "face_group": o.face_group}))]
     free, kept = best_option(options, part_edits=True), best_option(options, part_edits=False)
     return (free.key if free else None) != (kept.key if kept else None)
 
@@ -233,8 +242,14 @@ DECIDE_TOOL = _tool(
         {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "ask", "quiet"]},
          "option_key": {"type": "string"}, "question": {"type": "string", "maxLength": 400},
          "reason": {"type": "string", "maxLength": 300}})}}))
-COMMENT_TOOL = _tool("write_comment", "Write the review comment for the designer, using {{slots}} for every number.",
-                     _obj(["text"], {"text": {"type": "string", "maxLength": MAX_COMMENT_CHARS}}))
+COMMENT_TOOL = _tool(
+    "write_comment",
+    "Write the opening line and, for each decision, one sentence on why. Code writes the actions themselves "
+    "(what is proposed or asked). Use {{slots}} for every number; never ask a question here.",
+    _obj(["intro", "reasons"], {
+        "intro": {"type": "string", "maxLength": 300},
+        "reasons": {"type": "array", "items": _obj(["issue_id", "why"], {
+            "issue_id": {"type": "string"}, "why": {"type": "string", "maxLength": 300}})}}))
 
 
 class _Runner:
@@ -318,7 +333,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     # Intent (code)
     chosen = [by_id[i] for i in selected]
     intents = tag_intents(chosen, stated, constraints)
-    gates = {i.id: ask_allowed(facts, shop, i, intents[i.face_group], axes=axes) for i in chosen}
+    gates = {i.id: ask_allowed(facts, shop, i, intents[i.face_group], intents=intents, axes=axes) for i in chosen}
     intent_view = {g: {"status": t.status, "reason": t.reason} for g, t in intents.items()}
     emit("verify", "Intent tagged and ask gate computed", stage="intent", intents=intent_view, ask_allowed=gates)
 
@@ -376,15 +391,18 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
             if d["action"] == "ask":
                 if not gates[issue.id] or not question:
                     return None, f"asking about {issue.id} is not allowed: the answer would not change the plan"
-                question, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
+                _, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
                 if err:
                     return None, f"question for {issue.id}: {err}"
+                # Kept as a template, so the fallback comment re-checks slots, not filled numbers (Greptile, PR #14).
             out.append(Decision(d["issue_id"], d["action"], d.get("option_key"), question, d["reason"]))
         return out, ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
                 "changes_plan": o.changes_plan} for k, o in options.items()]
-    decisions = run.ask("decide", "Decide what to do about each selected issue.",
+    decisions = run.ask("decide", "Decide what to do about each selected issue. Fact: an option with side "
+                        "'shop' changes the shop (tools, machines, fixtures), never the part's geometry, so it "
+                        "is always compatible with a protected face.",
                         {**ctx, "offered_options": offered, "rejected_requests": rejected, "ask_allowed": gates},
                         DECIDE_TOOL, v_decide)
     if decisions is None:
@@ -393,22 +411,24 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         emit("decision", "Decision made", stage="decide", issue_id=d.issue_id, action=d.action,
              option_key=d.option_key)
 
-    # Communicate (model)
-    asking = any(d.action == "ask" for d in decisions)
-
+    # Communicate (model writes the framing; code renders the actions from the accepted decisions)
     def v_comment(a):
-        text, err = fill_slots(a["text"], values, keys)
-        if not err and "?" in text and not asking:
-            # The comment may only ask what Decide was allowed to ask (Greptile, PR #14).
-            return None, "the comment asks a question, but no decision asks one; state the decisions instead"
-        return text, err
-    comment = run.ask("communicate", "Write the comment the designer will read: two to four plain sentences. "
-                      "Use only these slots for numbers.",
+        whys = {r["issue_id"]: r["why"] for r in a["reasons"]}
+        if sorted(whys) != sorted(d.issue_id for d in decisions):
+            return None, "give exactly one reason per decision"
+        for label, text in [("intro", a["intro"]), *whys.items()]:
+            _, err = fill_slots(text, values, keys)
+            if err:
+                return None, f"{label}: {err}"
+            if "?" in text:  # questions reach the designer only through an accepted ask (Greptile, PR #14)
+                return None, f"{label}: don't ask questions here; code writes the accepted questions"
+        return (a["intro"], whys), ""
+    written = run.ask("communicate", "Write the opening line and one reason per decision.",
                       {**ctx, "decisions": [d.__dict__ for d in decisions], "slots": sorted(values)},
                       COMMENT_TOOL, v_comment)
-    if comment is None:
-        comment, _ = fill_slots(_fallback_comment(decisions, by_id), values, keys)
-    if not comment:  # the template is built from validated parts; this is a last resort, never an empty post
+    intro, whys = written if written else (NOTHING_TO_RAISE, {})
+    comment, _ = fill_slots(render_comment(intro, decisions, by_id, whys), values, keys)
+    if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     return ReviewResult(plan, issues, intents, selected, options, rejected, gates, decisions,
                         comment or "", run.calls, run.fallbacks)
@@ -428,15 +448,20 @@ def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option]) -> De
     return Decision(issue.id, "quiet", reason="no option changes the plan")
 
 
-def _fallback_comment(decisions: list[Decision], by_id: dict[str, Issue]) -> str:
-    lines = ["Anville reviewed this version: it machines in {{plan.setups}} setup(s)."]
+def render_comment(intro: str, decisions: list[Decision], by_id: dict[str, Issue], whys: dict[str, str]) -> str:
+    """The comment as a template: code writes each action from its accepted decision, the model's
+    reason (if any) follows it. Asks appear only as accepted questions; nothing else can ask."""
+    lines = [intro]
     for d in decisions:
         g = by_id[d.issue_id].face_group
         if d.action == "ask":
-            lines.append(f"{g}: {d.question}")
+            action = f"{g}: {d.question}"
         elif d.action == "propose":
-            lines.append(f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
-                         f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
+            action = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
+                      f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
+        else:
+            action = f"{g}: no change proposed."
+        lines.append(f"{action} {whys[d.issue_id]}" if whys.get(d.issue_id) else action)
     return "\n".join(lines)
 
 
