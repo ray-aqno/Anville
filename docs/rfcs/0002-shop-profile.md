@@ -61,7 +61,9 @@ If any check fails, the face stays in its −Z setup, and the plan says which ch
 ### 3. Workholding: one named fixture, explicit and checkable (Codex finding 2)
 
 - **The fixture:** a 6″ vise with **aluminum soft jaws gripping the faces perpendicular to the chamfered edge** (Part A: the X ends; Part B: the ±Y faces). The part sits on parallels set back at least head radius + 1 mm from the chamfered side.
-- **Jaw relief:** each jaw gets a pocket at the bottom corner on the chamfer side. Its size is **derived from the swept head solid** (check f) plus 1 mm, not chosen by hand, so the head can overtravel past both ends of the edge.
+- **Jaw relief:** each jaw gets a pocket at the bottom corner on the chamfer side. Its size is **derived from the swept head *and neck* solids** (check f) plus 1 mm, not chosen by hand.
+  - **Why the neck too** (found while building check f, PR #15): to finish to the end of the edge, the cutter's center reaches the edge end, so about 4 mm of the 8.05 mm neck sits inside the jaw corner at every height. A head-only relief left 1,277 mm³ of the neck's sweep inside each jaw on Part A.
+  - **Part A:** a 13.7 × 14.7 mm relief at the chamfer-side corner, full jaw height. Each jaw keeps 96% of its grip.
 - **The setup sheet states all of it:** the jaws, the reliefs, and the parallel positions. If the shop holds the part differently, the 1-setup plan doesn't apply, and the sheet says so.
 - **Cost:** soft jaws are a one-time cost (blank plus about 30 min of machining). They're **reusable for Part B** when the stock sizes match, and are re-cut otherwise.
 - **Confidence:** stated by Rayyan. A DLL machinist should confirm it before the demo recording.
