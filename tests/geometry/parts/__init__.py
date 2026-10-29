@@ -178,9 +178,28 @@ def demo_bracket_b_unchamfered():
     return _demo_bracket_b_body()
 
 
+def demo_bracket_2mm():
+    """Part A as it was before PR #12: a 2 mm chamfer leaves 910480's neck 0.32 mm from the wall (RFC 0002 check c)."""
+    return _chamfer(_demo_bracket_body(), 2.0, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
+
+
+def split_edge_chamfer():
+    """A bottom edge split by a 2 mm cross slot. OCC chamfers both segments as one notched face that
+    borders two bottom faces: the recognizer must take the chamfer's full length, not one shared edge."""
+    part = _cut(_box(0, 0, 0, 100, 60, 20), _box(50, -1, -1, 2, 62, 2))  # slot x 50..52, 1 deep
+    return _chamfer(part, 1.5, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6 and x < 50)
+
+
+def stopped_chamfer():
+    """A bottom-edge chamfer that stops at x = 60 against a sharp corner: overtravel past 60 gouges it."""
+    part = _chamfer(_box(0, 0, 0, 100, 60, 20), 1.5, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
+    return _fuse(part, _box(60, 0, 0, 40, 2, 2))
+
+
 PARTS = {f.__name__: f for f in (plain_block, two_pockets, side_hole, deep_slot, tight_corner, clevis, undercut,
                                  wedge, kinked_pocket, demo_bracket, demo_bracket_unchamfered,
-                                 demo_bracket_b, demo_bracket_b_unchamfered)}
+                                 demo_bracket_b, demo_bracket_b_unchamfered, demo_bracket_2mm, split_edge_chamfer,
+                                 stopped_chamfer)}
 
 
 def write_step(shape, path: Path) -> Path:

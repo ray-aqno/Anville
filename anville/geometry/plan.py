@@ -103,12 +103,18 @@ def _fit(part: _Part, face: FaceFacts, d: str, tools: list[Tool]) -> tuple[Tool 
     return None, f"{d}: needs {width} reaching {a.depth:.3g} mm"
 
 
-def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3) -> SetupPlan:
-    """Fewest setups that finish every reachable face; unreachable faces come back with a reason."""
+def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3, back_chamfer=()) -> SetupPlan:
+    """Fewest setups that finish every reachable face; unreachable faces come back with a reason.
+
+    `back_chamfer` takes the results of `assess_back_chamfer` (RFC 0002): a chamfer whose checks a-f
+    all pass, for a cutter this shop owns, can also be finished from +Z with that cutter.
+    """
     if axes not in (3, 5):
         raise ValueError(f"axes must be 3 or 5, got {axes}")
     part = _Part(facts)
     tools = sorted(shop.tools, key=lambda t: -t.diameter)
+    owned = {t.name: t for t in shop.back_chamfer_tools}
+    from_top = {a.face_id: owned[a.tool] for a in back_chamfer if a.ok and a.tool in owned}
     fits: dict[str, dict[int, Tool]] = {d: {} for d in DIRECTIONS}
     unreachable = []
     for face in facts.faces:
@@ -121,6 +127,9 @@ def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3) -> SetupPl
                 fits[d][face.id] = tool
             elif why:
                 misses.append(why)
+        if face.id in from_top:
+            cutter = from_top[face.id]
+            fits["+Z"][face.id] = Tool(cutter.name, cutter.head_diameter, cutter.neck_length / cutter.head_diameter)
         if not any(face.id in fits[d] for d in DIRECTIONS):
             if misses:
                 unreachable.append(Unreachable(face.id, "no_tool", "; ".join(misses)))

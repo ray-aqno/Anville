@@ -10,8 +10,8 @@ def shop():
 
 
 @pytest.fixture(scope="session")
-def facts(tmp_path_factory):
-    """Extract each synthetic part once per session: name -> PartFacts."""
+def step(tmp_path_factory):
+    """Write each synthetic part as STEP once per session: name -> path."""
     from tests.geometry.parts import PARTS, write_step  # OCP: keep it out of test_plan.py's collection
 
     out = tmp_path_factory.mktemp("parts")
@@ -19,7 +19,20 @@ def facts(tmp_path_factory):
 
     def get(name):
         if name not in cache:
-            cache[name] = extract(write_step(PARTS[name](), out / f"{name}.step"))
+            cache[name] = write_step(PARTS[name](), out / f"{name}.step")
+        return cache[name]
+
+    return get
+
+
+@pytest.fixture(scope="session")
+def facts(step):
+    """Extract each synthetic part once per session: name -> PartFacts."""
+    cache = {}
+
+    def get(name):
+        if name not in cache:
+            cache[name] = extract(step(name))
         return cache[name]
 
     return get

@@ -1,0 +1,141 @@
+"""RFC 0002: the exterior-edge-chamfer recognizer (§1) and the back-chamfer access rule, checks a-f (§2-3)."""
+
+from dataclasses import replace
+
+import pytest
+
+from anville.geometry import HARVEY_910480, ShopProfile, SoftJaws, Tool, assess_back_chamfer, min_setups
+
+MILLS = [Tool("EM12", 12.0, 4.0), Tool("EM6", 6.0, 4.0), Tool("EM3", 3.0, 4.0)]
+DEMO_SHOP = ShopProfile(tools=MILLS, back_chamfer_tools=[HARVEY_910480], fixture=SoftJaws())
+
+
+def _assess(step, facts, name, shop=DEMO_SHOP):
+    (access,) = assess_back_chamfer(step(name), facts(name), shop)
+    return access
+
+
+def _check(access, name):
+    return next(c for c in access.checks if c.name == name)
+
+
+# ---- §1 recognizer ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name,axis,outward", [("demo_bracket", "X", "-Y"), ("demo_bracket_b", "Y", "-X")])
+def test_recognizes_the_bottom_edge_chamfer(name, axis, outward, facts):
+    f = facts(name)
+    (ch,) = f.edge_chamfers
+    face = next(x for x in f.faces if x.id == ch.face_id)
+    assert (ch.axis, ch.outward) == (axis, outward)
+    assert ch.leg == pytest.approx(1.5) and ch.angle == pytest.approx(45.0)
+    assert {ch.side_face, ch.bottom_face} <= set(face.stock_neighbors)
+
+
+def test_top_edge_break_is_not_an_exterior_bottom_chamfer(facts):
+    """Part A's 1 mm top edge break faces up: it bridges the top, not the bottom."""
+    f = facts("demo_bracket")
+    top_break = next(x for x in f.faces if x.normal and x.normal[2] > 0.6)
+    assert top_break.id not in {c.face_id for c in f.edge_chamfers}
+
+
+@pytest.mark.parametrize("name", ["plain_block", "two_pockets", "wedge", "demo_bracket_unchamfered"])
+def test_no_chamfer_no_recognition(name, facts):
+    """Drafted or sloped faces don't bridge a stock side and the stock bottom at 45°."""
+    assert facts(name).edge_chamfers == []
+
+
+def test_leg_is_measured_across_the_edge_not_along_it(facts):
+    """Part B's chamfer is 40 mm long and 2.12 mm wide: the leg is width / √2, never length or diagonal."""
+    (ch,) = facts("demo_bracket_b").edge_chamfers
+    assert ch.leg == pytest.approx(1.5, abs=1e-3)
+
+
+# ---- the demo path ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["demo_bracket", "demo_bracket_b"])
+def test_demo_parts_pass_every_check_with_910480_and_relieved_jaws(name, step, facts):
+    access = _assess(step, facts, name)
+    assert [c.name for c in access.checks] == list("abcdef")
+    assert access.ok, [c for c in access.checks if not c.passed]
+    assert _check(access, "c").margin == pytest.approx(0.825, abs=1e-3)
+
+
+@pytest.mark.parametrize("name", ["demo_bracket", "demo_bracket_b"])
+def test_part_with_910480_and_relieved_jaws_needs_one_setup(name, step, facts):
+    f = facts(name)
+    access = assess_back_chamfer(step(name), f, DEMO_SHOP)
+    plan = min_setups(f, DEMO_SHOP, back_chamfer=access)
+    assert [s.directions for s in plan.setups] == [["+Z"]]
+    tools = {a.face_id: a.tool for a in plan.setups[0].faces}
+    assert tools[f.edge_chamfers[0].face_id] == HARVEY_910480.name
+
+
+def test_without_the_cutter_the_flip_stays(facts):
+    shop = ShopProfile(tools=MILLS, fixture=SoftJaws())
+    assert min_setups(facts("demo_bracket"), shop, back_chamfer=[]).count == 2
+
+
+def test_swept_neck_clearance_agrees_with_check_c(step, facts):
+    """Check e measures the swept neck's real distance to the part; check c computes it from the catalog."""
+    access = _assess(step, facts, "demo_bracket")
+    assert _check(access, "e").margin == pytest.approx(_check(access, "c").margin, abs=0.02)
+
+
+def test_jaw_reliefs_are_reported_for_the_setup_sheet(step, facts):
+    access = _assess(step, facts, "demo_bracket")
+    assert len(access.reliefs) == 2  # one per jaw, both ends of the edge
+    for r in access.reliefs:
+        assert r.size[0] > 0 and r.size[1] > 0 and r.size[2] > 0
+        assert r.contact_kept > 0.9  # the relief sits outboard of the part, not under the grip
+
+
+# ---- negatives: each says which check failed and by how much ---------------------------------
+
+def test_two_mm_chamfer_fails_neck_clearance_by_0p18(step, facts):
+    access = _assess(step, facts, "demo_bracket_2mm")
+    c = _check(access, "c")
+    assert not c.passed and c.margin == pytest.approx(0.325, abs=1e-3)  # needs 0.5: short by 0.175
+    assert "0.175" in c.detail or "0.18" in c.detail
+    plan = min_setups(facts("demo_bracket_2mm"), DEMO_SHOP, back_chamfer=[access])
+    assert plan.count == 2
+
+
+@pytest.mark.parametrize("change,check", [
+    ({"angle": 60.0}, "a"),
+    ({"length_of_cut": 1.0}, "b"),
+    ({"neck_length": 20.0}, "d"),
+])
+def test_cutter_that_does_not_match_fails_its_check(change, check, step, facts):
+    shop = replace(DEMO_SHOP, back_chamfer_tools=[replace(HARVEY_910480, **change)])
+    access = _assess(step, facts, "demo_bracket", shop)
+    assert not access.ok and [c.name for c in access.checks if not c.passed] == [check]
+
+
+def test_chamfer_split_by_a_slot_is_recognized_at_full_length(facts):
+    """One notched chamfer face bordering two bottom faces: sweep its whole length, not one shared edge."""
+    (ch,) = facts("split_edge_chamfer").edge_chamfers
+    assert sorted((ch.start[0], ch.end[0])) == pytest.approx([0.0, 100.0])
+
+
+def test_overtravel_into_a_sharp_corner_fails_the_swept_part_check(step, facts):
+    access = _assess(step, facts, "stopped_chamfer")
+    e = _check(access, "e")
+    assert not e.passed and e.margin is None and "mm³" in e.detail
+
+
+def test_unrelieved_jaws_collide(step, facts):
+    shop = replace(DEMO_SHOP, fixture=SoftJaws(relieved=False))
+    f = _check(_assess(step, facts, "demo_bracket", shop), "f")
+    assert not f.passed and "jaw" in f.detail
+
+
+def test_parallels_under_the_chamfer_collide(step, facts):
+    shop = replace(DEMO_SHOP, fixture=SoftJaws(parallel_setback=0.0))
+    f = _check(_assess(step, facts, "demo_bracket", shop), "f")
+    assert not f.passed and "parallel" in f.detail
+
+
+def test_no_fixture_stated_fails_workholding(step, facts):
+    shop = replace(DEMO_SHOP, fixture=None)
+    f = _check(_assess(step, facts, "demo_bracket", shop), "f")
+    assert not f.passed and "fixture" in f.detail
