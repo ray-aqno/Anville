@@ -154,19 +154,29 @@ def _one_time(r: Route, point: dict, costs: ShopCosts) -> float:
                n.startswith("tool_price.") else 1.0) for n in r.buys)
 
 
-def _route_cost(r: Route, point: dict, q: int, costs: ShopCosts) -> float:
+def _terms(r: Route, point: dict, costs: ShopCosts) -> tuple[float, float, float]:
+    """A route's dollars at one point as (one-time, per batch, per part)."""
     get = _getter(point, costs)
     rate = get("mill_rate") if r.machine == "mill" else get("outsource_rate")
     fee = get("outsource_fee") if r.machine == "outsource" else 0.0
-    batches = math.ceil(q / costs.scenarios.batch_size)
     per_part = r.setups * get("load_time") + get("cycle_time") + r.chamfers * get("back_chamfer_pass")
-    return _one_time(r, point, costs) + batches * (r.setups * get("setup_time") * rate + fee) + q * per_part * rate
+    return _one_time(r, point, costs), r.setups * get("setup_time") * rate + fee, per_part * rate
+
+
+def _route_cost(r: Route, point: dict, q: int, costs: ShopCosts) -> float:
+    one, per_batch, per_part = _terms(r, point, costs)
+    return one + math.ceil(q / costs.scenarios.batch_size) * per_batch + q * per_part
 
 
 def _payback_at(r: Route, current: Route, point: dict, costs: ShopCosts) -> int | None:
-    """The fewest parts at which buying costs no more than the current plan, at one point; None past the cap."""
+    """The fewest parts at which buying costs no more than the current plan, at one point; None past the cap.
+
+    The cost terms are worked out once per point and only their difference is scanned (Greptile, PR #20).
+    """
+    (o1, b1, p1), (o0, b0, p0) = _terms(r, point, costs), _terms(current, point, costs)
+    n = costs.scenarios.batch_size
     for q in range(1, PAYBACK_CAP + 1):
-        if _route_cost(r, point, q, costs) <= _route_cost(current, point, q, costs) + 1e-9:
+        if (o1 - o0) + math.ceil(q / n) * (b1 - b0) + q * (p1 - p0) <= 1e-9:
             return q
     return None
 

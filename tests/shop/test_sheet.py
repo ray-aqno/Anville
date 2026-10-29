@@ -91,6 +91,20 @@ def test_unreachable_faces_are_on_the_sheet_so_the_shop_sees_what_the_plan_skips
     assert row["face_id"] == face and row["reason"] == "no_tool" and row["group"].startswith("G")
 
 
+def test_a_back_chamfer_plan_without_its_assessments_is_refused(step, facts):
+    """Greptile, PR #20: the sheet would say "cut the jaw reliefs" and list none."""
+    f, plan, _ = _one_setup(step, facts, "demo_bracket")
+    with pytest.raises(ValueError, match="910480"):
+        setup_sheet(f, OWNED, plan)
+
+
+def test_a_back_chamfer_plan_whose_assessment_failed_is_refused(step, facts):
+    f, plan, access = _one_setup(step, facts, "demo_bracket")
+    failed = [replace(a, checks=[*a.checks, replace(a.checks[0], name="f", passed=False)]) for a in access]
+    with pytest.raises(ValueError, match="910480"):
+        setup_sheet(f, OWNED, plan, back_chamfer=failed)
+
+
 def test_a_plan_with_a_tool_the_shop_does_not_have_is_an_error(facts):
     f = facts("demo_bracket")
     plan = SetupPlan(3, [Setup(["+Z"], [Assignment(f.faces[0].id, "EM99")])], [])

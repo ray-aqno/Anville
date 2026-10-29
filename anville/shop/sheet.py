@@ -95,10 +95,15 @@ def _workholding(shop: ShopProfile, chamfered: list, cutters: dict, facts: PartF
                 "grip_faces": None, "reliefs": [], "parallels": None}
     axis = {c.face_id: c.axis for c in facts.edge_chamfers}
     on_cutter = {(a.face_id, a.tool) for a in chamfered}
+    passed = {(acc.face_id, acc.tool) for acc in back_chamfer if acc.ok}
+    for fid, tool in sorted(on_cutter - passed):
+        # Without its passing checks there are no reliefs to cut: refuse rather than send an incomplete sheet.
+        raise ValueError(f"face {fid} is cut with back-chamfer cutter {tool!r} but has no passing assessment: "
+                         "pass the assess_back_chamfer results the plan was made with")
     reliefs, seen, grip = [], set(), None
     for acc in back_chamfer:
-        if (acc.face_id, acc.tool) not in on_cutter:
-            continue  # min_setups puts a face on a cutter only when its checks passed
+        if (acc.face_id, acc.tool) not in on_cutter or not acc.ok:
+            continue
         ax = axis[acc.face_id]
         grip = [f"-{ax}", f"+{ax}"]  # the jaws grip across the chamfered edge (RFC 0002 §3)
         for r in acc.reliefs:

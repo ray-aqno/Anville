@@ -242,3 +242,15 @@ def test_corners_cover_every_ranged_input():
         assert {c[name] for c in corners} == {i.lo, i.hi}
     assert len({tuple(sorted(c.items())) for c in corners}) == len(corners)
     assert all(i.lo < i.hi for i in ranged.values())  # pinned inputs add no corners
+
+
+def test_payback_never_reached_still_runs_fast():
+    """Greptile, PR #20: a purchase that never pays back scanned every quantity at every corner (9 s measured).
+    Corners that differ only in inputs the purchase can't change give the same scan; it runs once."""
+    import time
+
+    never = replace(DLL_COSTS, back_chamfer_pass=Input(1.0, 2.0, "hr", "placeholder", "worst case"))
+    start = time.perf_counter()
+    buy = route(cost_options(FACTS, Shop(tools=[], name="dll", costs=never), [BUY], plan=PLAN), BUY.key)
+    assert buy.payback == (1000, None)
+    assert time.perf_counter() - start < 2.0
