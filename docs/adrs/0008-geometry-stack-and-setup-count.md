@@ -187,7 +187,7 @@ Cost is linear in rays, at about 18 µs per ray. A part with 150 faces at 2 mm s
   - when real outcomes show the finishing-tool rule driving bad cost estimates.
 - **Follow-up (Rayyan, 2026-10-27): flag precision.** Limits apply group-wide (§5), so one sharp corner marks a whole wall ring unreachable: 9 faces in `kinked_pocket`, where only 2 meet at the kink. Setup counts are unaffected, but anchored comments and fix intents would point at more geometry than is at fault. This is to be handled as a broader pass on how flags are localized to faces, not as a patch to the sharp-corner rule alone.
 
-## Amendment 1 (Proposed, 2026-10-29): reach depends on the holder, and the facts say how
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-29): reach depends on the holder, and the facts say how
 
 **Context.** The first real Onshape export (`tests/geometry/data/onshape_z_bracket.step`) is a Z bracket of 1/2" plate, 7" × 3" × 2.41". `extract` reads it cleanly in 1.25 s, in metres converted to mm. The plan is 4 setups on 3-axis and 1 on 5-axis (verified, `tests/geometry/test_onshape_export.py`). Its two 3/8" web holes come back `no_tool`: "needs Ø≤9.53 reaching 38.1 mm". §4 measures stick-out from the stock top, which here is the top of the −X flange. But the web is 12.7 mm thick, and the nearer hole sits 31.9 mm from the flange wall. A holder beside the flange needs 12.7 mm of stick-out, which EM6 reaches with 11 mm to spare. Any shop drills these holes, so Anville would tell the designer something false.
 
@@ -210,7 +210,11 @@ That last one is a design choice: move the hole away from the flange. The holder
    - The distance is to the bounding box, not the face itself, so the clearance can only be understated, never overstated.
    - Prototype on the bracket: 0.4 s for the six height maps, 1.05 s in total for all 17 faces × 6 directions, process start included (verified).
 3. **The shop states its holders.** `Tool` gains `holder_diameter: float | None`. `None` takes `ShopProfile.holder_diameter`, a stated assumption that goes on the setup sheet the way the soft-jaw sizes do (RFC 0002 §3).
-   - Proposed default: 50 mm, roughly an ER32 collet nut (prior, not measured). Rayyan's shop confirms or replaces it.
+   - **Default: Ø50 mm, a standard ER32 collet nut, for every tool.** This is a realistic estimate, not a measurement. Rayyan's shop varies its holders by job, so no single size can be confirmed.
+     - ER32 is the general-purpose collet that holds every tool in the demo shop (EM3 to EM12).
+     - Its standard nut is Ø50 (verified 2026-10-29: Paulimot's ER32 union nut and Dorian's ER32NTS50 both list 50 mm, M40 × 1.5).
+     - It is the widest of the common small-shop nuts, so the estimate leans pessimistic. A slimmer holder shows up as the shop-side option (point 5), not as a silent assumption.
+     - Smaller nuts vary by maker: ER16 is listed at 28 or 32 mm, ER20 at 33 or 35 mm. Name one only with the shop's datasheet.
 4. **Fit uses the curve.** A tool of radius `r` in a holder of radius `R` sweeps the holder's edge `R − r` beyond the face. The fit rule becomes:
    ```
    sweep(tool)          = R − r + 1 mm
@@ -259,6 +263,6 @@ That last one is a design choice: move the hole away from the flange. The holder
   - The `evaluate_edits` schema enum doesn't change, since this is a new `add_tool` variant, but its params gain `holder_diameter`.
 - **Shop session:** `anville/shop/` (setup sheet) should print the assumed holder diameter next to the jaw sizes.
 - **Revisit:**
-  - when Rayyan's shop gives real holder sizes;
+  - when a shop states its real holder per tool, which replaces the Ø50 estimate;
   - if a real part shows a curve optimistic by more than the 1 mm margin;
   - if compound-angle reach (§7) arrives, since the height map is per principal direction.
