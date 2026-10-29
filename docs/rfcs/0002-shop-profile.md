@@ -3,6 +3,7 @@
 - **Status:** Draft (revised after two Codex review passes, 2026-10-28)
 - **Date:** 2026-10-28
 - **Answers (in part):** the brief's open question "Shop profile format: machines, tool library, stock, fixturing, setup-cost rule"
+- **Depends on:** PR #12 (Part A's chamfer 2 mm → 1.5 mm). **Merge #12 first.** At 2 mm, Part A fails check c in §2, and this RFC's one-setup route doesn't apply to it.
 - **Touches:**
   - ADR 0002 (the objective is $ at quantity; `ShopEdit`s);
   - ADR 0002 Amendment 1 (`remove_feature` is rejected on stated-intent faces);
@@ -41,12 +42,16 @@ Its **leg** is measured **perpendicular to the edge**: the face's width in the c
 
 A back-chamfer tool `T` finishes an exterior edge chamfer `F` from +Z only when every check passes:
 
-| # | Check | Part A/B (1.5 mm leg, 20 mm tall) with 910480 |
-|---|---|---|
-| a | The cutter angle matches the chamfer angle (45°) | 45° = 45° ✓ |
-| b | Leg ≤ length of cut | 1.5 ≤ 2.24 ✓ |
-| c | **Neck clearance:** (head − neck)/2 − leg ≥ 0.5 mm | (12.70 − 8.05)/2 − 1.5 = **0.82 mm** ✓ (a 2 mm leg would leave 0.32 mm: ✗) |
-| d | Neck length ≥ stock height + 5 mm | 63.5 ≥ 25 ✓ |
+Each part is evaluated separately with 910480 (head 12.70 mm, neck 8.05 mm, so 2.32 mm of head past the neck):
+
+| # | Check | Part A at 2 mm (today's `main`) | Part A at 1.5 mm (after #12) | Part B at 1.5 mm |
+|---|---|---|---|---|
+| a | The cutter angle matches the chamfer angle (45°) | ✓ | ✓ | ✓ |
+| b | Leg ≤ length of cut (2.24 mm) | 2.0 ✓ | 1.5 ✓ | 1.5 ✓ |
+| c | **Neck clearance:** (head − neck)/2 − leg ≥ 0.5 mm | **0.32 ✗**: the chamfer stays in −Z, 2 setups | **0.82 ✓** | **0.82 ✓** |
+| d | Neck length ≥ stock height + 5 mm | 63.5 ≥ 25 ✓ | ✓ | ✓ |
+
+So the back-chamfer route in §4 is priced for Part A **only at 1.5 mm.** With a 2 mm chamfer, the planner keeps 2 setups and says check c failed by 0.18 mm. The fix for that is a cutter with a thinner neck relative to its head, or the smaller chamfer.
 | e | **Swept solid, not rays (Codex pass 2):** for a straight edge, sweeping the head and the neck along the cutting pass, overtravel included, each traces a prism with rounded ends. Build both as OCC solids. The intersection of each with the part, apart from the chamfer material being removed, must be empty. | OCC boolean in `extract` |
 | f | **Workholding:** the same swept solids must not intersect simple box models of the jaws (with their reliefs) or of the parallels (§3) | OCC boolean |
 
