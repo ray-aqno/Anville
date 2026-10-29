@@ -64,6 +64,10 @@ store_vol = modal.Volume.from_name("anville-store", create_if_missing=True)
 
 # How long handle_event waits for the translation.complete webhook before polling.
 TX_WEBHOOK_WAIT_S = float(os.environ.get("ANVILLE_TX_WAIT_S", 120))
+# handle_event's Modal timeout. The agent stops calling models POST_RESERVE_S before it, so the
+# version guard and the comment post (agent or setup-count fallback) always have time to run.
+JOB_TIMEOUT_S = 600
+POST_RESERVE_S = 60
 TX_POLL_INTERVAL_S = 15
 TX_POLL_MAX = 4
 # A webhook for our own comment can arrive before createComment returns (F1 race).
@@ -236,8 +240,9 @@ def web():
     return api
 
 
-@app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=600)
+@app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=JOB_TIMEOUT_S)
 def handle_event(key: str) -> None:
+    deadline = time.monotonic() + JOB_TIMEOUT_S - POST_RESERVE_S
     from anville.store import StaleClaim
 
     store = StoreSvc()
@@ -251,7 +256,7 @@ def handle_event(key: str) -> None:
     try:
         name = ev.payload.get("event")
         if name == CREATE_VERSION:
-            _on_create_version(store, ev)
+            _on_create_version(store, ev, deadline)
         elif name == COMMENT_CREATE:
             time.sleep(SELF_COMMENT_RECHECK_S)
             cid = ev.payload["commentId"]
@@ -271,7 +276,7 @@ def handle_event(key: str) -> None:
             handle_event.spawn(nxt)
 
 
-def _on_create_version(store, ev) -> None:
+def _on_create_version(store, ev, deadline: float) -> None:
     event = ev.payload
     did, vid = event["documentId"], event["versionId"]
     received_at = ev.received_at
@@ -280,7 +285,7 @@ def _on_create_version(store, ev) -> None:
     trace = _Trace(store, did, f"{vid[:8]}-{ev.attempts}", vid)
     trace.add("run_started", "Reviewing a new version")
     try:
-        _review(store, ev, trace, timing)
+        _review(store, ev, trace, timing, deadline)
     except Exception as e:
         # Close the trace so the panel shows a failed run, not one stuck mid-step.
         trace.add("error", "Review failed", error=type(e).__name__, message=str(e)[:300])
@@ -289,7 +294,7 @@ def _on_create_version(store, ev) -> None:
         raise
 
 
-def _review(store, ev, trace: "_Trace", timing: dict) -> None:
+def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     event = ev.payload
     did, vid = event["documentId"], event["versionId"]
     received_at = ev.received_at
@@ -324,7 +329,7 @@ def _review(store, ev, trace: "_Trace", timing: dict) -> None:
     trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
               directions=[s["directions"] for s in plan["setups"]],
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
-    message = _agent_comment(result["facts"], trace, timing) or _review_message(vid, plan)
+    message = _agent_comment(result["facts"], trace, timing, deadline) or _review_message(vid, plan)
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
@@ -363,13 +368,13 @@ def _review(store, ev, trace: "_Trace", timing: dict) -> None:
     _log("timing", **timing)
 
 
-def _agent_comment(facts: dict, trace: "_Trace", timing: dict) -> str | None:
+def _agent_comment(facts: dict, trace: "_Trace", timing: dict, deadline: float) -> str | None:
     """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
     from anville.agent.job import agent_comment
     from anville.geometry import ShopProfile, Tool
 
     comment, stats = agent_comment(facts, ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS]),
-                                   os.environ, trace.add)
+                                   os.environ, trace.add, deadline=deadline)
     trace.flush()
     usage = stats.pop("agent_usage", [])
     timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))

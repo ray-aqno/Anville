@@ -6,10 +6,12 @@ A review is three model calls: plan, decide-and-write, verify (the verifier is a
 """
 
 import json
+import time
+import urllib.error
 
 import pytest
 
-from anville.agent.model import ModelUnavailable, Reply, parse_reply
+from anville.agent.model import ModelUnavailable, OpenAICompatModel, Reply, parse_reply
 from anville.agent.review import (
     Intent, ask_allowed, fill_slots, filter_requests, find_issues, run_review, tag_intents,
 )
@@ -24,9 +26,10 @@ class Scripted:
     def __init__(self, *replies, name="scripted"):
         self.replies, self.sent, self.name = list(replies), [], name
 
-    def call(self, messages, tools, *, max_tokens=None, reasoning_effort=None):
+    def call(self, messages, tools, *, max_tokens=None, reasoning_effort=None, timeout_s=None):
         self.sent.append((messages, tools, max_tokens))
         self.efforts = getattr(self, "efforts", []) + [reasoning_effort]
+        self.timeouts = getattr(self, "timeouts", []) + [timeout_s]
         r = self.replies.pop(0)
         if isinstance(r, Exception):
             raise r
@@ -400,3 +403,38 @@ def test_the_verifier_sees_how_many_faces_an_option_leaves_unreachable(part_a, s
     model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=[s]))
     run_review(part_a, shop, model, verifier=verifier, stated={chamfer: "Weld clearance chamfer"})
     assert verifier_input(verifier)[0]["cites"][f"option:{ROUTE}"]["unreachable_after"] == 0
+
+
+# --- time budget (Greptile, PR #19: slow models must not cost the job its comment) ---------------
+
+
+def test_a_spent_time_budget_falls_back_to_code_without_calling_a_model(part_a, shop, chamfer):
+    model, verifier, events = Scripted(), Scripted(name="verifier"), []
+    r = run_review(part_a, shop, model, verifier=verifier, deadline=time.monotonic(),
+                   emit=lambda kind, title, **d: events.append((kind, title, d)))
+    assert model.sent == [] and verifier.sent == [] and r.model_calls == 0
+    assert r.fallbacks[:2] == ["plan", "decide"] and r.comment  # the code-rendered review still posts
+    assert {d.get("reason") for _, t, d in events if t == "Stage fell back to the fixed script"} == {
+        "time budget spent"}
+
+
+def test_each_call_gets_only_the_time_left(part_a, shop, chamfer):
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=sentences(chamfer)))
+    verifier = Scripted(verdicts(True, True), name="verifier")
+    run_review(part_a, shop, model, verifier=verifier, deadline=time.monotonic() + 100)
+    assert all(90 < t <= 100 for t in model.timeouts + verifier.timeouts)
+
+
+def test_the_http_timeout_is_capped_by_the_call_budget(monkeypatch):
+    seen = []
+
+    def urlopen(req, timeout):
+        seen.append(timeout)
+        raise urllib.error.URLError("stop here")
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    m = OpenAICompatModel("https://example.invalid/v1", "k", "m", timeout_s=120)
+    for budget in (30, 500, None):
+        with pytest.raises(ModelUnavailable):
+            m.call([], [], timeout_s=budget)
+    assert seen == [30, 120, 120]

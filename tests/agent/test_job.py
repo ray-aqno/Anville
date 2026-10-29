@@ -1,6 +1,8 @@
 """The agent inside the deployed review job (S3b): never costs the designer a review, and leaves a
 per-call record (stage, model, host, tokens) for the trace."""
 
+import time
+
 from anville.agent.job import agent_comment
 from anville.agent.model import OpenAICompatModel
 from tests.agent.test_review import (
@@ -51,3 +53,10 @@ def test_the_agents_comment_comes_back_with_a_record_of_every_call(part_a, shop,
 def test_a_model_knows_its_host():
     m = OpenAICompatModel("https://inference.baseten.co/v1/", "k", "meta-models/muse-spark-open-1026")
     assert m.host == "inference.baseten.co"
+
+
+def test_the_jobs_deadline_reaches_every_model_call(part_a, shop):
+    model = Scripted()
+    comment, stats = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
+                                   deadline=time.monotonic())
+    assert model.sent == [] and stats["agent_calls"] == 0 and comment  # code-rendered, still posted

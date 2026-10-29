@@ -35,7 +35,7 @@ class ChatModel(Protocol):
     name: str
 
     def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None,
-             reasoning_effort: str | None = None) -> Reply: ...
+             reasoning_effort: str | None = None, timeout_s: float | None = None) -> Reply: ...
 
 
 class ModelUnavailable(Exception):
@@ -94,7 +94,7 @@ class OpenAICompatModel:
         raise ValueError(f"unknown model {which!r}")
 
     def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None,
-             reasoning_effort: str | None = None) -> Reply:
+             reasoning_effort: str | None = None, timeout_s: float | None = None) -> Reply:
         body = {"model": self.name, "messages": messages, "tools": tools, "tool_choice": "auto",
                 "max_tokens": max(max_tokens or self._max_tokens, MIN_MAX_TOKENS)}
         effort = reasoning_effort or self._effort
@@ -106,7 +106,7 @@ class OpenAICompatModel:
             self._url, data=json.dumps(body).encode(), method="POST",
             headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with urllib.request.urlopen(req, timeout=min(self._timeout, timeout_s or self._timeout)) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             raise ModelUnavailable(f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}") from None
