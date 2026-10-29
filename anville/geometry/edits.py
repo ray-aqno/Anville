@@ -108,7 +108,7 @@ def evaluate_edits(facts: PartFacts, shop: ShopProfile, requests: list[dict], *,
                 duplicates += 1  # another group of the same feature already produced this option
                 continue
             seen.add(same)
-            found.append(_score(key, kind, label, side, params, facts, base, *world, back_chamfer))
+            found.append(_score(key, kind, label, side, params, facts, base, *world))
         # A catalog cutter that fails is reported even when other add_tool values were found.
         rejected = _catalog_rejections(scope, shop, back_chamfer) if kind == "add_tool" else []
         if found:
@@ -137,10 +137,10 @@ def _validate(facts: PartFacts, req: dict) -> None:
 
 
 def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
-    """Yield (key, side, params, (facts', shop', axes')) for each value worth trying."""
+    """Yield (key, side, params, (facts', shop', axes', back_chamfer')) for each value worth trying."""
     if kind == "route_machine":
         if axes != 5:
-            yield "route_machine/5", "shop", {"axes": 5}, (facts, shop, 5)
+            yield "route_machine/5", "shop", {"axes": 5}, (facts, shop, 5, back_chamfer)
         return
     feature = feature_faces(facts, label)
     part = _Part(facts)
@@ -155,7 +155,7 @@ def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
         for r in sorted({t.diameter / 2 for t in tools}):
             if r > current:
                 yield (f"set_min_radius/{label}/r{r:g}", "part", {"radius": r},
-                       (_with_radius(facts, feature, r), shop, axes))
+                       (_with_radius(facts, feature, r), shop, axes, back_chamfer))
 
     elif kind == "set_depth":
         for d in DIRECTIONS:
@@ -168,10 +168,10 @@ def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
             for depth in reaches:
                 params = {"direction": d, "depth": depth}
                 yield (f"set_depth/{label}/{d}/{depth:g}", "part", params,
-                       (_with_depth(facts, feature, d, deepest - depth), shop, axes))
+                       (_with_depth(facts, feature, d, deepest - depth), shop, axes, back_chamfer))
 
     elif kind == "remove_feature":
-        yield f"remove_feature/{label}", "part", {}, (_without(facts, feature), shop, axes)
+        yield f"remove_feature/{label}", "part", {}, (_without(facts, feature), shop, axes, back_chamfer)
 
     elif kind == "add_tool":
         for d in DIRECTIONS:
@@ -189,16 +189,19 @@ def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
                         base_tool.diameter, max_ld)
             params = {"name": tool.name, "diameter": tool.diameter, "max_ld": tool.max_ld, "direction": d}
             yield f"add_tool/{label}/{d}/{tool.name}", "shop", params, \
-                (facts, replace(shop, tools=[*shop.tools, tool]), axes)
+                (facts, replace(shop, tools=[*shop.tools, tool]), axes, back_chamfer)
+        jaw_axis = {c.face_id: c.axis for c in facts.edge_chamfers}
         for access in _catalog_passes(feature, shop, back_chamfer):
             cutter = _CATALOG[access.tool]
+            # The reliefs were checked for this chamfer's jaw axis: score the plan with those jaws only.
+            same_jaws = [a for a in back_chamfer if jaw_axis.get(a.face_id) == jaw_axis.get(access.face_id)]
             params = {"type": "back_chamfer", "name": cutter.name, "angle": cutter.angle,
                       "head_diameter": cutter.head_diameter, "neck_diameter": cutter.neck_diameter,
                       "neck_length": cutter.neck_length, "length_of_cut": cutter.length_of_cut,
                       "direction": "+Z", "owned": False, "fixture": "relieved soft jaws",
                       "reliefs": [asdict(r) for r in access.reliefs]}
             yield (f"add_tool/{label}/+Z/BC{cutter.angle:g}-{cutter.name}", "shop", params,
-                   (facts, replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, cutter]), axes))
+                   (facts, replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, cutter]), axes, same_jaws))
 
 
 _CATALOG = {c.name: c for c in BACK_CHAMFER_CATALOG}
@@ -278,8 +281,8 @@ def _with_depth(facts: PartFacts, feature: set[int], d: str, shift: float) -> Pa
 
 
 def _score(key, kind, label, side, params, facts, base: SetupPlan, new_facts, new_shop, new_axes,
-           back_chamfer=()) -> Option:
-    after = min_setups(new_facts, new_shop, axes=new_axes, back_chamfer=back_chamfer)
+           new_back_chamfer) -> Option:
+    after = min_setups(new_facts, new_shop, axes=new_axes, back_chamfer=new_back_chamfer)
     t0, t1 = _tools(base), _tools(after)
     present = {f.id for f in new_facts.faces}
     changes = [ToolChange(fid, t0.get(fid), t1.get(fid)) for fid in sorted((t0.keys() | t1.keys()) & present)
