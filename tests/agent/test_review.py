@@ -59,8 +59,6 @@ def happy_path(chamfer, decision):
         call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
                                          {"kind": "route_machine"}]),
         call("decide", decisions=[decision]),
-        call("write_comment", intro=f"{chamfer} alone forces the {{{{issue.I1.directions}}}} setup.",
-             reasons=[{"issue_id": "I1", "why": "The shop changes; the part doesn't."}]),
     )
 
 
@@ -113,20 +111,25 @@ def test_slots_fill_numbers_and_reject_numbers_the_model_wrote():
 # --- the loop -------------------------------------------------------------------
 
 
-def test_stated_intent_review_proposes_the_shop_side_fix_in_four_calls(part_a, shop, chamfer):
+def test_stated_intent_review_proposes_the_shop_side_fix_in_three_calls(part_a, shop, chamfer):
     model = happy_path(chamfer, {"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
                                  "reason": "the chamfer clears a weld; keep it and change the shop"})
     events = []
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"},
                    emit=lambda kind, title, **d: events.append((kind, title, d)))
 
-    assert r.model_calls == 4 and r.fallbacks == []
+    assert r.model_calls == 3 and r.fallbacks == []
     assert [x["kind"] for x in r.rejected] == ["remove_feature"]  # filtered before scoring
     assert list(r.options) == ["route_machine/5"]
     assert r.ask_allowed == {"I1": False}
-    assert r.comment.splitlines()[1].startswith(f"{chamfer}: route_machine/5 takes it from 2 to 1 setup(s).")
-    assert r.comment.splitlines()[0] == f"{chamfer} alone forces the -Z setup."
-    assert {d["stage"] for _, _, d in events} >= {"facts", "triage", "intent", "options", "decide"}
+    assert r.comment.splitlines() == [
+        "Anville reviewed this version: it machines in 2 setup(s).",
+        f"{chamfer}: route_machine/5 takes it from 2 to 1 setup(s). It changes the shop, not the part. "
+        f"{chamfer} stays as designed: Weld clearance chamfer.",
+    ]
+    assert {d["stage"] for _, _, d in events} >= {"facts", "triage", "intent", "options", "decide", "render"}
+    # The model's reasoning goes to the trace (the panel), not the comment.
+    assert any(d.get("reason") == "the chamfer clears a weld; keep it and change the shop" for _, _, d in events)
     assert all(not any(c.isdigit() for c in title) for _, title, _ in events)  # ADR 0007: no numbers in titles
 
 
@@ -137,8 +140,7 @@ def test_proposing_an_option_that_was_not_offered_is_rejected_then_falls_back(pa
         call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
         call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
                                          {"kind": "route_machine"}]),
-        bad, bad,
-        call("write_comment", intro="One issue.", reasons=[{"issue_id": "I1", "why": "Keeps the chamfer."}]),
+        bad, bad
     )
     events = []
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"},
@@ -155,8 +157,7 @@ def test_asking_where_the_gate_forbids_it_is_rejected(part_a, shop, chamfer):
     model = Scripted(
         call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
         call("evaluate_edits", requests=[{"kind": "route_machine"}]),
-        ask, ask,
-        call("write_comment", intro="Done.", reasons=[{"issue_id": "I1", "why": "Shop side."}]),
+        ask, ask
     )
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
     assert r.fallbacks == ["decide"] and r.decisions[0].action == "propose"
@@ -169,27 +170,12 @@ def test_unknown_intent_lets_the_model_ask(part_a, shop, chamfer):
     assert r.fallbacks == [] and r.decisions[0].action == "ask"
 
 
-def test_an_invented_number_in_the_comment_is_regenerated_then_templated(part_a, shop, chamfer):
-    invented = call("write_comment", intro="This saves 37 minutes per part.",
-                    reasons=[{"issue_id": "I1", "why": "x"}])
-    model = Scripted(
-        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
-        call("evaluate_edits", requests=[{"kind": "route_machine"}]),
-        call("decide", decisions=[{"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
-                                   "reason": "x"}]),
-        invented, invented,
-    )
-    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
-    assert r.fallbacks == ["communicate"]
-    assert "37" not in r.comment and "from 2 to 1 setup(s)" in r.comment
-
 
 def test_values_in_a_request_are_rejected_before_the_planner(part_a, shop, chamfer):
     with_value = call("evaluate_edits", requests=[{"kind": "set_depth", "face_group": chamfer, "value_mm": 32}])
     model = Scripted(call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
                      with_value, with_value,
-                     call("decide", decisions=[{"issue_id": "I1", "action": "quiet", "reason": "x"}]),
-                     call("write_comment", intro="Nothing to change.", reasons=[{"issue_id": "I1", "why": "x"}]))
+                     call("decide", decisions=[{"issue_id": "I1", "action": "quiet", "reason": "x"}]))
     r = run_review(part_a, shop, model)
     assert r.fallbacks == ["options"]
 
@@ -199,8 +185,7 @@ def test_budget_failures_and_outages_degrade_one_stage_at_a_time(part_a, shop, c
                           error="ran out of tokens while reasoning (budget failure)")
     model = Scripted(out_of_tokens, out_of_tokens, ModelUnavailable("HTTP 503"),
                      call("decide", decisions=[{"issue_id": "I1", "action": "propose",
-                                                "option_key": "route_machine/5", "reason": "x"}]),
-                     call("write_comment", intro="Route to 5-axis.", reasons=[{"issue_id": "I1", "why": "x"}]))
+                                                "option_key": "route_machine/5", "reason": "x"}]))
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
     assert r.fallbacks == ["triage", "options"]
     assert r.decisions[0].option_key == "route_machine/5"
@@ -208,7 +193,7 @@ def test_budget_failures_and_outages_degrade_one_stage_at_a_time(part_a, shop, c
 
 def test_no_model_runs_the_whole_review_as_the_fixed_script(part_a, shop, chamfer):
     r = run_review(part_a, shop, None, stated={chamfer: "Weld clearance chamfer"})
-    assert r.model_calls == 0 and r.fallbacks == ["triage", "options", "decide", "communicate"]
+    assert r.model_calls == 0 and r.fallbacks == ["triage", "options", "decide"]
     assert r.decisions[0].option_key == "route_machine/5"  # removal was filtered: intent is stated
 
 
@@ -224,13 +209,6 @@ def test_parse_reply_flags_budget_failures_and_bad_json():
         {"function": {"name": "decide", "arguments": json.dumps({"decisions": []})}}]}}]}
     assert parse_reply(ok).arguments == {"decisions": []}
 
-
-def test_the_writing_stage_gets_the_larger_token_budget(part_a, shop, chamfer):
-    # Live run, 2026-10-28: Spark Open ran out of tokens at 4096 writing the comment.
-    model = happy_path(chamfer, {"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
-                                 "reason": "x"})
-    run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
-    assert [budget for _, _, budget in model.sent] == [4096, 4096, 4096, 8192]
 
 
 # --- Greptile on PR #14 ---------------------------------------------------------
@@ -253,19 +231,6 @@ def test_stated_intent_is_tagged_even_for_groups_without_an_issue(part_a, shop, 
     assert tag_intents(issues, {"G1": "datum face"})["G1"].status == "protected"
 
 
-def test_a_question_in_the_comment_needs_an_ask_decision(part_a, shop, chamfer):
-    asks = call("write_comment", intro=f"Can you remove the chamfer on {chamfer}?",
-                reasons=[{"issue_id": "I1", "why": "x"}])
-    model = Scripted(
-        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
-        call("evaluate_edits", requests=[{"kind": "route_machine"}]),
-        call("decide", decisions=[{"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
-                                   "reason": "x"}]),
-        asks, asks,
-    )
-    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
-    assert r.fallbacks == ["communicate"] and "?" not in r.comment
-
 
 def test_a_question_with_a_number_is_rejected_and_the_comment_is_never_empty(part_a, shop, chamfer):
     numbered = call("decide", decisions=[{"issue_id": "I1", "action": "ask",
@@ -275,10 +240,9 @@ def test_a_question_with_a_number_is_rejected_and_the_comment_is_never_empty(par
         call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
                                          {"kind": "route_machine"}]),
         numbered, numbered,
-        ModelUnavailable("HTTP 503"),
     )
     r = run_review(part_a, shop, model)
-    assert r.fallbacks == ["decide", "communicate"]
+    assert r.fallbacks == ["decide"]
     assert r.comment and "10 mm" not in r.comment
 
 
@@ -307,39 +271,18 @@ def test_when_triage_drops_everything_the_review_stops_there(part_a, shop):
 # --- Greptile on PR #14, round 2 -------------------------------------------------
 
 
-def test_actions_in_the_comment_are_rendered_from_accepted_decisions(part_a, shop, chamfer):
-    # The model writes only the framing; it can't put "remove the chamfer" in as an action.
-    model = happy_path(chamfer, {"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
-                                 "reason": "x"})
-    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
-    actions = r.comment.splitlines()[1:]
-    assert len(actions) == 1 and "remove_feature" not in r.comment
 
-
-def test_a_reason_that_asks_a_question_is_rejected(part_a, shop, chamfer):
-    sneaky = call("write_comment", intro="Review.", reasons=[{"issue_id": "I1", "why": "Could you drop it?"}])
-    model = Scripted(
-        call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
-        call("evaluate_edits", requests=[{"kind": "route_machine"}]),
-        call("decide", decisions=[{"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
-                                   "reason": "x"}]),
-        sneaky, sneaky,
-    )
-    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
-    assert r.fallbacks == ["communicate"] and "?" not in r.comment
-
-
-def test_an_accepted_question_with_a_slot_survives_the_fallback(part_a, shop, chamfer):
+def test_an_accepted_question_with_a_slot_is_filled_when_rendered(part_a, shop, chamfer):
     ask = call("decide", decisions=[{"issue_id": "I1", "action": "ask", "reason": "x",
                                      "question": f"Is {chamfer} worth {{{{plan.setups}}}} setups?"}])
     model = Scripted(
         call("triage", selected=[{"issue_id": "I1", "why": "x"}], dropped=[]),
         call("evaluate_edits", requests=[{"kind": "remove_feature", "face_group": chamfer},
                                          {"kind": "route_machine"}]),
-        ask, ModelUnavailable("HTTP 503"),
+        ask,
     )
     r = run_review(part_a, shop, model)
-    assert r.fallbacks == ["communicate"]
+    assert r.fallbacks == []
     assert f"{chamfer}: Is {chamfer} worth 2 setups?" in r.comment
 
 
@@ -359,3 +302,31 @@ def test_the_gate_ignores_part_edits_that_would_change_a_protected_neighbour(sho
     assert ask_allowed(facts, shop, issue, Intent("unknown")) is True
     protected = {walls: Intent("protected", "sealing walls")}
     assert ask_allowed(facts, shop, issue, Intent("unknown"), intents=protected) is False
+
+
+# --- the rendered comment (Greptile on PR #14, round 3) ------------------------------
+
+
+def test_the_comment_holds_only_rendered_actions_whatever_the_model_reasons(part_a, shop, chamfer):
+    # A decision's free-text reason argues for removal; the comment can't carry it.
+    model = happy_path(chamfer, {"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
+                                 "reason": "Honestly, just remove the chamfer."})
+    r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
+    assert "remove" not in r.comment.lower() and "?" not in r.comment
+
+
+def test_a_stated_reason_with_numbers_is_rendered_as_data(part_a, shop, chamfer):
+    # Stated intent comes from CAD or the ledger, not the model, so its numbers aren't "invented".
+    model = happy_path(chamfer, {"issue_id": "I1", "action": "propose", "option_key": "route_machine/5",
+                                 "reason": "x"})
+    r = run_review(part_a, shop, model, stated={chamfer: "1.5 mm weld clearance chamfer"})
+    assert r.comment.endswith(f"{chamfer} stays as designed: 1.5 mm weld clearance chamfer.")
+
+
+def test_an_ask_is_rendered_with_its_reason_for_asking(part_a, shop, chamfer):
+    model = happy_path(chamfer, {"issue_id": "I1", "action": "ask", "reason": "x",
+                                 "question": f"Is the chamfer on {chamfer} needed?"})
+    r = run_review(part_a, shop, model)
+    assert r.comment.splitlines()[1] == (f"{chamfer}: Is the chamfer on {chamfer} needed? Its purpose isn't on "
+                                         "record, and the answer changes the best plan.")
+

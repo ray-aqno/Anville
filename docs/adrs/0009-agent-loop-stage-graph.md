@@ -22,9 +22,9 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
    - Intent (code)
    - Options (model)
    - Decide (model + gate)
-   - Communicate (model)
+   - Render (code)
 
-   **Each model stage makes one tool call, so a review takes 4 model calls** (the cap is 8: ADR 0003). If a call is invalid, the stage retries once, then falls back to **that stage's** fixed-script step. A stage's failure never sends the whole run to the fallback.
+   **Each model stage makes one tool call, so a review takes 3 model calls** (the cap is 8: ADR 0003). If a call is invalid, the stage retries once, then falls back to **that stage's** fixed-script step. A stage's failure never sends the whole run to the fallback.
 2. **Issues are computed, never invented.** Triage chooses among issues that code found in the `SetupPlan`:
    - `forces_setup`: a setup that exists for at most 2 face groups;
    - `unreachable`: faces with `no_tool` or `no_direction`.
@@ -35,7 +35,10 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
    - the best plan-changing option differs between "part edits allowed" and "part edits excluded".
 
    Code runs the planner both ways. `propose` accepts only option keys that were offered in this run.
-6. **Numbers in comments are slots** (`{{option.<key>.setups_after}}` and others) that code fills in from tool results. If a comment contains any digit outside a slot, a face-group label or an option key, it's rejected (one regeneration allowed), and then the template is used.
+6. **The designer's comment is rendered by code** from the accepted decisions, the computed facts and the stated intent. Numbers are slots (`{{option.<key>.setups_after}}` and others) that code fills from tool results.
+   - **The only model-written text in it is an accepted question.** That question has passed the gate, and it may contain no digit except through a slot.
+   - **The model's reasoning for each decision goes to the trace,** where the panel shows it. It never goes into the comment.
+   - *Changed during review (Greptile, PR #14):* a model-written Communicate stage could still argue for a change the gate had forbidden, in free text that no check could fully catch. Rendering the comment in code makes that impossible, and saves one model call.
 7. **Model configuration.**
    - `max_tokens` is at least 4096.
    - `reasoning_effort` is sent only to the Meta Model API (`muse-spark-1.3`, `low`). Whether Baseten accepts it for Spark Open hasn't been tested.
@@ -52,9 +55,11 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
 
 - **Easier:**
   - each stage has its own tests;
+  - the comment can't contradict the decisions, and a review is one call shorter (about 7 s of a 60 s budget);
   - the fallback costs nothing extra, because it reuses the same tools;
   - the panel gets stage names for free.
 - **Harder:**
+  - the comment reads more like a template. The model's voice in Onshape is its questions; its reasoning lives in the panel;
   - the `forces_setup` threshold (2 groups) is a judgment call, and it needs tests on more than the demo parts;
   - until the cost model lands (RFC 0002 §4), "best option" means fewest unreachable faces, then fewest setups, not dollars.
 - **Revisit:**

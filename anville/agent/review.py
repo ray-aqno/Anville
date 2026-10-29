@@ -1,12 +1,14 @@
 """The review loop: a stage graph with a gated action space (ADR 0009, RFC 0001).
 
-    Facts (code) → Triage (model) → Intent (code) → Options (model) → Decide (model + gate) → Communicate (model)
+    Facts (code) → Triage (model) → Intent (code) → Options (model) → Decide (model + gate) → Render (code)
 
 The model decides what is worth doing: which computed issues to raise, which edit kinds to try,
-what to propose, ask or leave alone, and how to say it. Code decides what is allowed and computes
+what to propose, ask or leave alone, and the wording of any question it asks. Code decides what is allowed and computes
 every number: issues come from the SetupPlan, part edits on protected faces never reach the
 planner, `ask` exists only where the answer would change the plan, and numbers in the comment are
-slots filled from tool results. Each model stage is one tool call, retried once, then replaced by
+slots filled from tool results. The designer's comment is rendered by code from the accepted
+decisions, so model prose can never request what the gate forbids; the model's reasoning goes to
+the trace (the panel), where it is visible but not actionable. Each model stage is one tool call, retried once, then replaced by
 that stage's fixed-script step, so a bad answer degrades one stage, not the review.
 """
 
@@ -24,11 +26,8 @@ from anville.geometry.edits import CATALOG, NEEDS_GROUP, Option, evaluate_edits,
 PART_EDITS = frozenset({"remove_feature", "set_depth", "set_min_radius"})
 FORCES_SETUP_MAX_GROUPS = 2   # a setup that exists for this many face groups or fewer is an issue
 MAX_MODEL_CALLS = 8           # ADR 0003
-MAX_COMMENT_CHARS = 1200
 NOTHING_TO_RAISE = "Anville reviewed this version: it machines in {{plan.setups}} setup(s)."
-# Writing prose costs more reasoning than picking from a menu: the live run on Part A ran out of
-# tokens at 4096 in the communicate stage (2026-10-28), so that stage gets more room.
-STAGE_MAX_TOKENS = {"triage": 4096, "options": 4096, "decide": 4096, "communicate": 8192}
+STAGE_MAX_TOKENS = {"triage": 4096, "options": 4096, "decide": 4096}
 
 Emit = Callable[..., None]    # emit(kind, title, **detail): ADR 0007 trace events
 
@@ -183,8 +182,12 @@ _SLOT = re.compile(r"\{\{([^{}]+)\}\}")
 _ALLOWED_DIGITS = re.compile(r"\b[GI]\d+\b|\b[35]-axis\b|[+-][XYZ]\b")
 
 
-def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]) -> dict[str, str]:
+def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option],
+                intents: dict[str, "Intent"] | None = None) -> dict[str, str]:
     values = {"plan.setups": str(plan.count), "plan.unreachable": str(len(plan.unreachable))}
+    for g, t in (intents or {}).items():  # stated reasons come from CAD or the ledger, not the model
+        if t.reason:
+            values[f"intent.{g}.reason"] = t.reason
     for i in issues:
         values[f"issue.{i.id}.directions"] = " + ".join(i.detail.get("directions", []))
     for key, o in options.items():
@@ -242,14 +245,6 @@ DECIDE_TOOL = _tool(
         {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "ask", "quiet"]},
          "option_key": {"type": "string"}, "question": {"type": "string", "maxLength": 400},
          "reason": {"type": "string", "maxLength": 300}})}}))
-COMMENT_TOOL = _tool(
-    "write_comment",
-    "Write the opening line and, for each decision, one sentence on why. Code writes the actions themselves "
-    "(what is proposed or asked). Use {{slots}} for every number; never ask a question here.",
-    _obj(["intro", "reasons"], {
-        "intro": {"type": "string", "maxLength": 300},
-        "reasons": {"type": "array", "items": _obj(["issue_id", "why"], {
-            "issue_id": {"type": "string"}, "why": {"type": "string", "maxLength": 300}})}}))
 
 
 class _Runner:
@@ -370,7 +365,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     # Decide (model + gate)
     issue_of_option = {k: o.face_group for k, o in options.items()}
 
-    values = slot_values(plan, chosen, options)
+    values = slot_values(plan, chosen, options, intents)
     keys = list(options)
 
     def v_decide(a):
@@ -409,27 +404,13 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         decisions = [_fallback_decision(by_id[i], gates[i], list(options.values())) for i in selected]
     for d in decisions:
         emit("decision", "Decision made", stage="decide", issue_id=d.issue_id, action=d.action,
-             option_key=d.option_key)
+             option_key=d.option_key, reason=d.reason)  # the model's reasoning: trace and panel only
 
-    # Communicate (model writes the framing; code renders the actions from the accepted decisions)
-    def v_comment(a):
-        whys = {r["issue_id"]: r["why"] for r in a["reasons"]}
-        if sorted(whys) != sorted(d.issue_id for d in decisions):
-            return None, "give exactly one reason per decision"
-        for label, text in [("intro", a["intro"]), *whys.items()]:
-            _, err = fill_slots(text, values, keys)
-            if err:
-                return None, f"{label}: {err}"
-            if "?" in text:  # questions reach the designer only through an accepted ask (Greptile, PR #14)
-                return None, f"{label}: don't ask questions here; code writes the accepted questions"
-        return (a["intro"], whys), ""
-    written = run.ask("communicate", "Write the opening line and one reason per decision.",
-                      {**ctx, "decisions": [d.__dict__ for d in decisions], "slots": sorted(values)},
-                      COMMENT_TOOL, v_comment)
-    intro, whys = written if written else (NOTHING_TO_RAISE, {})
-    comment, _ = fill_slots(render_comment(intro, decisions, by_id, whys), values, keys)
+    # Render (code): the designer's comment comes only from accepted decisions and computed facts
+    comment, _ = fill_slots(render_comment(decisions, by_id, intents, options), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
+    emit("verify", "Comment rendered from the accepted decisions", stage="render")
     return ReviewResult(plan, issues, intents, selected, options, rejected, gates, decisions,
                         comment or "", run.calls, run.fallbacks)
 
@@ -448,20 +429,30 @@ def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option]) -> De
     return Decision(issue.id, "quiet", reason="no option changes the plan")
 
 
-def render_comment(intro: str, decisions: list[Decision], by_id: dict[str, Issue], whys: dict[str, str]) -> str:
-    """The comment as a template: code writes each action from its accepted decision, the model's
-    reason (if any) follows it. Asks appear only as accepted questions; nothing else can ask."""
-    lines = [intro]
+def render_comment(decisions: list[Decision], by_id: dict[str, Issue], intents: dict[str, Intent],
+                   options: dict[str, Option]) -> str:
+    """The designer's comment, as a slot template, written by code from the accepted decisions.
+
+    No model prose reaches it, so it can only propose what Decide accepted and ask what the gate
+    allowed (Greptile, PR #14). The one model-written text is an accepted question, already checked.
+    """
+    lines = [NOTHING_TO_RAISE]
     for d in decisions:
         g = by_id[d.issue_id].face_group
+        intent = intents.get(g)
         if d.action == "ask":
-            action = f"{g}: {d.question}"
+            lines.append(f"{g}: {d.question} Its purpose isn't on record, and the answer changes the best plan.")
         elif d.action == "propose":
-            action = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
-                      f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
+            o = options[d.option_key]
+            line = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
+                    f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
+            if o.side == "shop":
+                line += " It changes the shop, not the part."
+            if intent and intent.status == "protected":
+                line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}."
+            lines.append(line)
         else:
-            action = f"{g}: no change proposed."
-        lines.append(f"{action} {whys[d.issue_id]}" if whys.get(d.issue_id) else action)
+            lines.append(f"{g}: no change proposed.")
     return "\n".join(lines)
 
 
