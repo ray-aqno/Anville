@@ -1,15 +1,20 @@
 """The review loop: a stage graph with a gated action space (ADR 0009, RFC 0001).
 
-    Facts (code) → Triage (model) → Intent (code) → Options (model) → Decide (model + gate) → Render (code)
+    Facts + Intent (code) → Plan (model) → Decide + Write (model + gate) → Check (code)
+        → Verify (model #2) → Publish
 
 The model decides what is worth doing: which computed issues to raise, which edit kinds to try,
-what to propose, ask or leave alone, and the wording of any question it asks. Code decides what is allowed and computes
-every number: issues come from the SetupPlan, part edits on protected faces never reach the
-planner, `ask` exists only where the answer would change the plan, and numbers in the comment are
-slots filled from tool results. The designer's comment is rendered by code from the accepted
-decisions, so model prose can never request what the gate forbids; the model's reasoning goes to
-the trace (the panel), where it is visible but not actionable. Each model stage is one tool call, retried once, then replaced by
-that stage's fixed-script step, so a bad answer degrades one stage, not the review.
+what to propose, ask or leave alone, and how to explain it to the designer. Code decides what is
+allowed and computes every number: issues come from the SetupPlan, part edits on protected faces
+never reach the planner, `ask` exists only where the answer would change the plan, and numbers
+are slots filled from tool results.
+
+The comment is part of the graph. The model writes it as sentences that each cite the nodes they
+rest on (issues, intents, options, its own decisions). Code checks each sentence's structure; a
+second model checks that it says no more than it cites. Only verified sentences are published;
+any decision not stated by a verified sentence gets a line rendered by code, and questions are
+always placed by code from accepted asks. Three model calls per review; each is retried once and
+then replaced by that stage's fixed-script step.
 """
 
 from __future__ import annotations
@@ -69,6 +74,7 @@ class ReviewResult:
     comment: str
     model_calls: int = 0
     fallbacks: list[str] = field(default_factory=list)
+    usage: list[dict] = field(default_factory=list)  # per call: stage, model, prompt/completion/cached tokens
 
 
 # --- code stages ---------------------------------------------------------------
@@ -179,6 +185,7 @@ def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Inten
 # --- slots ---------------------------------------------------------------------
 
 _SLOT = re.compile(r"\{\{([^{}]+)\}\}")
+_INTERNAL = re.compile(r"\b(?:issue|intent|option|decision):|\b(?:intent|option|issue|plan)\.\w|\bI\d+\b")
 _ALLOWED_DIGITS = re.compile(r"\b[GI]\d+\b|\b[35]-axis\b|[+-][XYZ]\b")
 
 
@@ -213,13 +220,24 @@ def fill_slots(text: str, values: dict[str, str], option_keys: list[str]) -> tup
 
 # --- model stages --------------------------------------------------------------
 
+# One stable system prompt for every call: with the facts first in the user message, each call in a
+# review shares a long identical prefix, which the host can cache (Baseten reported cached prompt
+# tokens in the probe). Stage-specific text goes last.
 RULES = (
     "You are Anville, a manufacturing engineer reviewing a CNC-machined aluminum part for a shop. "
     "Code computes every number. Never write a digit yourself: use the {{slots}} you are given. "
     "Refer to faces by their group labels (G1, G2, ...). Describe a face's intent exactly as given in "
     "`intents`: call it protected only if its status is protected, and say its purpose is unknown if it is "
-    "unknown. Call exactly one tool."
+    "unknown. An option with side 'shop' changes the shop (tools, machines, fixtures), never the part's "
+    "geometry, so it is always compatible with a protected face. A protected face is therefore never a "
+    "reason to drop an issue: the fix may be on the shop side. Call exactly one tool."
 )
+STAGE_MAX_TOKENS = {"plan": 6144, "decide": 6144, "verify": 4096}  # plan hit 4096 live; decide also writes
+# Live, 2026-10-29 (Spark Open, Part A, 8 reviews): "low" cut latency from 21-33 s to 4-17 s, but at
+# low effort planning once dropped the main issue. Planning keeps the model's default; deciding
+# and writing (4/4 right at low) run at low. The verifier brings its own setting.
+STAGE_EFFORT = {"plan": None, "decide": "low", "verify": None}
+MAX_SENTENCES = 8
 
 
 def _obj(required: list[str], props: dict) -> dict:
@@ -232,43 +250,62 @@ def _tool(name: str, description: str, parameters: dict) -> dict:
 
 _PICK = {"type": "array", "items": _obj(["issue_id", "why"], {"issue_id": {"type": "string"},
                                                               "why": {"type": "string", "maxLength": 300}})}
-TRIAGE_TOOL = _tool("triage", "Choose which computed issues are worth raising. Every issue is selected or dropped.",
-                    _obj(["selected", "dropped"], {"selected": _PICK, "dropped": _PICK}))
-OPTIONS_TOOL = _tool(
-    "evaluate_edits", "Ask the planner to score edits. Name only an edit kind and a face group; code picks values.",
-    _obj(["requests"], {"requests": {"type": "array", "minItems": 1, "maxItems": 12, "items": _obj(
-        ["kind"], {"kind": {"type": "string", "enum": list(CATALOG)}, "face_group": {"type": "string"}})}}))
+PLAN_TOOL = _tool(
+    "plan", "Choose which issues to raise (every issue is selected or dropped) and which edit kinds the planner "
+    "should score for the selected ones. Name only a kind and a face group; code picks the values.",
+    _obj(["selected", "dropped", "requests"], {
+        "selected": _PICK, "dropped": _PICK,
+        "requests": {"type": "array", "maxItems": 12, "items": _obj(
+            ["kind"], {"kind": {"type": "string", "enum": list(CATALOG)}, "face_group": {"type": "string"}})}}))
+_SENTENCE = _obj(["text", "role", "cites"], {
+    "text": {"type": "string", "maxLength": 300},
+    "role": {"type": "string", "enum": ["context", "action", "reason"]},
+    "cites": {"type": "array", "minItems": 1, "items": {"type": "string"}}})
 DECIDE_TOOL = _tool(
-    "decide", "For each selected issue: propose an offered option, ask the designer (only where allowed), or stay quiet.",
-    _obj(["decisions"], {"decisions": {"type": "array", "items": _obj(
-        ["issue_id", "action", "reason"],
-        {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "ask", "quiet"]},
-         "option_key": {"type": "string"}, "question": {"type": "string", "maxLength": 400},
-         "reason": {"type": "string", "maxLength": 300}})}}))
+    "decide", "For each selected issue, propose an offered option, ask the designer (only where allowed) or stay "
+    "quiet. Then write the comment the designer will read: sentences that each cite the nodes they rest on. "
+    "Questions are written only in `decisions`; code places them in the comment.",
+    _obj(["decisions", "comment"], {
+        "decisions": {"type": "array", "items": _obj(
+            ["issue_id", "action", "reason"],
+            {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "ask", "quiet"]},
+             "option_key": {"type": "string"}, "question": {"type": "string", "maxLength": 400},
+             "reason": {"type": "string", "maxLength": 300}})},
+        "comment": {"type": "array", "maxItems": MAX_SENTENCES, "items": _SENTENCE}}))
+VERIFY_TOOL = _tool(
+    "verify", "For each sentence: is everything it states supported by the nodes it cites, and does it ask for "
+    "or suggest nothing beyond the accepted decisions?",
+    _obj(["verdicts"], {"verdicts": {"type": "array", "items": _obj(
+        ["index", "supported", "why"], {"index": {"type": "integer"}, "supported": {"type": "boolean"},
+                                        "why": {"type": "string", "maxLength": 200}})}}))
 
 
 class _Runner:
     def __init__(self, model: ChatModel | None, emit: Emit):
-        self.model, self.emit, self.calls, self.fallbacks = model, emit, 0, []
+        self.model, self.emit, self.calls, self.fallbacks, self.usage = model, emit, 0, [], []
 
-    def ask(self, stage: str, instructions: str, context: dict, tool: dict, validate) -> object | None:
+    def ask(self, stage: str, instructions: str, base: dict, extra: dict, tool: dict, validate,
+            model: ChatModel | None = None) -> object | None:
         """One tool call, retried once; None means the stage falls back to its fixed-script step."""
+        model = model or self.model
         name, error = tool["function"]["name"], "no model configured"
         for attempt in (1, 2):
-            if self.model is None or self.calls >= MAX_MODEL_CALLS:
-                error = error if self.model is None else "call cap reached"
+            if model is None or self.calls >= MAX_MODEL_CALLS:
+                error = error if model is None else "call cap reached"
                 break
-            content = json.dumps(context, sort_keys=True)
+            content = (json.dumps(base, sort_keys=True) + f"\n\nSTAGE {stage}: {instructions}\n"
+                       + json.dumps(extra, sort_keys=True))
             if attempt == 2:
                 content += f"\n\nYour previous answer was rejected: {error}. Call {name} again."
-            messages = [{"role": "system", "content": f"{RULES}\n\n{instructions}"},
-                        {"role": "user", "content": content}]
+            messages = [{"role": "system", "content": RULES}, {"role": "user", "content": content}]
             self.calls += 1
             try:
-                reply = self.model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage))
+                reply = model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage),
+                                   reasoning_effort=STAGE_EFFORT.get(stage))
             except ModelUnavailable as e:
                 error = f"model unavailable: {e}"
                 break
+            self.usage.append({"stage": stage, "model": model.name, **(reply.usage or {})})
             if reply.error:
                 error = reply.error
             elif reply.tool != name:
@@ -288,85 +325,80 @@ class _Runner:
 
 
 def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
-               stated: dict[str, str] | None = None, constraints: list[dict] | None = None,
-               emit: Emit | None = None, axes: int = 3) -> ReviewResult:
-    """Review one part version. `model=None` runs every model stage as its fixed-script step."""
+               verifier: ChatModel | None = None, stated: dict[str, str] | None = None,
+               constraints: list[dict] | None = None, emit: Emit | None = None, axes: int = 3) -> ReviewResult:
+    """Review one part version in three model calls: plan, decide-and-write, verify.
+
+    `model=None` runs every model stage as its fixed-script step. Without a `verifier`, no model
+    prose is published: the comment is rendered by code.
+    """
     emit = emit or (lambda *a, **k: None)
     run = _Runner(model, emit)
 
-    # Facts (code)
+    # Facts and intent (code), for every issue up front so planning is one call
     plan = min_setups(facts, shop, axes=axes)
     issues = find_issues(facts, plan)
     by_id = {i.id: i for i in issues}
     emit("verify", "Setup plan and issues computed", stage="facts", setups=plan.count,
          issues=[{"id": i.id, "kind": i.kind, "face_group": i.face_group} for i in issues])
+    if not issues:
+        text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, issues, {}), [])
+        return ReviewResult(plan, [], {}, [], {}, [], {}, [], text or "", run.calls, run.fallbacks, run.usage)
+    intents = tag_intents(issues, stated, constraints)
+    gates = {i.id: ask_allowed(facts, shop, i, intents[i.face_group], intents=intents, axes=axes) for i in issues}
+    intent_view = {g: {"status": t.status, "reason": t.reason} for g, t in intents.items()}
+    emit("verify", "Intent tagged and ask gate computed", stage="intent", intents=intent_view, ask_allowed=gates)
     base = {"setups": [{"directions": s.directions,
                         "groups": sorted({g for g, ids in facts.labelled_groups().items()
                                           if set(ids) & {a.face_id for a in s.faces}}, key=_group_order)}
                        for s in plan.setups],
             "issues": [{"id": i.id, "kind": i.kind, "face_group": i.face_group, **i.detail} for i in issues]}
-    if not issues:
-        text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, issues, {}), [])
-        return ReviewResult(plan, [], {}, [], {}, [], {}, [], text or "", run.calls, run.fallbacks)
+    # Planning sees geometry only. Live (2026-10-29), planning that saw "protected, ask not allowed"
+    # dropped the main issue in 3 of 6 stated-intent runs; triage that saw geometry only never did.
+    # Intent reaches the model at Decide, after the filter has rejected protected part edits.
 
-    # Triage (model)
-    def v_triage(a):
-        sel, drop = [p["issue_id"] for p in a["selected"]], [p["issue_id"] for p in a["dropped"]]
+    # Plan (model): triage and the planner requests in one call
+    def v_plan(a):
+        sel, drop = [x["issue_id"] for x in a["selected"]], [x["issue_id"] for x in a["dropped"]]
         if set(sel) & set(drop) or sorted(sel + drop) != sorted(by_id):
             return None, "every issue must be selected or dropped exactly once"
-        return sel, ""
-    selected = run.ask("triage", "Choose which issues are worth the designer's attention.", base,
-                       TRIAGE_TOOL, v_triage)
-    if selected is None:
-        selected = [i.id for i in issues]
-    emit("decision", "Issues chosen", stage="triage", selected=selected)
-    if not selected:
-        # Nothing chosen: the later stages would have nothing to work on (live run, 2026-10-28).
-        text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, [], {}), [])
-        return ReviewResult(plan, issues, {}, [], {}, [], {}, [], text or "", run.calls, run.fallbacks)
-
-    # Intent (code)
-    chosen = [by_id[i] for i in selected]
-    intents = tag_intents(chosen, stated, constraints)
-    gates = {i.id: ask_allowed(facts, shop, i, intents[i.face_group], intents=intents, axes=axes) for i in chosen}
-    intent_view = {g: {"status": t.status, "reason": t.reason} for g, t in intents.items()}
-    emit("verify", "Intent tagged and ask gate computed", stage="intent", intents=intent_view, ask_allowed=gates)
-
-    # Options (model)
-    groups = {i.face_group for i in chosen}
-
-    def v_options(a):
+        groups = {by_id[i].face_group for i in sel}
         for r in a["requests"]:
             if set(r) - {"kind", "face_group"}:
                 return None, f"name only a kind and a face group; code picks values (got {sorted(set(r))})"
             if r["kind"] not in CATALOG:
                 return None, f"{r['kind']!r} is not in the catalog {list(CATALOG)}"
-            if "face_group" in r and r["face_group"] not in groups:
+            if ("face_group" in r or r["kind"] in NEEDS_GROUP) and r.get("face_group") not in groups:
                 return None, f"face_group must be one of the selected issues' groups {sorted(groups)}"
-            if r["kind"] in NEEDS_GROUP and r.get("face_group") not in groups:
-                return None, f"{r['kind']} must name one of the selected issues' groups {sorted(groups)}"
-        return a["requests"], ""
-    ctx = {**base, "selected": selected, "intents": intent_view}
-    requests = run.ask("options", "Choose which edit kinds the planner should score for the selected issues. "
-                       "Part edits touching a protected group will be rejected; shop-side edits are always allowed.",
-                       ctx, OPTIONS_TOOL, v_options)
-    if requests is None:
-        requests = [r for g in sorted(groups, key=_group_order) for r in all_requests(g)]
+        return (sel, a["requests"]), ""
+    planned = run.ask("plan", "Choose the issues worth the designer's attention and the edit kinds to score, "
+                      "both part-side and shop-side.", base, {}, PLAN_TOOL, v_plan)
+    if planned is None:
+        selected = [i.id for i in issues]
+        requests = [r for i in issues for r in all_requests(i.face_group)]
+    else:
+        selected, requests = planned
+    emit("decision", "Issues chosen", stage="plan", selected=selected)
+    if not selected:
+        # Nothing chosen: the later stages would have nothing to work on (live run, 2026-10-28).
+        text, _ = fill_slots(NOTHING_TO_RAISE, slot_values(plan, [], {}), [])
+        return ReviewResult(plan, issues, intents, [], {}, [], gates, [], text or "", run.calls, run.fallbacks,
+                            run.usage)
+    chosen = [by_id[i] for i in selected]
     kept, rejected = filter_requests(requests, intents, facts)
     result = evaluate_edits(facts, shop, kept, axes=axes) if kept else None
     options = {o.key: o for o in (result.options if result else [])}
     for r in rejected:
-        emit("tool_result", "Edit rejected: the face's intent is stated", stage="options",
+        emit("tool_result", "Edit rejected: the face's intent is stated", stage="plan",
              edit_kind=r["kind"], face_group=r.get("face_group"), reason=r["reason"])
     for o in options.values():
-        emit("option", "Option scored", stage="options", key=o.key, side=o.side, setups_before=o.before.setups,
+        emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
              setups_after=o.after.setups, changes_plan=o.changes_plan)
 
-    # Decide (model + gate)
-    issue_of_option = {k: o.face_group for k, o in options.items()}
-
+    # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
     keys = list(options)
+    nodes = comment_nodes(plan, chosen, intents, options)
 
     def v_decide(a):
         out = []
@@ -380,7 +412,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 key = d.get("option_key")
                 if key not in options:
                     return None, f"{key!r} was not offered; offered: {sorted(options)}"
-                if issue_of_option[key] not in (None, issue.face_group):
+                if options[key].face_group not in (None, issue.face_group):
                     return None, f"{key} belongs to another face group"
             question = d.get("question")
             if d["action"] == "ask":
@@ -389,30 +421,145 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 _, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
                 if err:
                     return None, f"question for {issue.id}: {err}"
-                # Kept as a template, so the fallback comment re-checks slots, not filled numbers (Greptile, PR #14).
+                # Kept as a template, so rendering re-checks slots, not filled numbers (Greptile, PR #14).
             out.append(Decision(d["issue_id"], d["action"], d.get("option_key"), question, d["reason"]))
-        return out, ""
+        return (out, list(a["comment"])), ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
                 "changes_plan": o.changes_plan} for k, o in options.items()]
-    decisions = run.ask("decide", "Decide what to do about each selected issue. Fact: an option with side "
-                        "'shop' changes the shop (tools, machines, fixtures), never the part's geometry, so it "
-                        "is always compatible with a protected face.",
-                        {**ctx, "offered_options": offered, "rejected_requests": rejected, "ask_allowed": gates},
-                        DECIDE_TOOL, v_decide)
-    if decisions is None:
+    decided = run.ask("decide", "Decide each selected issue, then write the comment for the designer. Put node "
+                      "ids only in `cites` (cite decision:<issue_id> for your own decisions), never in the text. "
+                      "Use only these slots for numbers.",
+                      base, {"selected": selected, "intents": intent_view, "ask_allowed": gates,
+                             "offered_options": offered, "rejected_requests": rejected,
+                             "nodes": sorted(nodes), "slots": sorted(values)}, DECIDE_TOOL, v_decide)
+    if decided is None:
         decisions = [_fallback_decision(by_id[i], gates[i], list(options.values())) for i in selected]
+        sentences = []
+    else:
+        decisions, sentences = decided
     for d in decisions:
         emit("decision", "Decision made", stage="decide", issue_id=d.issue_id, action=d.action,
-             option_key=d.option_key, reason=d.reason)  # the model's reasoning: trace and panel only
+             option_key=d.option_key, reason=d.reason)  # the model's reasoning: trace and panel
 
-    # Render (code): the designer's comment comes only from accepted decisions and computed facts
-    comment, _ = fill_slots(render_comment(decisions, by_id, intents, options), values, keys)
+    # Check (code), then verify (a second model): only grounded, verified prose is published
+    decided_by = {d.issue_id: d for d in decisions}
+    checked = []
+    for idx, sent in enumerate(sentences[:MAX_SENTENCES]):
+        err = check_sentence(sent, decided_by, nodes, values, keys)
+        emit("verify" if not err else "error", "Sentence checked", stage="check", index=idx, ok=not err,
+             reason=err or "")
+        if not err:
+            checked.append(sent)
+    verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
+    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
-    emit("verify", "Comment rendered from the accepted decisions", stage="render")
+    emit("verify", "Comment assembled", stage="publish", model_sentences=len(verified))
     return ReviewResult(plan, issues, intents, selected, options, rejected, gates, decisions,
-                        comment or "", run.calls, run.fallbacks)
+                        comment or "", run.calls, run.fallbacks, run.usage)
+
+
+# --- the comment as grounded nodes ---------------------------------------------------
+
+
+def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Intent],
+                  options: dict[str, Option]) -> dict[str, dict]:
+    """What a sentence may cite: id -> the fact it stands for (decision nodes are added per decision)."""
+    nodes = {"plan": {"setups": plan.count, "unreachable": len(plan.unreachable)}}
+    for i in chosen:
+        nodes[f"issue:{i.id}"] = {"kind": i.kind, "face_group": i.face_group, **i.detail}
+        nodes[f"decision:{i.id}"] = {"issue": i.id}
+    for g, t in intents.items():
+        nodes[f"intent:{g}"] = {"status": t.status, "reason": t.reason}
+    for k, o in options.items():
+        nodes[f"option:{k}"] = {"side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
+                                "setups_after": o.after.setups}
+    return nodes
+
+
+def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, values: dict,
+                   keys: list[str]) -> str:
+    """Code's half of the gate on prose. Returns why the sentence is rejected, or "" if it passes."""
+    cites = sent.get("cites") or []
+    if not cites or any(c not in nodes for c in cites):
+        return f"cites unknown nodes {[c for c in cites if c not in nodes]}" if cites else "cites nothing"
+    _, err = fill_slots(sent["text"], values, keys)
+    if err:
+        return err
+    if "?" in sent["text"]:
+        return "questions reach the designer only through an accepted ask"
+    # Write for the designer: citations go in `cites` and numbers in {{slots}}, never in the words
+    # (live, 2026-10-29: "per intent:G3", "(intent.G3.reason)", "Issue I1").
+    if _INTERNAL.search(_SLOT.sub("", sent["text"])):
+        return "write for the designer: node ids and slot names belong in cites and {{slots}}, not the text"
+    cited = [decided_by[c.split(":", 1)[1]] for c in cites if c.startswith("decision:")]
+    if sent["role"] == "action" and (len(cited) != 1 or cited[0].action == "ask"):
+        return "an action sentence cites exactly one propose or quiet decision"
+    allowed = {d.option_key for d in cited if d.option_key}
+    stray = [k for k in keys if k in sent["text"] and k not in allowed]
+    # Edit kinds count too: a rejected request (say, removing a protected face) is in no offered key.
+    stray += [k for k in CATALOG if re.search(rf"\b{k}\b", sent["text"])
+              and not any(o.startswith(k) for o in allowed)]
+    if stray:
+        return f"mentions options no cited decision accepted: {sorted(set(stray))}"
+    return ""
+
+
+def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[dict],
+                     decided_by: dict[str, Decision], nodes: dict, values: dict, keys: list[str],
+                     base: dict, emit: Emit) -> list[dict]:
+    """The model's half of the gate on prose: does each sentence say more than it cites?"""
+    if not checked:
+        return []
+    if verifier is None:
+        emit("error", "No verifier: model prose is not published", stage="verify")
+        return []
+    items = []
+    for i, sent in enumerate(checked):
+        cited = {c: nodes[c] for c in sent["cites"]}
+        for c in sent["cites"]:
+            if c.startswith("decision:"):
+                d = decided_by[c.split(":", 1)[1]]
+                cited[c] = {"action": d.action, "option_key": d.option_key, "question": d.question}
+        items.append({"index": i, "text": fill_slots(sent["text"], values, keys)[0], "role": sent["role"],
+                      "cites": cited})
+
+    def v_verify(a):
+        verdicts = {v["index"]: v for v in a["verdicts"]}
+        if sorted(verdicts) != list(range(len(items))):
+            return None, f"give one verdict per sentence index 0..{len(items) - 1}"
+        return verdicts, ""
+    decisions_view = [{"issue_id": d.issue_id, "action": d.action, "option_key": d.option_key}
+                      for d in decided_by.values()]
+    verdicts = run.ask("verify", "Judge each sentence strictly against its cited nodes and the accepted decisions.",
+                       base, {"accepted_decisions": decisions_view, "sentences": items}, VERIFY_TOOL, v_verify,
+                       model=verifier)
+    if verdicts is None:  # can't verify: publish no model prose
+        return []
+    out = []
+    for i, sent in enumerate(checked):
+        ok = bool(verdicts[i]["supported"])
+        emit("verify" if ok else "error", "Sentence verified" if ok else "Sentence not supported",
+             stage="verify", index=i, reason=verdicts[i]["why"])
+        if ok:
+            out.append(sent)
+    return out
+
+
+def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dict[str, Issue],
+                     intents: dict[str, Intent], options: dict[str, Option]) -> str:
+    """Verified model sentences in the model's order; every decision not stated by a verified action
+    sentence gets its code-rendered line; accepted questions are always placed by code."""
+    covered = {c.split(":", 1)[1] for s in verified if s["role"] == "action"
+               for c in s["cites"] if c.startswith("decision:")}
+    lines = [s["text"] for s in verified]
+    if not any(s["role"] == "context" for s in verified):
+        lines.insert(0, NOTHING_TO_RAISE)
+    for d in decisions:
+        if d.action == "ask" or d.issue_id not in covered:
+            lines.append(render_line(d, by_id, intents, options))
+    return "\n".join(lines)
 
 
 # --- fixed-script steps ------------------------------------------------------------
@@ -429,31 +576,22 @@ def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option]) -> De
     return Decision(issue.id, "quiet", reason="no option changes the plan")
 
 
-def render_comment(decisions: list[Decision], by_id: dict[str, Issue], intents: dict[str, Intent],
-                   options: dict[str, Option]) -> str:
-    """The designer's comment, as a slot template, written by code from the accepted decisions.
-
-    No model prose reaches it, so it can only propose what Decide accepted and ask what the gate
-    allowed (Greptile, PR #14). The one model-written text is an accepted question, already checked.
-    """
-    lines = [NOTHING_TO_RAISE]
-    for d in decisions:
-        g = by_id[d.issue_id].face_group
-        intent = intents.get(g)
-        if d.action == "ask":
-            lines.append(f"{g}: {d.question} Its purpose isn't on record, and the answer changes the best plan.")
-        elif d.action == "propose":
-            o = options[d.option_key]
-            line = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
-                    f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
-            if o.side == "shop":
-                line += " It changes the shop, not the part."
-            if intent and intent.status == "protected":
-                line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}."
-            lines.append(line)
-        else:
-            lines.append(f"{g}: no change proposed.")
-    return "\n".join(lines)
+def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent], options: dict[str, Option]) -> str:
+    """One decision as a slot template written by code: the fallback for any unverified statement."""
+    g = by_id[d.issue_id].face_group
+    intent = intents.get(g)
+    if d.action == "ask":
+        return f"{g}: {d.question} Its purpose isn't on record, and the answer changes the best plan."
+    if d.action == "propose":
+        o = options[d.option_key]
+        line = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
+                f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
+        if o.side == "shop":
+            line += " It changes the shop, not the part."
+        if intent and intent.status == "protected":
+            line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}."
+        return line
+    return f"{g}: no change proposed."
 
 
 def _group_order(label: str) -> int:

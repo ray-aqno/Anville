@@ -16,34 +16,32 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
 
 ## Decision
 
-1. **Stages.** Code stages and model stages alternate:
-   - Facts (code)
-   - Triage (model)
-   - Intent (code)
-   - Options (model)
-   - Decide (model + gate)
-   - Render (code)
+1. **The graph.** Code and model steps alternate; **a review is 3 model calls** (the cap is 8: ADR 0003):
 
-   **Each model stage makes one tool call, so a review takes 3 model calls** (the cap is 8: ADR 0003). If a call is invalid, the stage retries once, then falls back to **that stage's** fixed-script step. A stage's failure never sends the whole run to the fallback.
-2. **Issues are computed, never invented.** Triage chooses among issues that code found in the `SetupPlan`:
-   - `forces_setup`: a setup that exists for at most 2 face groups;
-   - `unreachable`: faces with `no_tool` or `no_direction`.
-3. **Intent tags are computed.** Each issue's face group is tagged *protected* (a stated reason: CAD feature name, drawing note, or a ledger constraint), *free* (a constraint allows changes), or *unknown*.
-4. **The protected-face filter (ADR 0002 Amendment 1).** Part edits (`remove_feature`, `set_depth`, `set_min_radius`) on a protected group are rejected before `evaluate_edits` runs. The rejection and its reason are returned to the model as data.
-5. **The value-of-information gate.** `ask` is offered for an issue only when:
-   - its intent is *unknown*, **and**
-   - the best plan-changing option differs between "part edits allowed" and "part edits excluded".
+   ```
+   Facts + Intent (code) → Plan (model) → Decide + Write (model + gate) → Check (code) → Verify (model #2) → Publish
+   ```
 
-   Code runs the planner both ways. `propose` accepts only option keys that were offered in this run.
-6. **The designer's comment is rendered by code** from the accepted decisions, the computed facts and the stated intent. Numbers are slots (`{{option.<key>.setups_after}}` and others) that code fills from tool results.
-   - **The only model-written text in it is an accepted question.** That question has passed the gate, and it may contain no digit except through a slot.
-   - **The model's reasoning for each decision goes to the trace,** where the panel shows it. It never goes into the comment.
-   - *Changed during review (Greptile, PR #14):* a model-written Communicate stage could still argue for a change the gate had forbidden, in free text that no check could fully catch. Rendering the comment in code makes that impossible, and saves one model call.
+   An invalid call is retried once, then replaced by **that stage's** fixed-script step. A stage's failure never sends the whole review to the fallback.
+2. **Issues are computed, never invented.** Plan chooses among issues that code found in the `SetupPlan` (`forces_setup`: a setup that exists for at most 2 face groups; `unreachable`: faces with `no_tool` or `no_direction`), and names the edit kinds to score. **Plan sees geometry only, not intent.** Live, planning that saw "protected, ask not allowed" dropped the main issue in 3 of 6 stated-intent runs; with geometry only it raised it 6 of 6.
+3. **Intent tags are computed** for every group with something on record: *protected* (a stated reason from a CAD feature name, a drawing note, or a ledger constraint), *free*, or *unknown*. A ledger constraint outranks a stated reason.
+4. **The protected-face filter (ADR 0002 Amendment 1).** Part edits that touch a protected group, including concave neighbours of the named group, are rejected before `evaluate_edits` runs. The rejection is returned to the model, and shown in the trace.
+5. **The value-of-information gate.** `ask` is allowed for an issue only when its intent is *unknown* and the best plan-changing option differs between part edits allowed and part edits excluded (ignoring part edits that would touch a protected neighbour). `propose` accepts only option keys offered in this run.
+6. **The comment is part of the graph.**
+   - **Decide + Write** writes the comment as sentences, each citing the nodes it rests on (issues, intents, options, its own decisions) and declaring a role (`context`, `action`, `reason`).
+   - **Check (code)** rejects a sentence that: cites unknown nodes; has a number outside a slot; asks a question; is an action without exactly one propose/quiet decision; names an option or edit kind no cited decision accepted; or puts node IDs or slot names in the words.
+   - **Verify (a second model, `muse-spark-1.3`)** rejects a sentence that says more than its cited nodes, or suggests anything beyond the accepted decisions.
+   - **Publish:** verified sentences go out in the model's order. Any decision not stated by a verified action sentence gets a line rendered by code, and accepted questions are always placed by code. Without a verifier, or if it fails, no model prose is published.
+   - *Changed during review (Greptile, PR #14).* An earlier version published unchecked model prose, and a later one removed prose entirely. The graph keeps the model's voice and makes every published sentence traceable to the fact it rests on.
 7. **Model configuration.**
-   - `max_tokens` is at least 4096.
-   - `reasoning_effort` is sent only to the Meta Model API (`muse-spark-1.3`, `low`). Whether Baseten accepts it for Spark Open hasn't been tested.
+   - `max_tokens` is at least 4096 everywhere (6144 for Plan and Decide).
+   - `reasoning_effort` is set per stage. **Baseten honours it for Spark Open** (verified 2026-10-29: `low` cut completion tokens 4–6×). Plan runs at the default (at `low` it once dropped the main issue); Decide + Write runs at `low` (correct in every live run). The verifier runs `muse-spark-1.3` at `low`.
    - `finish_reason: length` is logged as a budget failure and handled like any other invalid call.
-8. **Trace.** Every stage emits ADR 0007 trace events with `detail.stage`, so the panel can show which stage the agent is in.
+   - **Prompt order is cache-friendly:** one system prompt and a shared facts prefix, with stage-specific text last. Baseten reported up to 1,152 of 1,166 prompt tokens cached.
+   - Usage is recorded for every call.
+8. **Trace.** Every step emits ADR 0007 trace events with `detail.stage`, including the model's reasoning for each decision and each sentence's check and verify verdict. The panel shows which stage the agent is in, and why.
+
+**Measured (live, Muse Spark Open + `muse-spark-1.3`, demo Part A, 2026-10-29):** 3 calls, no fallbacks, 12–21 s per review. The stated-intent beat proposed the shop-side fix 6 of 6 times, with the protected removal rejected by the filter.
 
 ## Options considered
 
@@ -55,11 +53,13 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
 
 - **Easier:**
   - each stage has its own tests;
-  - the comment can't contradict the decisions, and a review is one call shorter (about 7 s of a 60 s budget);
+  - every published sentence is traceable to the nodes it cites, and the comment can't state an action the gate didn't accept;
+  - a review is 3 calls and about 12–21 s, down from 25–35 s;
   - the fallback costs nothing extra, because it reuses the same tools;
   - the panel gets stage names for free.
 - **Harder:**
-  - the comment reads more like a template. The model's voice in Onshape is its questions; its reasoning lives in the panel;
+  - two models, so two hosts to keep healthy. Without the verifier, the comment falls back to code-rendered lines;
+  - the check and verifier can reject good sentences. The cost is a rendered line in their place, never a wrong one;
   - the `forces_setup` threshold (2 groups) is a judgment call, and it needs tests on more than the demo parts;
   - until the cost model lands (RFC 0002 §4), "best option" means fewest unreachable faces, then fewest setups, not dollars.
 - **Revisit:**

@@ -33,7 +33,8 @@ class Reply:
 class ChatModel(Protocol):
     name: str
 
-    def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None) -> Reply: ...
+    def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None,
+             reasoning_effort: str | None = None) -> Reply: ...
 
 
 class ModelUnavailable(Exception):
@@ -90,11 +91,15 @@ class OpenAICompatModel:
             return cls(META_API, env["MODEL_API_KEY"], env["MUSE_SPARK_MODEL_ID"], reasoning_effort="low")
         raise ValueError(f"unknown model {which!r}")
 
-    def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None) -> Reply:
+    def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None,
+             reasoning_effort: str | None = None) -> Reply:
         body = {"model": self.name, "messages": messages, "tools": tools, "tool_choice": "auto",
                 "max_tokens": max(max_tokens or self._max_tokens, MIN_MAX_TOKENS)}
-        if self._effort:
-            body["reasoning_effort"] = self._effort  # Meta Model API; untested on Baseten
+        effort = reasoning_effort or self._effort
+        if effort:
+            # Meta Model API, and Baseten for Spark Open: verified 2026-10-29, "low" cut Spark Open's
+            # completion tokens 4-6x on a real review.
+            body["reasoning_effort"] = effort
         req = urllib.request.Request(
             self._url, data=json.dumps(body).encode(), method="POST",
             headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json"})
