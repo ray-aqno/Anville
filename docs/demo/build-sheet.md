@@ -18,7 +18,7 @@ Onshape feature names and dialogs below are from memory, not checked against the
 | 2 | Extrude `Pocket` (remove) | Sketch on the top face: rectangle (25, 15) to (75, 45), four sketch fillets of r6. Remove 8 mm, blind. |
 | 3 | Hole or Extrude `Mount holes` (remove) | Two Ø8.5 circles (M8 clearance) at (12, 30) and (88, 30). Through all. |
 | 4 | Chamfer `Edge break` | Equal distance, 1 mm, on the **top** long edge at y = 60. |
-| 5 | Chamfer `Weld clearance chamfer` | Equal distance, 2 mm, on the **bottom** long edge at y = 0. **Last feature.** |
+| 5 | Chamfer `Weld clearance chamfer` | Equal distance, 1.5 mm, on the **bottom** long edge at y = 0. **Last feature.** |
 
 **Expected Anville results** (shop: EM12, EM6, EM3 flat endmills at L:D 4):
 - **2 setups: +Z, then −Z.** The weld-clearance chamfer is the *only* face in the −Z setup.
@@ -29,7 +29,7 @@ Onshape feature names and dialogs below are from memory, not checked against the
 - Finishing tools: pocket walls, floor and r6 corners EM12; holes EM6; chamfers EM12.
 - Extraction: about 0.8 s locally (19 faces).
 
-**The story:** the designer chamfered the bottom edge to clear the weld bead where the bracket sits on the frame tube. That one 2 mm chamfer is the only reason to flip the part.
+**The story:** the designer chamfered the bottom edge to clear the weld bead where the bracket sits on the frame tube. That one 1.5 mm chamfer is the only reason to flip the part.
 
 ## Part B: tab plate (the second-part learning beat)
 
@@ -50,5 +50,6 @@ Onshape feature names and dialogs below are from memory, not checked against the
 ## Keep the parts within the model
 
 - **Through holes must stay within a fitting endmill's reach (4×D).** Shop tools have no *type* yet, so there are no drills. Part B was thinned from 25 mm to 20 mm because a 25 mm deep Ø10.5 hole came out unreachable: EM6 reaches only 24 mm. A drill entry with a higher L:D would fix the hole, but the planner would also let that "drill" finish pocket floors.
+- **Keep bottom chamfers at 1.5 mm.** The back-chamfer cutter (Harvey 910480) reaches 2.32 mm past its neck, so 1.5 mm leaves 0.82 mm between the neck and the wall. At 2 mm the gap would be 0.32 mm.
 - **Keep each chamfer to one edge.** Suppression is all-or-nothing per CAD feature (ADR 0002 Amendment 1).
 - **The tools are generic flat endmills.** The plan says EM12 for a 45° chamfer face. A real shop would use a chamfer mill. The setup count, which is what the demo shows, doesn't depend on this.
