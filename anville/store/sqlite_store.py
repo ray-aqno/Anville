@@ -142,7 +142,7 @@ class Store:
         self._conns_lock = threading.Lock()
 
         conn = self._conn()
-        conn.execute("PRAGMA journal_mode=WAL")
+        self._enable_wal(conn)
         conn.executescript(f"BEGIN IMMEDIATE; {SCHEMA} COMMIT;")
 
     def close(self) -> None:
@@ -436,6 +436,20 @@ class Store:
         return _event(row) if row else None
 
     # --- plumbing -----------------------------------------------------------
+
+    def _enable_wal(self, conn: sqlite3.Connection) -> None:
+        """SQLite fails a contended switch to WAL at once, without calling the busy handler (measured
+        2026-10-29), so busy_timeout doesn't cover it: retry for that long instead. The mode is stored
+        in the file, so only a fresh database's first open actually switches."""
+        deadline = time.monotonic() + self._busy_timeout_ms / 1000
+        while True:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e) or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.02)
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
