@@ -3,7 +3,7 @@
 - **Status:** Draft (revised after two Codex review passes, 2026-10-28)
 - **Date:** 2026-10-28
 - **Answers (in part):** the brief's open question "Shop profile format: machines, tool library, stock, fixturing, setup-cost rule"
-- **Depends on:** PR #12 (Part A's chamfer 2 mm → 1.5 mm). **Merge #12 first.** At 2 mm, Part A fails check c in §2, and this RFC's one-setup route doesn't apply to it.
+- **Depends on:** PR #12 (Part A's chamfer 2 mm → 1.5 mm), **merged**. At 2 mm, Part A would fail check c in §2, and this RFC's one-setup route wouldn't apply to it.
 - **Touches:**
   - ADR 0002 (the objective is $ at quantity; `ShopEdit`s);
   - ADR 0002 Amendment 1 (`remove_feature` is rejected on stated-intent faces);
@@ -44,16 +44,17 @@ A back-chamfer tool `T` finishes an exterior edge chamfer `F` from +Z only when 
 
 Each part is evaluated separately with 910480 (head 12.70 mm, neck 8.05 mm, so 2.32 mm of head past the neck):
 
-| # | Check | Part A at 2 mm (today's `main`) | Part A at 1.5 mm (after #12) | Part B at 1.5 mm |
+| # | Check | Part A at 2 mm (before #12) | Part A at 1.5 mm (current) | Part B at 1.5 mm |
 |---|---|---|---|---|
 | a | The cutter angle matches the chamfer angle (45°) | ✓ | ✓ | ✓ |
 | b | Leg ≤ length of cut (2.24 mm) | 2.0 ✓ | 1.5 ✓ | 1.5 ✓ |
 | c | **Neck clearance:** (head − neck)/2 − leg ≥ 0.5 mm | **0.32 ✗**: the chamfer stays in −Z, 2 setups | **0.82 ✓** | **0.82 ✓** |
 | d | Neck length ≥ stock height + 5 mm | 63.5 ≥ 25 ✓ | ✓ | ✓ |
 
-So the back-chamfer route in §4 is priced for Part A **only at 1.5 mm.** With a 2 mm chamfer, the planner keeps 2 setups and says check c failed by 0.18 mm. The fix for that is a cutter with a thinner neck relative to its head, or the smaller chamfer.
-| e | **Swept solid, not rays (Codex pass 2):** for a straight edge, sweeping the head and the neck along the cutting pass, overtravel included, each traces a prism with rounded ends. Build both as OCC solids. The intersection of each with the part, apart from the chamfer material being removed, must be empty. | OCC boolean in `extract` |
-| f | **Workholding:** the same swept solids must not intersect simple box models of the jaws (with their reliefs) or of the parallels (§3) | OCC boolean |
+| e | **Swept solid, not rays (Codex pass 2):** for a straight edge, sweeping the head and the neck along the cutting pass, overtravel included, each traces a prism with rounded ends. Build both as OCC solids. The intersection of each with the part, apart from the chamfer material being removed, must be empty. | OCC boolean in `extract` | OCC boolean in `extract` | OCC boolean in `extract` |
+| f | **Workholding:** the same swept solids must not intersect simple box models of the jaws (with their reliefs) or of the parallels (§3) | OCC boolean | OCC boolean | OCC boolean |
+
+So the back-chamfer route in §4 is priced for Part A **only at 1.5 mm.** With a 2 mm chamfer, the planner would keep 2 setups and say check c failed by 0.18 mm. The fix for that is a cutter with a thinner neck relative to its head, or the smaller chamfer.
 
 If any check fails, the face stays in its −Z setup, and the plan says which check failed and by how much (the geometry session's negative tests). The checks prove **nominal** clearance from catalog dimensions. The setup sheet still asks the machinist to verify the toolpath at the machine.
 
