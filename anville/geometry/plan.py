@@ -107,14 +107,26 @@ def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3, back_chamf
     """Fewest setups that finish every reachable face; unreachable faces come back with a reason.
 
     `back_chamfer` takes the results of `assess_back_chamfer` (RFC 0002): a chamfer whose checks a-f
-    all pass, for a cutter this shop owns, can also be finished from +Z with that cutter.
+    all pass, for a cutter this shop owns, can also be finished from +Z with that cutter. The jaws
+    grip across the chamfered edge, so one setup back-chamfers along one edge axis only: each axis is
+    tried and the plan with the fewest setups wins (ties go to X).
     """
     if axes not in (3, 5):
         raise ValueError(f"axes must be 3 or 5, got {axes}")
-    part = _Part(facts)
-    tools = sorted(shop.tools, key=lambda t: -t.diameter)
     owned = {t.name: t for t in shop.back_chamfer_tools}
     from_top = {a.face_id: owned[a.tool] for a in back_chamfer if a.ok and a.tool in owned}
+    jaw_axis = {c.face_id: c.axis for c in facts.edge_chamfers}
+    options = sorted({jaw_axis.get(fid, "") for fid in from_top})
+    if len(options) <= 1:
+        return _plan(facts, shop, axes, from_top)
+    plans = [_plan(facts, shop, axes, {fid: t for fid, t in from_top.items() if jaw_axis.get(fid, "") == ax})
+             for ax in options]
+    return min(plans, key=lambda p: (p.count, len(p.unreachable)))
+
+
+def _plan(facts: PartFacts, shop: ShopProfile, axes: int, from_top: dict) -> SetupPlan:
+    part = _Part(facts)
+    tools = sorted(shop.tools, key=lambda t: -t.diameter)
     fits: dict[str, dict[int, Tool]] = {d: {} for d in DIRECTIONS}
     unreachable = []
     for face in facts.faces:

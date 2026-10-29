@@ -196,10 +196,21 @@ def stopped_chamfer():
     return _fuse(part, _box(60, 0, 0, 40, 2, 2))
 
 
+def both_long_chamfers():
+    """1.5 mm chamfers on both long bottom edges (y = 0 and y = 60): one jaw axis, checked as one fixture."""
+    part = _chamfer(_box(0, 0, 0, 100, 60, 20), 1.5, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
+    return _chamfer(part, 1.5, lambda x, y, z: abs(y - 60) < 1e-6 and abs(z) < 1e-6)
+
+
+def narrow_bar():
+    """100 × 6 × 20 with a 1.5 mm bottom chamfer: the default parallel (7.35 mm in) would miss the part."""
+    return _chamfer(_box(0, 0, 0, 100, 6, 20), 1.5, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
+
+
 PARTS = {f.__name__: f for f in (plain_block, two_pockets, side_hole, deep_slot, tight_corner, clevis, undercut,
                                  wedge, kinked_pocket, demo_bracket, demo_bracket_unchamfered,
                                  demo_bracket_b, demo_bracket_b_unchamfered, demo_bracket_2mm, split_edge_chamfer,
-                                 stopped_chamfer)}
+                                 stopped_chamfer, both_long_chamfers, narrow_bar)}
 
 
 def write_step(shape, path: Path) -> Path:

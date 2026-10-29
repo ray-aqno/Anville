@@ -50,6 +50,9 @@ class SoftJaws:
     jaw_width: float = 152.4               # mm (6"), centred on the part
     overtravel: float | None = None        # mm past each end of the edge; None = head radius
     relief_margin: float = 1.0             # mm around the swept cutter
+    # Share of each jaw's grip face the reliefs must leave. 50% is a conservative bar, not a measured one:
+    # soft jaws hold by friction over their contact patch, and Part A keeps 96%. Confirm with the machinist.
+    min_grip: float = 0.5
 
 
 @dataclass(frozen=True)

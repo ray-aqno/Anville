@@ -4,7 +4,10 @@ from dataclasses import replace
 
 import pytest
 
-from anville.geometry import HARVEY_910480, ShopProfile, SoftJaws, Tool, assess_back_chamfer, min_setups
+from anville.geometry import (
+    HARVEY_910480, Access, EdgeChamfer, FaceFacts, PartFacts, ShopProfile, SoftJaws, Tool, assess_back_chamfer,
+    face_groups, min_setups,
+)
 
 MILLS = [Tool("EM12", 12.0, 4.0), Tool("EM6", 6.0, 4.0), Tool("EM3", 3.0, 4.0)]
 DEMO_SHOP = ShopProfile(tools=MILLS, back_chamfer_tools=[HARVEY_910480], fixture=SoftJaws())
@@ -139,3 +142,49 @@ def test_no_fixture_stated_fails_workholding(step, facts):
     shop = replace(DEMO_SHOP, fixture=None)
     f = _check(_assess(step, facts, "demo_bracket", shop), "f")
     assert not f.passed and "fixture" in f.detail
+
+
+# ---- Greptile on PR #15 ----------------------------------------------------------------------
+
+class _Pass:
+    """A stand-in for a passing BackChamferAccess (the planner reads face_id, tool and ok)."""
+
+    def __init__(self, face_id):
+        self.face_id, self.tool, self.ok = face_id, HARVEY_910480.name, True
+
+
+def test_chamfers_needing_different_jaws_cannot_share_one_setup():
+    """Jaws grip across the chamfered edge, so an X-edge and a Y-edge chamfer need different fixtures."""
+    def face(fid, d):
+        return FaceFacts(id=fid, surface="plane", area=1.0, centroid=(0, 0, 0), stock=False,
+                         access={d: Access(1.0, 5.0)})
+    faces = [face(1, "+Z"), face(2, "-Z"), face(3, "-Z")]
+    chamfers = [EdgeChamfer(2, 9, 9, "X", "-Y", 45.0, 1.5, (0, 1.5, 0), (100, 1.5, 0)),
+                EdgeChamfer(3, 9, 9, "Y", "-X", 45.0, 1.5, (1.5, 0, 0), (1.5, 60, 0))]
+    f = PartFacts(source_sha256="t", bbox=((0, 0, 0), (100, 60, 20)), faces=faces, edges=[],
+                  groups=face_groups(faces, []), extract_s=0.0, edge_chamfers=chamfers)
+    plan = min_setups(f, DEMO_SHOP, back_chamfer=[_Pass(2), _Pass(3)])
+    assert plan.count == 2
+    back_chamfered = [a.face_id for s in plan.setups for a in s.faces if a.tool == HARVEY_910480.name]
+    assert len(back_chamfered) == 1  # one jaw orientation per setup
+
+
+def test_chamfers_on_one_axis_are_checked_against_one_fixture(step, facts):
+    """Both long edges: each jaw gets both reliefs, both parallels are checked, and it is still 1 setup."""
+    f = facts("both_long_chamfers")
+    access = assess_back_chamfer(step("both_long_chamfers"), f, DEMO_SHOP)
+    assert len(access) == 2 and all(a.ok for a in access)
+    assert all(len(a.reliefs) == 4 for a in access)  # 2 jaws × 2 chamfer corners, shared by both
+    assert min_setups(f, DEMO_SHOP, back_chamfer=access).count == 1
+
+
+def test_parallel_must_be_under_the_part(step, facts):
+    f = _check(_assess(step, facts, "narrow_bar"), "f")
+    assert not f.passed and "parallel" in f.detail and "under the part" in f.detail
+
+
+@pytest.mark.parametrize("fixture", [SoftJaws(min_grip=0.99), SoftJaws(relief_margin=60.0)])
+def test_reliefs_must_leave_enough_grip(fixture, step, facts):
+    shop = replace(DEMO_SHOP, fixture=fixture)
+    f = _check(_assess(step, facts, "demo_bracket", shop), "f")
+    assert not f.passed and "grip" in f.detail

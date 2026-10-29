@@ -73,11 +73,30 @@ def assess_back_chamfer(step_path: str | Path, facts: PartFacts, shop: ShopProfi
     if not facts.edge_chamfers or not shop.back_chamfer_tools:
         return []
     part = _read(Path(step_path))
-    return [_assess(part, facts, ch, tool, shop.fixture)
-            for ch in facts.edge_chamfers for tool in shop.back_chamfer_tools]
+    out = []
+    for tool in shop.back_chamfer_tools:
+        # Chamfers along one edge axis share one jaw orientation, so check f sees all of them in one fixture.
+        for axis in sorted({ch.axis for ch in facts.edge_chamfers}):
+            group = [ch for ch in facts.edge_chamfers if ch.axis == axis]
+            out += _assess_group(part, facts, group, tool, shop.fixture)
+    return out
 
 
-def _assess(part, facts: PartFacts, ch: EdgeChamfer, tool: BackChamferTool, fixture: SoftJaws | None):
+def _assess_group(part, facts: PartFacts, group: list[EdgeChamfer], tool: BackChamferTool,
+                  fixture: SoftJaws | None) -> list[BackChamferAccess]:
+    overtravel = tool.head_diameter / 2 if fixture is None or fixture.overtravel is None else fixture.overtravel
+    rows = []
+    for ch in group:
+        checks = _sizes(ch, tool, facts)
+        head, neck = _swept_cutter(ch, tool, overtravel)
+        checks.append(_check_part(part, head, neck))
+        rows.append((ch, checks, _fuse(head, neck)))
+    check_f, reliefs = _check_workholding([cutter for _, _, cutter in rows], group, facts, tool, fixture)
+    return [BackChamferAccess(ch.face_id, tool.name, checks + [check_f], reliefs) for ch, checks, _ in rows]
+
+
+def _sizes(ch: EdgeChamfer, tool: BackChamferTool, facts: PartFacts) -> list[Check]:
+    """Checks a-d: the cutter's catalog sizes against the chamfer and the stock."""
     R, r = tool.head_diameter / 2, tool.neck_diameter / 2
     lo, hi = facts.bbox
     height = hi[2] - lo[2]
@@ -97,13 +116,7 @@ def _assess(part, facts: PartFacts, ch: EdgeChamfer, tool: BackChamferTool, fixt
     need = height + NECK_REACH_MARGIN
     checks.append(Check("d", tool.neck_length >= need, round(tool.neck_length - need, 3),
                         f"neck length {tool.neck_length:g} mm vs stock height + {NECK_REACH_MARGIN:g} = {need:g} mm"))
-
-    overtravel = R if fixture is None or fixture.overtravel is None else fixture.overtravel
-    head, neck = _swept_cutter(ch, tool, overtravel)
-    checks.append(_check_part(part, head, neck))
-    check_f, reliefs = _check_workholding(head, neck, ch, facts, tool, fixture)
-    checks.append(check_f)
-    return BackChamferAccess(ch.face_id, tool.name, checks, reliefs)
+    return checks
 
 
 # ---- geometry -------------------------------------------------------------------------------
@@ -190,19 +203,21 @@ def _check_part(part, head, neck) -> Check:
     return Check("e", True, round(clearance, 3), f"swept head clear; swept neck clears the part by {clearance:.3f} mm")
 
 
-def _check_workholding(head, neck, ch: EdgeChamfer, facts: PartFacts, tool: BackChamferTool,
+def _check_workholding(cutters: list, chamfers: list[EdgeChamfer], facts: PartFacts, tool: BackChamferTool,
                        fixture: SoftJaws | None) -> tuple[Check, list[Relief]]:
-    """Check f: the swept solids against the jaws (relieved from the swept cutter) and the parallel."""
+    """Check f: every swept cutter of one jaw orientation against one fixture. The jaws are relieved
+    for all the cutters, there is one parallel per chamfered side, each parallel must sit under the
+    part, and each jaw must keep `min_grip` of its grip."""
     if fixture is None:
         return Check("f", False, None, "no fixture stated: the one-setup plan needs relieved soft jaws"), []
-    e, o, _ = _frame(ch)
+    e, _, _ = _frame(chamfers[0])
     lo, hi = facts.bbox
-    ea = 0 if abs(e[0]) > 0.5 else 1          # index of the edge axis
-    oa = 1 - ea                                # index of the outward axis
+    ea = 0 if abs(e[0]) > 0.5 else 1          # index of the edge axis (shared by the group)
+    oa = 1 - ea                                # index of the axis across it
+    names = "XYZ"
     floor = lo[2] - fixture.parallel_height
-    cutter = _fuse(head, neck)
+    problems, reliefs, jaws, kept = [], [], [], {}
 
-    jaws, reliefs = [], []
     centre = (lo[oa] + hi[oa]) / 2
     for label, (a, b) in (("start", (lo[ea] - fixture.jaw_thickness, lo[ea])),
                           ("end", (hi[ea], hi[ea] + fixture.jaw_thickness))):
@@ -210,37 +225,66 @@ def _check_workholding(head, neck, ch: EdgeChamfer, facts: PartFacts, tool: Back
         jlo[ea], jhi[ea] = a, b
         jlo[oa], jhi[oa] = centre - fixture.jaw_width / 2, centre + fixture.jaw_width / 2
         jaw = _box(tuple(jlo), tuple(jhi))
-        if fixture.relieved and _overlap(cutter, jaw) > COLLISION:
-            rlo, rhi = _bbox(BRepAlgoAPI_Common(cutter, jaw).Shape())
-            rlo = tuple(max(v - fixture.relief_margin, j) for v, j in zip(rlo, jlo))
-            rhi = tuple(min(v + fixture.relief_margin, j) for v, j in zip(rhi, jhi))
-            jaw = BRepAlgoAPI_Cut(jaw, _box(rlo, rhi)).Shape()
-            reliefs.append(Relief(label, tuple(round(v, 3) for v in rlo),
-                                  tuple(round(b - a, 3) for a, b in zip(rlo, rhi)),
-                                  round(_contact_kept(rlo, rhi, lo, hi, oa), 3)))
-        jaws.append(jaw)
+        pockets = []
+        if fixture.relieved:
+            for cutter in cutters:
+                if _overlap(cutter, jaw) > COLLISION:
+                    rlo, rhi = _bbox(BRepAlgoAPI_Common(cutter, jaw).Shape())
+                    pockets.append((tuple(max(v - fixture.relief_margin, j) for v, j in zip(rlo, jlo)),
+                                    tuple(min(v + fixture.relief_margin, j) for v, j in zip(rhi, jhi))))
+            for rlo, rhi in pockets:
+                jaw = BRepAlgoAPI_Cut(jaw, _box(rlo, rhi)).Shape()
+        kept[label] = _contact_kept(pockets, lo, hi, oa)
+        reliefs += [Relief(label, tuple(round(v, 3) for v in rlo), tuple(round(b - a, 3) for a, b in zip(rlo, rhi)),
+                           round(kept[label], 3)) for rlo, rhi in pockets]
+        jaws.append((f"{label} jaw", jaw))
 
-    side = ch.start[oa] + o[oa] * ch.leg       # the chamfered side face's plane, along the outward axis
     setback = tool.head_diameter / 2 + 1.0 if fixture.parallel_setback is None else fixture.parallel_setback
-    inner = side - o[oa] * setback             # the parallel's face toward the chamfered side
-    plo, phi = list(lo), list(hi)
-    plo[2], phi[2] = floor, lo[2]
-    plo[oa], phi[oa] = sorted((inner, inner - o[oa] * fixture.parallel_width))
-    parallel = _box(tuple(plo), tuple(phi))
+    parallels = []
+    for ch in chamfers:
+        o = VECTORS[ch.outward]
+        side = ch.start[oa] + o[oa] * ch.leg   # the chamfered side face's plane, along the across axis
+        inner = side - o[oa] * setback         # the parallel's face toward that side
+        a, b = sorted((inner, inner - o[oa] * fixture.parallel_width))
+        if a < lo[oa] - 1e-6 or b > hi[oa] + 1e-6:
+            problems.append(f"parallel at {names[oa]} {a:.2f}..{b:.2f} mm is not under the part "
+                            f"({names[oa]} {lo[oa]:.2f}..{hi[oa]:.2f} mm)")
+        plo, phi = list(lo), list(hi)
+        plo[2], phi[2] = floor, lo[2]
+        plo[oa], phi[oa] = a, b
+        parallels.append(("parallel", _box(tuple(plo), tuple(phi))))
 
-    problems = [f"{n} overlaps the swept cutter by {v:.3g} mm³"
-                for n, v in (("start jaw", _overlap(cutter, jaws[0])), ("end jaw", _overlap(cutter, jaws[1])),
-                             ("parallel", _overlap(cutter, parallel))) if v > COLLISION]
+    for name, body in jaws + parallels:
+        hit = sum(_overlap(cutter, body) for cutter in cutters)
+        if hit > COLLISION:
+            problems.append(f"{name} overlaps the swept cutter by {hit:.3g} mm³")
+    for label, share in kept.items():
+        if share < fixture.min_grip:
+            problems.append(f"reliefs leave {share:.0%} of the {label} jaw's grip, below the {fixture.min_grip:.0%} minimum")
     if problems:
         return Check("f", False, None, "; ".join(problems)), reliefs
-    kept = min((rl.contact_kept for rl in reliefs), default=1.0)
     what = "relieved jaws" if reliefs else "jaws"
-    return Check("f", True, None, f"clear of {what} and the parallel; reliefs keep {kept:.0%} of the jaw grip"), reliefs
+    return Check("f", True, None, f"clear of {what} and {len(parallels)} parallel(s) under the part; "
+                                  f"reliefs keep {min(kept.values()):.0%} of the jaw grip"), reliefs
 
 
-def _contact_kept(rlo, rhi, lo, hi, oa) -> float:
-    """Share of a jaw's grip face (part width × part height) that the relief pocket doesn't cut away."""
-    width, height = hi[oa] - lo[oa], hi[2] - lo[2]
-    cut_w = max(0.0, min(rhi[oa], hi[oa]) - max(rlo[oa], lo[oa]))
-    cut_h = max(0.0, min(rhi[2], hi[2]) - max(rlo[2], lo[2]))
-    return 1.0 - (cut_w * cut_h) / (width * height)
+def _contact_kept(pockets, lo, hi, oa) -> float:
+    """Share of a jaw's grip face (part width × part height) that its relief pockets leave."""
+    rects = []
+    for rlo, rhi in pockets:
+        a0, a1 = max(rlo[oa], lo[oa]), min(rhi[oa], hi[oa])
+        z0, z1 = max(rlo[2], lo[2]), min(rhi[2], hi[2])
+        if a1 > a0 and z1 > z0:
+            rects.append((a0, a1, z0, z1))
+    # Union area of the clipped rectangles, by coordinate compression (a jaw has only a few pockets).
+    xs = sorted({v for r in rects for v in r[:2]})
+    cut = 0.0
+    for x0, x1 in zip(xs, xs[1:]):
+        spans = sorted((r[2], r[3]) for r in rects if r[0] <= x0 and r[1] >= x1)
+        covered, top = 0.0, -math.inf
+        for z0, z1 in spans:
+            if z1 > top:
+                covered += z1 - max(z0, top)
+                top = z1
+        cut += (x1 - x0) * covered
+    return 1.0 - cut / ((hi[oa] - lo[oa]) * (hi[2] - lo[2]))
