@@ -31,11 +31,13 @@ from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
 from OCP.STEPControl import STEPControl_Reader
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_REVERSED, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_REVERSED, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS
 
-from anville.geometry.facts import DIRECTIONS, VECTORS, Access, Edge, FaceFacts, PartFacts, face_groups
+from anville.geometry.facts import (
+    DIRECTIONS, VECTORS, Access, Edge, EdgeChamfer, FaceFacts, PartFacts, face_groups,
+)
 
 SPACING = 2.0            # mm between samples (ADR 0008 §3)
 MIN_GRID, MAX_GRID = 8, 32
@@ -46,6 +48,7 @@ WALL_LIKE = 0.3          # |n projected ⟂ d| above this measures a gap
 TANGENT_DOT = math.cos(math.radians(0.5))  # n1·n2 above this: a smooth (tangent) edge; a 5° kink is sharp
 PRINCIPAL_DOT = 0.999
 STOCK_TOL = 1e-3         # mm
+CHAMFER_ANGLE, CHAMFER_TOL = 45.0, 0.5  # degrees from -Z (RFC 0002 §1)
 FAR = 1e9                # mm, ray length
 
 _SURFACES = {GeomAbs_Plane: "plane", GeomAbs_Cylinder: "cylinder", GeomAbs_Cone: "cone",
@@ -211,6 +214,72 @@ def _edges(shape, faces: ShapeMap) -> list[Edge]:
     return sorted(out, key=lambda e: (e.a, e.b, e.kind, e.axis or ""))
 
 
+def _shared_line(a, b) -> tuple[Vec, Vec] | None:
+    """Endpoints of the straight edge two faces share, if they share one."""
+    exp = TopExp_Explorer(a, TopAbs_EDGE)
+    while exp.More():
+        edge = TopoDS.Edge(exp.Current())
+        inner = TopExp_Explorer(b, TopAbs_EDGE)
+        while inner.More():
+            if edge.IsSame(inner.Current()):
+                curve = BRepAdaptor_Curve(edge)
+                if curve.GetType() != GeomAbs_Line:
+                    return None
+                return _xyz(curve.Value(curve.FirstParameter())), _xyz(curve.Value(curve.LastParameter()))
+            inner.Next()
+        exp.Next()
+    return None
+
+
+def _edge_chamfers(fmap, faces: list[FaceFacts]) -> list[EdgeChamfer]:
+    """RFC 0002 §1: planar, 45° ± 0.5° down and outward, bridging a stock side face and the stock bottom."""
+    by_id = {f.id: f for f in faces}
+    out = []
+    for f in faces:
+        if f.surface != "plane" or f.stock or f.normal is None:
+            continue
+        n = f.normal
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, -n[2]))))
+        horizontal = (n[0], n[1], 0.0)
+        h_len = math.hypot(n[0], n[1])
+        if abs(angle - CHAMFER_ANGLE) > CHAMFER_TOL or h_len == 0:
+            continue
+        outward = next((d for d in ("+X", "-X", "+Y", "-Y")
+                        if _dot(horizontal, VECTORS[d]) / h_len > PRINCIPAL_DOT), None)
+        if outward is None:
+            continue
+        nbrs = [by_id[i] for i in f.stock_neighbors]
+        side = next((g for g in nbrs if g.normal and _dot(g.normal, VECTORS[outward]) > PRINCIPAL_DOT), None)
+        bottom = next((g for g in nbrs if g.normal and g.normal[2] < -PRINCIPAL_DOT), None)
+        if side is None or bottom is None:
+            continue
+        face = TopoDS.Face(fmap.FindKey(f.id))
+        line = _shared_line(face, TopoDS.Face(fmap.FindKey(bottom.id)))
+        if line is None:
+            continue
+        direction = _axpy(line[1], line[0], -1.0)
+        axis = _principal(direction)
+        if axis not in ("X", "Y"):
+            continue
+        # Leg across the edge: the face's width perpendicular to the edge, within its plane, over √2.
+        e = tuple(c / math.sqrt(_dot(direction, direction)) for c in direction)
+        across = (n[1] * e[2] - n[2] * e[1], n[2] * e[0] - n[0] * e[2], n[0] * e[1] - n[1] * e[0])
+        verts = TopExp_Explorer(face, TopAbs_VERTEX)
+        points = []
+        while verts.More():
+            points.append(_xyz(BRep_Tool.Pnt_s(TopoDS.Vertex(verts.Current()))))
+            verts.Next()
+        width = max(_dot(p, across) for p in points) - min(_dot(p, across) for p in points)
+        # Its length comes from the face itself: a chamfer can border several bottom faces (a slot splits them).
+        along = [_dot(p, e) for p in points]
+        start = _axpy(line[0], e, min(along) - _dot(line[0], e))
+        end = _axpy(line[0], e, max(along) - _dot(line[0], e))
+        out.append(EdgeChamfer(face_id=f.id, side_face=side.id, bottom_face=bottom.id, axis=axis, outward=outward,
+                               angle=round(angle, 4), leg=round(width / math.sqrt(2), 4),
+                               start=tuple(round(c, 6) for c in start), end=tuple(round(c, 6) for c in end)))
+    return out
+
+
 def extract(step_path: str | Path) -> PartFacts:
     """Read one solid from STEP and measure every face from the 6 principal directions."""
     t0 = time.perf_counter()
@@ -260,5 +329,10 @@ def extract(step_path: str | Path) -> PartFacts:
             concave_axis=concave[1] if concave else None,
         ))
     edges = _edges(shape, fmap)
+    stock = {f.id for f in faces if f.stock}
+    for f in faces:
+        f.stock_neighbors = sorted({e.b if e.a == f.id else e.a for e in edges
+                                    if f.id in (e.a, e.b) and ({e.a, e.b} - {f.id}) <= stock})
     return PartFacts(source_sha256=digest, bbox=(lo, hi), faces=faces, edges=edges,
-                     groups=face_groups(faces, edges), extract_s=round(time.perf_counter() - t0, 4))
+                     groups=face_groups(faces, edges), extract_s=round(time.perf_counter() - t0, 4),
+                     edge_chamfers=_edge_chamfers(fmap, faces))

@@ -45,6 +45,7 @@ class FaceFacts:
     radius: float | None = None     # cylinders: radius
     concave_radius: float | None = None  # concave cylinders (fillets, holes)
     concave_axis: str | None = None      # "X" | "Y" | "Z" when that cylinder's axis is principal
+    stock_neighbors: list[int] = field(default_factory=list)  # stock faces sharing an edge with this one
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,22 @@ class Edge:
 
 
 @dataclass
+class EdgeChamfer:
+    """An exterior edge chamfer (RFC 0002 §1): planar, 45° ± 0.5° down and outward, bridging a stock
+    side face and the stock bottom face along a straight principal edge."""
+
+    face_id: int
+    side_face: int
+    bottom_face: int
+    axis: str        # "X" | "Y": the chamfered edge's direction
+    outward: str     # "+X" | "-X" | "+Y" | "-Y": the side the chamfer faces
+    angle: float     # degrees between the face normal and -Z
+    leg: float       # mm, measured across the edge: cross-section width / √2
+    start: Vec       # the chamfer's bottom edge (on the stock bottom), one end
+    end: Vec         # and the other
+
+
+@dataclass
 class PartFacts:
     source_sha256: str
     bbox: tuple[Vec, Vec]
@@ -68,6 +85,7 @@ class PartFacts:
     extract_s: float
     units: str = "mm"
     schema_version: int = SCHEMA_VERSION
+    edge_chamfers: list[EdgeChamfer] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -92,8 +110,10 @@ class PartFacts:
                          "access": {k: Access(**a) for k, a in f["access"].items()}})
             for f in d["faces"]
         ]
+        chamfers = [EdgeChamfer(**{**c, "start": tuple(c["start"]), "end": tuple(c["end"])})
+                    for c in d.get("edge_chamfers", [])]
         return cls(**{**d, "bbox": (tuple(d["bbox"][0]), tuple(d["bbox"][1])), "faces": faces,
-                      "edges": [Edge(**e) for e in d["edges"]]})
+                      "edges": [Edge(**e) for e in d["edges"]], "edge_chamfers": chamfers})
 
 
 def _tuple(v):
