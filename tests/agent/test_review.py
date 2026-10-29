@@ -5,7 +5,9 @@ evaluate_edits offers remove_feature (part side, 2 -> 1) and route_machine/5 (sh
 A review is three model calls: plan, decide-and-write, verify (the verifier is a second model).
 """
 
+import http.server
 import json
+import threading
 import time
 import urllib.error
 
@@ -438,3 +440,30 @@ def test_the_http_timeout_is_capped_by_the_call_budget(monkeypatch):
         with pytest.raises(ModelUnavailable):
             m.call([], [], timeout_s=budget)
     assert seen == [30, 120, 120]
+
+
+def test_a_trickling_host_cannot_hold_a_call_past_its_budget():
+    """urllib's timeout is per read: a host sending a byte every 0.5 s never trips a 1 s timeout
+    (measured: 3.5 s for 8 bytes). The whole request must still end within the call's budget."""
+
+    class Trickle(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "8")
+            self.end_headers()
+            for _ in range(8):
+                self.wfile.write(b"x")
+                self.wfile.flush()
+                time.sleep(0.5)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    m = OpenAICompatModel(f"http://127.0.0.1:{srv.server_port}/v1", "k", "m")
+    t0 = time.monotonic()
+    with pytest.raises(ModelUnavailable, match="no complete reply"):
+        m.call([], [], timeout_s=1)
+    assert time.monotonic() - t0 < 1.5
+    srv.shutdown()

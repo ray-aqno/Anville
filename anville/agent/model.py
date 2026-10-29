@@ -9,6 +9,7 @@ a model failure; arguments are parsed as strict JSON (no NaN/Infinity).
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -105,15 +106,37 @@ class OpenAICompatModel:
         req = urllib.request.Request(
             self._url, data=json.dumps(body).encode(), method="POST",
             headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=min(self._timeout, timeout_s or self._timeout)) as resp:
-                raw = resp.read()
-        except urllib.error.HTTPError as e:
-            raise ModelUnavailable(f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}") from None
-        except (urllib.error.URLError, TimeoutError) as e:
-            raise ModelUnavailable(repr(e)[:200]) from None
+        raw = self._send(req, min(self._timeout, timeout_s or self._timeout))
         try:
             return parse_reply(json.loads(raw))
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
             # A 200 with a body we can't read is still an unusable host reply: the stage falls back.
             raise ModelUnavailable(f"malformed response ({type(e).__name__}): {raw[:120]!r}") from None
+
+    @staticmethod
+    def _send(req: urllib.request.Request, budget: float) -> bytes:
+        """The response body, within `budget` seconds for the whole request.
+
+        urllib's timeout bounds each socket read, not the request: a host that trickles bytes never
+        trips it (measured: 3.5 s through a 1 s timeout). So the request runs in a daemon thread
+        that is abandoned at the budget; it ends on its own when its socket times out.
+        """
+        box: dict = {}
+
+        def run() -> None:
+            try:
+                with urllib.request.urlopen(req, timeout=budget) as resp:
+                    box["raw"] = resp.read()
+            except urllib.error.HTTPError as e:
+                box["error"] = ModelUnavailable(f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}")
+            except Exception as e:  # URLError, TimeoutError, a reset socket: all mean no usable reply
+                box["error"] = ModelUnavailable(repr(e)[:200])
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(budget)
+        if worker.is_alive():
+            raise ModelUnavailable(f"no complete reply within {budget:.0f} s")
+        if "error" in box:
+            raise box["error"]
+        return box["raw"]
