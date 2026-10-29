@@ -27,6 +27,12 @@ def test_bottom_chamfer_is_the_only_face_needing_minus_z(name, facts, shop):
     assert [a.face_id for a in plan.setups[1].faces] == [_bottom_chamfer(f).id]
 
 
+@pytest.mark.parametrize("name", DEMO)
+def test_bottom_chamfer_is_1p5_mm_for_back_chamfer_clearance(name, facts):
+    """Harvey 910480: the head reaches 2.32 mm past the neck, so a 1.5 mm leg leaves 0.82 mm to the wall."""
+    assert _bottom_chamfer(facts(name)).access["-Z"].depth == pytest.approx(1.5)
+
+
 def test_top_edge_break_comes_free_in_the_top_setup(facts, shop):
     f = facts("demo_bracket")
     (top_chamfer,) = [x for x in f.faces if x.normal and 0.65 < x.normal[2] < 0.75]

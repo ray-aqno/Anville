@@ -151,8 +151,8 @@ def _demo_bracket_body():
 
 
 def demo_bracket():
-    """Demo part A: top features plus a 2 mm weld-clearance chamfer on one bottom edge. Expect 2 setups (+Z, −Z)."""
-    return _chamfer(_demo_bracket_body(), 2.0, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
+    """Demo part A: top features plus a 1.5 mm weld-clearance chamfer on one bottom edge. Expect 2 setups (+Z, −Z)."""
+    return _chamfer(_demo_bracket_body(), 1.5, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
 
 
 def demo_bracket_unchamfered():
