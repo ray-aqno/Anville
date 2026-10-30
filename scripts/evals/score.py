@@ -54,8 +54,10 @@ def side_of(result, group: str) -> str | None:
 
 
 def shop_fix(result, group: str) -> bool:
-    """Stated intent, or a designer's "keep it": the proposal changes the shop, never the part."""
-    return side_of(result, group) == "shop"
+    """Stated intent, or a designer's "keep it": the proposal changes the shop, never the part, and it
+    changes the plan (live, 2026-10-30: a no-op 5-axis route was proposed on the undercut part)."""
+    d = decision_for(result, group)
+    return side_of(result, group) == "shop" and result.options[d.option_key].changes_plan
 
 
 def any_intent_leads(result, group: str) -> bool | None:

@@ -92,8 +92,8 @@ def cost(usage: list[dict]) -> float:
     total = 0.0
     for u in usage:
         price = next((p for k, p in PRICES.items() if k in (u.get("model") or "")), None)
-        if price is None:
-            continue
+        if price is None:  # charging nothing would let spend pass the budget unseen (Codex)
+            raise ValueError(f"no price for model {u.get('model')!r}: add it to PRICES")
         prompt, out = u.get("prompt_tokens") or 0, u.get("completion_tokens") or 0
         cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
         total += ((prompt - cached) * price[0] + cached * price[1] + out * price[2]) / 1e6
@@ -137,8 +137,10 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
         "lead": d.option_key if d else None, "lead_side": score.side_of(r, g) if g else None,
         "proposals": [f"{r.options[x.option_key].side}:{x.option_key}{' +question' if x.question else ''}"
                       for x in r.decisions if x.action == "propose"],
-        "question": d.question if d else None,
-        "question_names_no_fix": score.question_names_no_fix(d.question if d else None, CATALOG, g or ""),
+        # Every issue's question, so parts with several issues count theirs too (Codex).
+        "questions": [x.question for x in r.decisions if x.question],
+        "questions_naming_a_fix": sum(1 for x in r.decisions if score.question_names_no_fix(
+            x.question, CATALOG, next(i.face_group for i in r.issues if i.id == x.issue_id)) is False),
         "repeated_fixes": score.repeated_fixes(r),
         "rejections": [rejection_kind(e.get("reason", "")) for e in events if e["title"] == "Model answer rejected"],
         "model_sentences": next((e["model_sentences"] for e in events if e["title"] == "Comment assembled"), 0),
@@ -177,8 +179,8 @@ def summarize(name: str, trials: list[list[dict]]) -> dict:
         "model_sentences": sum(t["model_sentences"] for t in turns),
         "sentences_checked": sum(t["sentences_checked"] for t in turns),
         "repeated_fixes": sum(t["repeated_fixes"] for t in turns),
-        "questions": sum(1 for t in turns if t["question"]),
-        "questions_naming_a_fix": sum(1 for t in turns if t["question_names_no_fix"] is False),
+        "questions": sum(len(t["questions"]) for t in turns),
+        "questions_naming_a_fix": sum(t["questions_naming_a_fix"] for t in turns),
     }
     if all(len(trial) == 2 for trial in trials) and trials:
         same = sum(1 for a, b in trials if a["lead"] and a["lead"] == b["lead"])
@@ -238,7 +240,8 @@ def main() -> int:
 
     work = [(name, i) for i in range(a.n) for name in names]  # interleaved: a stopped run covers every scenario
     trials: dict[str, list] = {name: [] for name in names}
-    spent, worst, stopped = 0.0, 0.0, False
+    # Before any trial is measured, assume 5 cents, so even the first trial must fit the budget (Codex).
+    spent, worst, stopped = 0.0, 0.05, False
     with ThreadPoolExecutor(a.workers) as pool:
         running: dict = {}
         while work or running:
@@ -250,7 +253,8 @@ def main() -> int:
                 name, i = work.pop(0)
                 part, owned, _ = SCENARIOS[name]
                 running[pool.submit(run_trial, name, cases[(part, owned)], models)] = name
-                worst = worst or 0.05  # before any trial is measured, assume 5 cents
+            if not running:
+                break
             done, _ = wait(running, return_when=FIRST_COMPLETED)
             for f in done:
                 name = running.pop(f)
@@ -262,6 +266,7 @@ def main() -> int:
                       f"{'+'.join(str(t['latency_s']) for t in trial)} s, lead {[t['lead'] for t in trial]}",
                       flush=True)
 
+    stopped = stopped or spent > a.budget  # a trial that cost more than its estimate still overran
     summary = {name: summarize(name, t) for name, t in trials.items() if t}
     print_table(summary, spent)
     a.out.mkdir(parents=True, exist_ok=True)

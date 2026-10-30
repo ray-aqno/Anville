@@ -359,7 +359,7 @@
    "model_sentences": 18,
    "sentences_checked": 30,
    "repeated_fixes": 0,
-   "questions": 0,
+   "questions": 4,
    "questions_naming_a_fix": 0
   },
   "undercut": {
@@ -415,8 +415,9 @@
    "model_sentences": 23,
    "sentences_checked": 38,
    "repeated_fixes": 0,
-   "questions": 0,
+   "questions": 7,
    "questions_naming_a_fix": 0
   }
- }
+ },
+ "note": "Re-summarised after the Codex review: questions now counted per issue. shop_fix now also requires changes_plan; every Part A lead here (route_machine/5, add_tool BC45-910480) takes it 2 -> 1, so the gated results are unchanged. questions_naming_a_fix covers single-issue parts only in this run."
 }

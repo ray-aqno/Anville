@@ -53,6 +53,24 @@ def test_any_intent_fix_leads_or_does_not_apply():
     assert score.any_intent_leads(result(propose(REMOVE), options=only_part), "G3") is None  # undercut case
 
 
+def test_a_shop_option_that_changes_nothing_is_not_a_fix():
+    """Codex, P1: a no-op shop proposal must fail even while a plan-changing one is offered."""
+    noop = {**OPTIONS, ROUTE: NS(side="shop", changes_plan=False, face_group=None)}
+    assert not score.shop_fix(result(propose(ROUTE), options=noop), "G3")
+    assert not score.any_intent_leads(result(propose(ROUTE), options=noop), "G3")
+    assert score.any_intent_leads(result(propose(BUY), options=noop), "G3")
+
+
+def test_an_unpriced_model_stops_the_gate_instead_of_costing_nothing():
+    """Codex, P2: a zero cost would let spend run past the budget unseen."""
+    import pytest
+    from scripts.evals import gate
+
+    assert gate.cost([{"model": "muse-spark-1.3", "prompt_tokens": 1_000_000, "completion_tokens": 0}]) == 1.25
+    with pytest.raises(ValueError, match="no price"):
+        gate.cost([{"model": "some-new-model", "prompt_tokens": 10, "completion_tokens": 10}])
+
+
 def test_a_dropped_or_quiet_issue_is_not_raised():
     assert score.raised(result(propose(ROUTE)), "G3")
     assert not score.raised(result(NS(issue_id="I1", action="quiet", option_key=None, question=None)), "G3")
