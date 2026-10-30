@@ -309,6 +309,7 @@ class _Runner:
         """One tool call, retried once; None means the stage falls back to its fixed-script step."""
         model = model or self.model
         name, error = tool["function"]["name"], "no model configured"
+        effort = STAGE_EFFORT.get(stage)
         for attempt in (1, 2):
             if model is None or self.calls >= MAX_MODEL_CALLS:
                 error = error if model is None else "call cap reached"
@@ -330,13 +331,15 @@ class _Runner:
             started = time.monotonic()
             try:
                 reply = model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage),
-                                   reasoning_effort=STAGE_EFFORT.get(stage), timeout_s=left)
+                                   reasoning_effort=effort, timeout_s=left)
             except ModelUnavailable as e:
                 # Failed calls are often the slowest: their time belongs in the record too (Codex, PR #24).
                 self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), "error": str(e)})
                 error = f"model unavailable: {e}"
                 break
             self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
+            if reply.finish_reason == "length":  # RFC 0001 budget policy: the retry thinks less (gate on #26)
+                effort = "low"
             if reply.error:
                 error = reply.error
             elif reply.tool != name:
@@ -398,6 +401,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         sel, drop = [x["issue_id"] for x in a["selected"]], [x["issue_id"] for x in a["dropped"]]
         if set(sel) & set(drop) or sorted(sel + drop) != sorted(by_id):
             return None, "every issue must be selected or dropped exactly once"
+        if not sel:  # code found these issues; raising none of them left a bare setup count (gate on #26)
+            return None, "select at least one issue: each one costs this part a setup or a reachable face"
         groups = {by_id[i].face_group for i in sel}
         for r in a["requests"]:
             if set(r) - {"kind", "face_group"}:
@@ -418,6 +423,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         # catalog cutter (live, 2026-10-29: it asked for route and remove only, 4 of 4, and the 910480 was
         # never offered). The model still chooses which part-side edits are worth scoring.
         requests = requests + [r for i in selected for r in shop_side_requests(by_id[i].face_group)
+                               if r not in requests]
+        # Part edits too, where the designer's answer could change the plan (the ask gate is open): without
+        # them `ask_only` and the conditional line never exist (gate on #26: undercut went quiet 3 of 10).
+        requests = requests + [r for i in selected if gates[i] for r in all_requests(by_id[i].face_group)
                                if r not in requests]
     emit("decision", "Issues chosen", stage="plan", selected=selected)
     if not selected:
@@ -675,9 +684,14 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
+    said = set()  # a part-wide fix (the 5-axis route) is named once, for the first issue it fixes
     for d in decisions:
-        if d.issue_id not in covered:
+        if d.issue_id not in covered and d.action == "propose" and d.option_key in said:
+            lines.append(f"{by_id[d.issue_id].face_group}: the same change covers it.")
+        elif d.issue_id not in covered:
             lines.append(render_line(d, by_id, intents, options))
+        if d.action == "propose":
+            said.add(d.option_key)
         if d.action == "propose" and d.option_key in (paybacks or {}):  # dollars are stated by code only
             lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
         if d.question:

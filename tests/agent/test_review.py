@@ -346,10 +346,12 @@ def test_no_model_runs_the_whole_review_as_the_fixed_script(part_a, shop, chamfe
     assert r.decisions[0].option_key == ROUTE
 
 
-def test_when_planning_drops_everything_the_review_stops_there(part_a, shop):
-    r = run_review(part_a, shop, Scripted(plan(selected=(), dropped=("I1",))))
-    assert r.model_calls == 1 and r.fallbacks == [] and r.decisions == []
-    assert r.comment == "Anville reviewed this version: it machines in 2 setup(s)."
+def test_when_planning_drops_everything_twice_the_fixed_script_raises_the_issues(part_a, shop, chamfer):
+    """It used to stop at a bare setup count (2026-10-28); the gate on #26 counted that a miss."""
+    empty, wrong = plan(selected=(), dropped=("I1",)), call("not_decide")
+    r = run_review(part_a, shop, Scripted(empty, empty, wrong, wrong))
+    assert r.fallbacks == ["plan", "decide"] and [d.issue_id for d in r.decisions] == ["I1"]
+    assert any(line.startswith(f"{chamfer}: ") for line in r.comment.splitlines())
 
 
 # --- model client ------------------------------------------------------------------
@@ -824,3 +826,41 @@ def test_the_estimate_says_its_rates_are_placeholders(undercut, costed):
     """Codex, PR #26: most DLL inputs are placeholders, and the comment must say so where it shows dollars."""
     line = next(x for x in run_review(undercut, costed, None).comment.splitlines() if x.startswith("At "))
     assert "placeholder shop rates" in line
+
+
+def test_part_edits_are_scored_where_the_answer_could_change_the_plan(undercut, shop):
+    """Gate on #26: Plan asked for the route only, so no part edit was scored, `ask_only` stayed empty
+    and the review went quiet on the undercut (3 of 10). Like the shop-side kinds, code scores them."""
+    wrong = call("not_decide")
+    r = run_review(undercut, shop, Scripted(plan({"kind": "route_machine"}, dropped=("I2",)), wrong, wrong))
+    assert BORE_REMOVE in r.options
+    assert "If G9 isn't needed, removing G9 takes it to 0 unreachable face(s)." in r.comment.splitlines()
+
+
+def test_a_plan_that_raises_nothing_is_retried(part_a, shop, chamfer):
+    """Gate on #26: Plan selected nothing in 2 of 30 Part A reviews, and the comment only counted setups.
+    Code found the issue, so an empty selection is rejected and the stage retries."""
+    model = Scripted(plan(selected=(), dropped=("I1",)), plan(*requests_for(chamfer)), decide(propose_route()))
+    r = run_review(part_a, shop, model)
+    assert "plan" not in r.fallbacks and "Your previous answer was rejected" in model.sent[1][0][1]["content"]
+    assert any(line.startswith(f"{chamfer}: ") for line in r.comment.splitlines())
+
+
+def test_a_plan_cut_off_for_length_retries_at_low_effort(part_a, shop, chamfer):
+    """Gate on #26: two_pockets' Plan hit its cap twice at the default effort. RFC 0001's budget
+    policy: the retry runs at lower effort."""
+    cut = Reply(tool=None, arguments=None, finish_reason="length",
+                error="ran out of tokens while reasoning (budget failure)")
+    model = Scripted(cut, plan(*requests_for(chamfer)), decide(propose_route()))
+    run_review(part_a, shop, model)
+    assert model.efforts[:2] == [None, "low"]
+
+
+def test_one_route_is_said_once(shop, tmp_path):
+    """Gate on #26: the fallback said "Sending it to an outside 5-axis shop" for G8 and again for G10."""
+    from tests.geometry.parts import PARTS, write_step
+
+    facts = extract(write_step(PARTS["two_pockets"](), tmp_path / "p.step"))
+    lines = run_review(facts, shop, None).comment.splitlines()
+    assert sum("outside 5-axis shop" in line for line in lines) <= 1
+    assert sum(line.endswith("the same change covers it.") for line in lines) >= 1, lines
