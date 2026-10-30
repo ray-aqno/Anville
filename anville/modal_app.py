@@ -21,9 +21,9 @@ from pathlib import Path
 import modal
 
 try:  # Present in the container image; module-level so FastAPI can resolve the annotation.
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException, Query, Request
 except ImportError:  # local deploy environment doesn't need FastAPI
-    FastAPI = HTTPException = Request = None
+    FastAPI = HTTPException = Query = Request = None
 
 from anville.connectors.onshape.events import (
     COMMENT_CREATE,
@@ -95,6 +95,9 @@ STORE_OPS = frozenset({
     "append_trace", "trace_after", "append_ledger", "read_ledger",
     "reserve_call", "release_call", "calls",
 })
+# The grant's redirect must match the OAuth app's registration exactly (ADR 0007, Amendment 1).
+OAUTH_CALLBACK = "/oauth/callback"
+OAUTH_STATE_TTL_S = 600
 
 
 class _Prefixed:
@@ -130,6 +133,27 @@ def _client():
     return OnshapeClient.from_env(os.environ, ledger=_StoreLedger())
 
 
+def _oauth_redirect() -> str:
+    """The deployed callback URL. Built from a constant, not the request: the registered redirect must
+    match exactly, and behind Modal's proxy the request may not see https."""
+    return os.environ.get("ANVILLE_PUBLIC_URL", "https://ray-aqno--anville-web.modal.run") + OAUTH_CALLBACK
+
+
+def _anville_client():
+    """A client that acts as the Anville account (ADR 0007, Amendment 1), or None: no grant yet, or the
+    refresh failed. None means the comment goes out on the owner's keys under an "Anville:" header."""
+    from anville.connectors.onshape.client import OnshapeClient
+
+    try:
+        token = StoreSvc().oauth_token.remote()
+    except Exception as e:
+        _log("oauth_token_failed", error=repr(e)[:300])
+        return None
+    if not token:
+        return None
+    return OnshapeClient.from_env(os.environ, ledger=_StoreLedger(), auth_header=f"Bearer {token}")
+
+
 def _allowed() -> set[str]:
     from anville.env import allowed_document_ids
 
@@ -144,7 +168,7 @@ def _event_ts(event: dict) -> float | None:
         return None
 
 
-@app.cls(image=image, volumes={"/store": store_vol}, max_containers=1, timeout=600)
+@app.cls(image=image, secrets=secrets, volumes={"/store": store_vol}, max_containers=1, timeout=600)
 @modal.concurrent(max_inputs=32)  # sync methods run on threads; Store keeps one connection per thread
 class StoreSvc:
     """The only process that opens the database file (ADR 0006 §2): last write wins on a Volume."""
@@ -155,6 +179,22 @@ class StoreSvc:
 
         # Store serializes after_commit itself; record() returns only once the event is durable.
         self.s = Store("/store/anville.db", after_commit=store_vol.commit)
+        from anville.connectors.onshape.oauth import GrantKeeper, refresh
+
+        # One container (max_containers=1) and one lock: each refresh rotates the refresh token.
+        self.keeper = GrantKeeper(self.s, lambda g: refresh(
+            g, os.environ["ONSHAPE_OAUTH_CLIENT_ID"], os.environ["ONSHAPE_OAUTH_CLIENT_SECRET"]))
+
+    @modal.method()
+    def save_grant(self, grant) -> None:
+        """A new grant from the callback, saved under the keeper's lock (Codex, OAuth PR). get_grant is
+        never exposed: callers get an access token from oauth_token(), never the refresh token."""
+        self.keeper.replace(grant)
+
+    @modal.method()
+    def oauth_token(self) -> str | None:
+        """Anville's access token, refreshed if it's near expiry; None before the account has granted access."""
+        return self.keeper.token(now=time.time())
 
     @modal.method()
     def call(self, op: str, *args, **kw):
@@ -206,6 +246,59 @@ def web():
 
         return {"python": sys.version.split()[0], "fastapi": fastapi.__version__,
                 "request_annotation": repr(hook.__annotations__.get("request"))}
+
+    @api.get("/oauth/start")
+    def oauth_start(key: str = ""):
+        """Start the Anville account's one-time grant. Gated by its own admin key, not the webhook secret
+        (Codex, OAuth PR); F2: a wrong key looks like an unknown route. Rotate the key after use: it
+        travels in a query string."""
+        import secrets as pysecrets
+
+        from fastapi.responses import RedirectResponse
+
+        from anville.connectors.onshape.oauth import admin_key_ok, authorize_url
+
+        if not admin_key_ok(key, os.environ):
+            raise HTTPException(status_code=404)
+        nonce = pysecrets.token_urlsafe(24)
+        state[f"oauth_state:{nonce}"] = time.time()
+        return RedirectResponse(authorize_url(os.environ["ONSHAPE_OAUTH_CLIENT_ID"], _oauth_redirect(), nonce))
+
+    @api.get(OAUTH_CALLBACK)
+    def oauth_callback(code: str = "", state_: str = Query("", alias="state")):
+        """Onshape sends the account back here. The state must be one /oauth/start issued, used once."""
+        from dataclasses import replace
+        from html import escape
+
+        from fastapi.responses import HTMLResponse
+
+        from anville.connectors.onshape.oauth import account_error, exchange_code
+
+        try:
+            issued = state.pop(f"oauth_state:{state_}") if state_ else None
+        except KeyError:
+            issued = None
+        if not code or issued is None or time.time() - issued > OAUTH_STATE_TTL_S:
+            raise HTTPException(status_code=404)
+        grant = exchange_code(code, os.environ["ONSHAPE_OAUTH_CLIENT_ID"],
+                              os.environ["ONSHAPE_OAUTH_CLIENT_SECRET"], _oauth_redirect())
+        try:  # which account granted access: only the configured Anville account is saved (Codex, OAuth PR)
+            from anville.connectors.onshape.client import OnshapeClient
+
+            me = OnshapeClient.from_env(os.environ, ledger=_StoreLedger(),
+                                        auth_header=f"Bearer {grant.access_token}").get("/users/sessioninfo")
+        except Exception as e:
+            _log("oauth_whoami_failed", error=repr(e)[:200])
+            me = {}
+        refused = account_error(me, os.environ.get("ANVILLE_ACCOUNT_EMAIL", ""))
+        if refused:
+            _log("oauth_refused", reason=refused)
+            return HTMLResponse(f"<p>Not connected: {escape(refused)}.</p>", status_code=403)
+        grant = replace(grant, user=str(me.get("name") or ""))
+        StoreSvc().save_grant.remote(grant)
+        _log("oauth_granted", user=grant.user)
+        return HTMLResponse(f"<p>Anville is connected as <b>{escape(grant.user or 'this account')}</b>. "
+                            "Comments will post under its name.</p>")
 
     @api.post("/hook/{token}")
     async def hook(token: str, request: Request):
@@ -351,7 +444,9 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
 
     # Reserve before posting, so a crash mid-post can't produce a second comment.
     if store.call.remote("reserve_post", ev.key, "review"):
-        comment = client.post("/comments", {
+        from anville.connectors.onshape.oauth import post_as_anville
+
+        comment, identity = post_as_anville(_anville_client(), client, {
             "documentId": did,
             "versionId": vid,
             "elementId": eid,
@@ -360,7 +455,7 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
         state[f"self:{comment['id']}"] = time.time()
         store.call.remote("complete_post", ev.key, "review", comment["id"])
         timing["comment_posted_at"] = time.time()
-        trace.add("comment_posted", "Posted the review", comment_id=comment["id"])
+        trace.add("comment_posted", "Posted the review", comment_id=comment["id"], posted_as=identity)
     trace.add("run_finished", "Review finished")
     trace.flush()
 
