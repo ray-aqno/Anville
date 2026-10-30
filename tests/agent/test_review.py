@@ -5,6 +5,8 @@ evaluate_edits offers remove_feature (part side, 2 -> 1) and route_machine/5 (sh
 A review is three model calls: plan, decide-and-write, verify (the verifier is a second model).
 """
 
+import re
+
 import http.server
 import json
 import threading
@@ -194,7 +196,7 @@ def test_an_unverified_action_sentence_is_replaced_by_its_rendered_line(part_a, 
                    stated={chamfer: "Weld clearance chamfer"})
     assert r.comment.splitlines() == [
         f"{chamfer} alone forces the -Z setup.",
-        f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s). It changes the shop, not the part. "
+        f"{chamfer}: Sending it to an outside 5-axis shop takes it from 2 to 1 setup(s). It changes the shop, not the part. "
         f"{chamfer} stays as designed: Weld clearance chamfer.",
     ]
 
@@ -266,7 +268,7 @@ def test_an_unknown_intent_is_flagged_and_a_fix_proposed_in_one_comment(part_a, 
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with(f"Is the chamfer on {chamfer} needed?")))
     assert r.fallbacks == [] and [(d.action, d.option_key) for d in r.decisions] == [("propose", ROUTE)]
     lines = r.comment.splitlines()
-    assert any(line.startswith(f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s).") for line in lines)
+    assert any(line.startswith(f"{chamfer}: Sending it to an outside 5-axis shop takes it from 2 to 1 setup(s).") for line in lines)
     assert lines[-1] == (f"{chamfer}'s purpose isn't on record. Is the chamfer on {chamfer} needed? "
                          "The answer could change the best plan.")
 
@@ -288,7 +290,7 @@ def test_the_fallback_flags_and_proposes_when_intent_is_unknown(part_a, shop, ch
     r = run_review(part_a, shop, None, back_chamfer=catalog_access)
     (d,) = r.decisions
     assert (d.action, d.option_key) == ("propose", BUY) and d.question
-    assert BUY in r.comment and "purpose isn't on record" in r.comment
+    assert "Buying the 910480 back-chamfer cutter" in r.comment and "purpose isn't on record" in r.comment
 
 
 def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, shop, chamfer):
@@ -300,7 +302,7 @@ def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, 
     r = run_review(part_a, shop, model, verifier=Scripted(verdicts(True), name="verifier"))
     assert "Routing to a five-axis takes the part to 1 setup." in r.comment
     assert r.comment.splitlines()[-1].endswith("Is it needed? The answer could change the best plan.")
-    assert f"{ROUTE} takes it from" not in r.comment  # the verified sentence replaces the rendered line
+    assert "Sending it to an outside 5-axis shop takes it from" not in r.comment  # the verified sentence replaces the rendered line
 
 
 def test_an_accepted_question_with_a_slot_is_filled_when_rendered(part_a, shop, chamfer):
@@ -344,10 +346,12 @@ def test_no_model_runs_the_whole_review_as_the_fixed_script(part_a, shop, chamfe
     assert r.decisions[0].option_key == ROUTE
 
 
-def test_when_planning_drops_everything_the_review_stops_there(part_a, shop):
-    r = run_review(part_a, shop, Scripted(plan(selected=(), dropped=("I1",))))
-    assert r.model_calls == 1 and r.fallbacks == [] and r.decisions == []
-    assert r.comment == "Anville reviewed this version: it machines in 2 setup(s)."
+def test_when_planning_drops_everything_twice_the_fixed_script_raises_the_issues(part_a, shop, chamfer):
+    """It used to stop at a bare setup count (2026-10-28); the gate on #26 counted that a miss."""
+    empty, wrong = plan(selected=(), dropped=("I1",)), call("not_decide")
+    r = run_review(part_a, shop, Scripted(empty, empty, wrong, wrong))
+    assert r.fallbacks == ["plan", "decide"] and [d.issue_id for d in r.decisions] == ["I1"]
+    assert any(line.startswith(f"{chamfer}: ") for line in r.comment.splitlines())
 
 
 # --- model client ------------------------------------------------------------------
@@ -403,7 +407,7 @@ def test_an_action_sentence_that_hides_the_proposal_does_not_replace_it(part_a, 
     model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=[sentences(chamfer)[0], hiding]))
     verifier = Scripted(verdicts(True), name="verifier")
     r = run_review(part_a, shop, model, verifier=verifier, stated={chamfer: "Weld clearance chamfer"})
-    assert f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s)." in r.comment
+    assert f"{chamfer}: Sending it to an outside 5-axis shop takes it from 2 to 1 setup(s)." in r.comment
 
 
 @pytest.mark.parametrize("comment", [["just text"], [{"text": "x", "role": "context"}],
@@ -430,7 +434,7 @@ def test_malformed_verdicts_are_rejected_and_no_prose_is_published(part_a, shop,
 def test_a_protected_face_with_no_stated_reason_keeps_the_proposal(part_a, shop, chamfer):
     keep = [{"id": 3, "face_group": chamfer, "rule": "keep", "reason": ""}]
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), decide(propose_route())), constraints=keep)
-    assert r.comment.splitlines()[-1] == (f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s). It changes the shop, "
+    assert r.comment.splitlines()[-1] == (f"{chamfer}: Sending it to an outside 5-axis shop takes it from 2 to 1 setup(s). It changes the shop, "
                                           f"not the part. {chamfer} stays as designed.")
 
 
@@ -577,9 +581,9 @@ def test_with_unknown_intent_a_lead_with_removal_is_rejected_for_a_shop_side_fix
 def test_removal_appears_only_as_codes_conditional_line_next_to_the_question(part_a, shop, chamfer):
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with("Is it needed?")))
     lines = r.comment.splitlines()
-    assert lines[-2:] == [f"If {chamfer} isn't needed, {REMOVE} also takes it to 1 setup(s).",
+    assert lines[-2:] == [f"If {chamfer} isn't needed, removing {chamfer} also takes it to 1 setup(s).",
                           f"{chamfer}'s purpose isn't on record. Is it needed? The answer could change the best plan."]
-    assert sum(REMOVE in line for line in lines) == 1
+    assert sum(f"removing {chamfer}" in line for line in lines) == 1
 
 
 def test_model_prose_cannot_offer_the_removal_when_intent_is_unknown(part_a, shop, chamfer):
@@ -642,6 +646,78 @@ def test_a_failed_call_still_records_its_latency(part_a, shop, chamfer):
     assert failed["stage"] == "plan" and isinstance(failed["latency_s"], float) and "no complete reply" in failed["error"]
 
 
+# --- dollars (S7, shop lane PR #20): code states the payback, never the model --------------------------
+
+from anville.agent.review import payback_line  # noqa: E402
+from anville.shop import DLL_COSTS, Shop  # noqa: E402
+
+
+@pytest.fixture
+def costed(shop):
+    return Shop(tools=shop.tools, fixture=shop.fixture, name="Test shop", costs=DLL_COSTS)
+
+
+def test_a_purchase_proposal_states_its_payback_range_in_code(part_a, costed, chamfer, catalog_access):
+    events = []
+    model = Scripted(plan(*requests_for(chamfer)),
+                     decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}))
+    r = run_review(part_a, costed, model, back_chamfer=catalog_access,
+                   emit=lambda kind, title, **d: events.append((title, d)))
+    assert ("Buying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); "
+            "below that, keep the flip.") in r.comment.splitlines()
+    (buy,) = [d for t, d in events if t == "Option scored" and d["key"] == BUY]
+    assert buy["payback_mid"] == 21 and buy["payback"] == [3, 331] and buy["costs"]  # the panel's dollars
+
+
+def test_other_proposals_and_unpriced_shops_carry_no_dollars(part_a, shop, costed, chamfer, catalog_access):
+    route = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())),
+                       back_chamfer=catalog_access)
+    assert "pays off" not in route.comment
+    buy = decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"})
+    plain = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), buy), back_chamfer=catalog_access)
+    assert plain.decisions[0].option_key == BUY and "pays off" not in plain.comment
+
+
+@pytest.mark.parametrize("payback, mid, line", [
+    ((None, None), None, "Buying the {{option.K.tool}} doesn't pay off at these inputs."),
+    ((3, None), 21, "Buying the {{option.K.tool}} pays off past ~{{option.K.payback_mid}} parts at mid-range "
+                    "inputs (from {{option.K.payback_lo}} at best; at the worst inputs it never does); "
+                    "below that, keep the flip."),
+    ((3, 331), None, "Buying the {{option.K.tool}} pays off past {{option.K.payback_lo}} parts at the best "
+                     "inputs, but never at mid-range ones."),
+])
+def test_payback_wording_never_invents_an_end_of_the_range(payback, mid, line):
+    assert payback_line("K", payback, mid) == line
+
+
+def test_no_payback_is_claimed_against_a_plan_that_cant_make_the_part(monkeypatch, part_a, costed, chamfer,
+                                                                       catalog_access):
+    """Codex, PR #26: a route that leaves faces unreachable has no break-even quantity."""
+    import anville.shop as shop_mod
+
+    real = shop_mod.cost_options
+
+    def incomplete_current(*a, **k):
+        result = real(*a, **k)
+        result.routes[0].complete = False
+        return result
+
+    monkeypatch.setattr(shop_mod, "cost_options", incomplete_current)
+    buy = decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"})
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), buy), back_chamfer=catalog_access)
+    assert r.decisions[0].option_key == BUY and "pays off" not in r.comment
+
+
+def test_the_cost_comparison_and_its_inputs_reach_the_trace(part_a, costed, chamfer, catalog_access):
+    """Codex, PR #26: the panel must show that the verdict depends, and which inputs are placeholders."""
+    events = []
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())),
+               back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+    (compared,) = [d for t, d in events if t == "Costs compared"]
+    assert {v["quantity"] for v in compared["verdicts"]} == {4, 10, 20}
+    assert any(i["status"] == "placeholder" for i in compared["inputs"].values())
+
+
 # --- unknown intent with no shop-side fix (Rayyan's ruling, 2026-10-30: lanes 1 and 3) ------------------
 
 BORE_REMOVE, BORE_ROUTE = "remove_feature/G9", "route_machine/5"
@@ -668,8 +744,8 @@ def test_with_no_shop_fix_the_review_flags_and_asks_and_removal_is_only_conditio
     assert (d.action, d.option_key) == ("ask", None) and d.question
     lines = r.comment.splitlines()
     assert "G9: only a part edit fixes this, and its purpose isn't on record." in lines
-    assert f"If G9 isn't needed, {BORE_REMOVE} takes it to 0 unreachable face(s)." in lines
-    assert not any(line.startswith(f"G9: {BORE_REMOVE}") for line in lines)  # never leads unconditionally
+    assert "If G9 isn't needed, removing G9 takes it to 0 unreachable face(s)." in lines
+    assert not any(line.startswith("G9: Removing G9") for line in lines)  # never leads unconditionally
 
 
 def test_the_model_may_ask_only_where_no_shop_fix_exists(undercut, shop, part_a, chamfer):
@@ -687,7 +763,32 @@ def test_a_fix_for_unreachable_faces_says_so(undercut, shop):
     free = [{"id": 1, "face_group": "G9", "rule": "may_change", "reason": "cosmetic"}]
     r = run_review(undercut, shop, Scripted(bore_plan(), decide(
         {"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x"})), constraints=free)
-    assert f"G9: {BORE_REMOVE} takes it from 2 to 0 unreachable face(s)." in r.comment.splitlines()
+    assert "G9: Removing G9 takes it from 2 to 0 unreachable face(s)." in r.comment.splitlines()
+
+
+def test_with_no_shop_fix_the_conditional_edit_carries_its_dollar_estimate(undercut, costed):
+    """Rayyan's ruling, 2026-10-30, lane 3: estimate the change with the cost model, from slots."""
+    r = run_review(undercut, costed, None)
+    q = max(costed.costs.scenarios.quantities)
+    line = next(line for line in r.comment.splitlines() if line.startswith(f"At {q} parts,"))
+    assert "removing G9" in line and "$" in line and "designer time isn't priced" in line
+
+
+def test_only_plan_changing_options_are_priced(part_a, costed, chamfer, catalog_access):
+    events = []
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer), {"kind": "set_depth", "face_group": chamfer}),
+                                        decide(propose_route())),
+               back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+    scored = [d for t, d in events if t == "Option scored"]
+    assert all(("costs" in d) == d["changes_plan"] for d in scored) and any(not d["changes_plan"] for d in scored)
+
+
+def test_rendered_comments_never_show_option_keys(part_a, undercut, costed, catalog_access):
+    """Shop lane's demo check of #26: the fallback posted "add_tool/G3/+Z/BC45-910480 takes it from"."""
+    for r in (run_review(part_a, costed, None, back_chamfer=catalog_access), run_review(undercut, costed, None)):
+        assert r.comment and not any(key in r.comment for key in r.options), r.comment
+    assert "Buying the 910480 back-chamfer cutter takes it from 2 to 1 setup(s)." in \
+        run_review(part_a, costed, None, back_chamfer=catalog_access).comment
 
 
 def test_a_tool_only_change_is_said_as_one():
@@ -706,3 +807,60 @@ def test_the_rules_allow_the_one_ask_the_tool_offers():
     from anville.agent.review import RULES
 
     assert "ask_only" in RULES
+
+
+def test_every_catalog_kind_has_a_plain_name():
+    """Codex, PR #26 (P1): set_min_radius fell through to its option key."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _name
+    from anville.geometry.edits import CATALOG
+
+    for kind in CATALOG:
+        name = _name(NS(kind=kind, key=f"{kind}/G1/x", face_group="G1", params={"name": "EM6"}))
+        prose = re.sub(r"\{\{[^}]*\}\}", "", name)  # slots carry keys by design; the prose must not
+        assert "/" not in prose and kind not in prose, (kind, name)
+
+
+def test_the_estimate_says_its_rates_are_placeholders(undercut, costed):
+    """Codex, PR #26: most DLL inputs are placeholders, and the comment must say so where it shows dollars."""
+    line = next(x for x in run_review(undercut, costed, None).comment.splitlines() if x.startswith("At "))
+    assert "placeholder shop rates" in line
+
+
+def test_part_edits_are_scored_where_the_answer_could_change_the_plan(undercut, shop):
+    """Gate on #26: Plan asked for the route only, so no part edit was scored, `ask_only` stayed empty
+    and the review went quiet on the undercut (3 of 10). Like the shop-side kinds, code scores them."""
+    wrong = call("not_decide")
+    r = run_review(undercut, shop, Scripted(plan({"kind": "route_machine"}, dropped=("I2",)), wrong, wrong))
+    assert BORE_REMOVE in r.options
+    assert "If G9 isn't needed, removing G9 takes it to 0 unreachable face(s)." in r.comment.splitlines()
+
+
+def test_a_plan_that_raises_nothing_is_retried(part_a, shop, chamfer):
+    """Gate on #26: Plan selected nothing in 2 of 30 Part A reviews, and the comment only counted setups.
+    Code found the issue, so an empty selection is rejected and the stage retries."""
+    model = Scripted(plan(selected=(), dropped=("I1",)), plan(*requests_for(chamfer)), decide(propose_route()))
+    r = run_review(part_a, shop, model)
+    assert "plan" not in r.fallbacks and "Your previous answer was rejected" in model.sent[1][0][1]["content"]
+    assert any(line.startswith(f"{chamfer}: ") for line in r.comment.splitlines())
+
+
+def test_a_plan_cut_off_for_length_retries_at_low_effort(part_a, shop, chamfer):
+    """Gate on #26: two_pockets' Plan hit its cap twice at the default effort. RFC 0001's budget
+    policy: the retry runs at lower effort."""
+    cut = Reply(tool=None, arguments=None, finish_reason="length",
+                error="ran out of tokens while reasoning (budget failure)")
+    model = Scripted(cut, plan(*requests_for(chamfer)), decide(propose_route()))
+    run_review(part_a, shop, model)
+    assert model.efforts[:2] == [None, "low"]
+
+
+def test_one_route_is_said_once(shop, tmp_path):
+    """Gate on #26: the fallback said "Sending it to an outside 5-axis shop" for G8 and again for G10."""
+    from tests.geometry.parts import PARTS, write_step
+
+    facts = extract(write_step(PARTS["two_pockets"](), tmp_path / "p.step"))
+    lines = run_review(facts, shop, None).comment.splitlines()
+    assert sum("outside 5-axis shop" in line for line in lines) <= 1
+    assert sum(line.endswith("the same change covers it.") for line in lines) >= 1, lines
