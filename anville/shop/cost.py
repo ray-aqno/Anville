@@ -182,8 +182,13 @@ def _terms(r: Route, point: dict, costs: ShopCosts) -> tuple[float, float, float
 
 
 def _route_cost(r: Route, point: dict, q: int, costs: ShopCosts) -> float:
-    one, per_batch, per_part = _terms(r, point, costs)
-    return one + math.ceil(q / costs.scenarios.batch_size) * per_batch + q * per_part
+    return _at(_terms(r, point, costs), q, costs.scenarios.batch_size)
+
+
+def _at(terms: tuple[float, float, float], q: int, batch_size: int) -> float:
+    """Dollars for q parts from a route's (one-time, per batch, per part) terms."""
+    one, per_batch, per_part = terms
+    return one + math.ceil(q / batch_size) * per_batch + q * per_part
 
 
 def _payback_at(r: Route, current: Route, point: dict, costs: ShopCosts) -> int | None:
