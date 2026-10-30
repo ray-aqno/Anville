@@ -60,3 +60,29 @@ def test_the_jobs_deadline_reaches_every_model_call(part_a, shop):
     comment, stats = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
                                    deadline=time.monotonic())
     assert model.sent == [] and stats["agent_calls"] == 0 and comment  # code-rendered, still posted
+
+
+def test_the_job_hands_the_assessments_to_the_review(monkeypatch, part_a, shop, catalog_access):
+    import anville.agent.job as job
+
+    seen = {}
+
+    def fake_review(facts, shop_, model, **k):
+        seen.update(k)
+        raise RuntimeError("stop after the call")
+
+    monkeypatch.setattr(job, "run_review", fake_review)
+    agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=Scripted(),
+                  back_chamfer=[a.to_dict() for a in catalog_access])
+    assert seen["back_chamfer"] == catalog_access
+
+
+def test_the_job_imports_on_the_image_without_ocp():
+    """The review job runs on Modal's small image, and its import sits outside the crash catch: an OCP
+    import there would cost the designer the review. (analyze() alone runs on the OCP image.)"""
+    import subprocess
+    import sys
+
+    code = "import sys; sys.modules['OCP'] = None; import anville.agent.job, anville.geometry"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-400:]

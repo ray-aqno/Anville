@@ -11,7 +11,6 @@ Every check is evaluated and reported with its margin, so a failure says which c
 """
 
 import math
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
@@ -22,6 +21,8 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCone, BRepPrimA
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.GProp import GProp_GProps
 
+# The result types live in access.py, free of OCP, so the review job can rebuild them.
+from anville.geometry.access import BackChamferAccess, Check, Relief  # noqa: F401  (re-exported)
 from anville.geometry.facts import VECTORS, EdgeChamfer, PartFacts
 from anville.geometry.shop import BackChamferTool, ShopProfile, SoftJaws
 from anville.geometry.step import _bbox, _read
@@ -33,39 +34,6 @@ RETRACT = 0.01            # mm off the chamfer, so nominal contact doesn't read 
 COLLISION = 1e-3          # mm³ of overlap that counts as a collision
 
 Vec = tuple[float, float, float]
-
-
-@dataclass
-class Check:
-    name: str            # a-f, as in RFC 0002 §2
-    passed: bool
-    margin: float | None  # mm (degrees for a); positive = room to spare
-    detail: str
-
-
-@dataclass
-class Relief:
-    """A pocket to cut in one soft jaw, derived from the swept cutter plus the margin (for the setup sheet)."""
-
-    jaw: str                # "start" | "end" of the chamfered edge
-    origin: Vec             # mm, the pocket's minimum corner in part coordinates
-    size: Vec               # mm along X, Y, Z
-    contact_kept: float     # share of the jaw's grip on the part that the pocket leaves
-
-
-@dataclass
-class BackChamferAccess:
-    face_id: int
-    tool: str
-    checks: list[Check]
-    reliefs: list[Relief] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return all(c.passed for c in self.checks)
-
-    def to_dict(self) -> dict:
-        return {**asdict(self), "ok": self.ok}
 
 
 def assess_back_chamfer(step_path: str | Path, facts: PartFacts, shop: ShopProfile) -> list[BackChamferAccess]:
