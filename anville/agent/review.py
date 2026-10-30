@@ -240,7 +240,8 @@ RULES = (
     "unknown. An option with side 'shop' changes the shop (tools, machines, fixtures), never the part's "
     "geometry, so it is always compatible with a protected face. A protected face is therefore never a "
     "reason to drop an issue: the fix may be on the shop side. Flag, then suggest: every issue you raise "
-    "comes with a proposed fix in the same reply, and a question never replaces the proposal. "
+    "comes with a proposed fix in the same reply, and a question never replaces the proposal, except for an "
+    "issue listed in `ask_only`, where no shop-side fix exists and you ask instead. "
     "Call exactly one tool."
 )
 STAGE_MAX_TOKENS = {"plan": 6144, "decide": 6144, "verify": 4096}  # plan hit 4096 live; decide also writes
@@ -701,6 +702,9 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
 def _effect(o: Option, *, short: bool = False) -> str:
     """What an option does, as a slot template: unreachable faces when it changes those, else setups (eval
     gate, PR #23: an unreachable bore read "takes it from 1 to 1 setup(s)"). `short` drops the "from"."""
+    if o.before.unreachable == o.after.unreachable and o.before.setups == o.after.setups \
+            and getattr(o, "tool_changes", None):  # Codex, PR #23: a tool-only change isn't "from 1 to 1"
+        return f"changes the tool that cuts it and keeps {{{{option.{o.key}.setups_after}}}} setup(s)"
     name, unit = ("unreachable", "unreachable face(s)") if o.before.unreachable != o.after.unreachable \
         else ("setups", "setup(s)")
     start = "" if short else f"from {{{{option.{o.key}.{name}_before}}}} "

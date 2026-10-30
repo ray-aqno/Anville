@@ -656,3 +656,21 @@ def test_a_fix_for_unreachable_faces_says_so(undercut, shop):
     r = run_review(undercut, shop, Scripted(bore_plan(), decide(
         {"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x"})), constraints=free)
     assert f"G9: {BORE_REMOVE} takes it from 2 to 0 unreachable face(s)." in r.comment.splitlines()
+
+
+def test_a_tool_only_change_is_said_as_one():
+    """Codex, PR #23: a fix that changes only the cutting tool read "takes it from 1 to 1 setup(s)"."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _effect
+
+    o = NS(key="set_min_radius/G1/r6", before=NS(setups=1, unreachable=0), after=NS(setups=1, unreachable=0),
+           tool_changes=[NS(face_id=4, before="EM3", after="EM12")])
+    assert _effect(o) == "changes the tool that cuts it and keeps {{option.set_min_radius/G1/r6.setups_after}} setup(s)"
+
+
+def test_the_rules_allow_the_one_ask_the_tool_offers():
+    """Codex, PR #23: RULES said a question never replaces a proposal, which contradicts `ask_only`."""
+    from anville.agent.review import RULES
+
+    assert "ask_only" in RULES
