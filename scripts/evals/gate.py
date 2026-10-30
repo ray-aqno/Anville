@@ -20,6 +20,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -57,8 +58,23 @@ SCENARIOS = {
                            [(False, None, UNKNOWN), (False, "may_change", ["raised", "plan_changing_fix"])]),
     "b_cutter_owned": ("demo_bracket_b", True, [(False, None, ["nothing_raised"])]),
     "two_pockets": ("two_pockets", False, [(False, None, [])]),  # several issues: repeats are tracked
-    "undercut": ("undercut", False, [(False, None, [])]),  # no shop fix exists: not ruled yet, recorded only
+    # No shop fix exists, only removal (Rayyan's ruling, 2026-10-30): flag and ask (lane 1), state the
+    # dollars (lane 3). Lane 2, searching the team's documents, is held.
+    "undercut": ("undercut", False, [(False, None, ["flags_and_asks", "asks_without_removal", "estimate_shown"])]),
 }
+BARS.update({"flags_and_asks": 0.95, "asks_without_removal": 0.95, "estimate_shown": 1.0})  # estimate: code
+
+# run_review fills its slots internally (costs, paybacks) and doesn't return them; the numbers check needs
+# them all. So every values dict passed to fill_slots during a review is recorded, per worker thread.
+_slots = threading.local()
+
+
+def _record_slots(fill_slots):
+    def recording(text, values, keys):
+        if getattr(_slots, "values", None) is not None:
+            _slots.values.update(values)
+        return fill_slots(text, values, keys)
+    return recording
 
 
 @dataclass
@@ -70,15 +86,20 @@ class Case:
 
 
 def build_case(part: str, owned: bool, tmp: Path) -> Case:
-    """What analyze() does in the deployed job: extract, then assess the shop's cutters plus the catalog's."""
+    """What analyze() does in the deployed job: extract, then assess the shop's cutters plus the catalog's.
+    The shop is the deployed one when the code under test has it (review_shop: the DLL's cost inputs)."""
+    from anville.agent import job
     from anville.agent.review import find_issues
     from anville.geometry import (BACK_CHAMFER_CATALOG, HARVEY_910480, ShopProfile, SoftJaws, Tool,
                                   assess_back_chamfer, extract, min_setups)
     from tests.geometry.parts import PARTS, write_step
 
-    shop = ShopProfile(tools=[Tool("EM12", 12.0, 4.0), Tool("EM6", 6.0, 4.0), Tool("EM3", 3.0, 4.0)],
-                       fixture=SoftJaws())
-    if owned:
+    if hasattr(job, "review_shop"):
+        shop, _ = job.review_shop([])
+    else:
+        shop = ShopProfile(tools=[Tool("EM12", 12.0, 4.0), Tool("EM6", 6.0, 4.0), Tool("EM3", 3.0, 4.0)],
+                           fixture=SoftJaws())
+    if owned:  # what the ledger gives Part B after Part A's purchase (S8)
         shop = replace(shop, back_chamfer_tools=[HARVEY_910480])
     step = write_step(PARTS[part](), tmp / f"{part}.step")
     facts = extract(step)
@@ -118,16 +139,20 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
     g = case.group
     constraints = [{"id": "reply-1", "face_group": g, "rule": reply, "reason": REPLIES[reply]}] if reply else None
     start = time.monotonic()
+    _slots.values = {}
     r = run_review(case.facts, case.shop, models[0], verifier=models[1], stated={g: STATED} if stated else None,
                    constraints=constraints, emit=lambda kind, title, **d: events.append({"kind": kind, "title": title,
                                                                                           **d}),
                    back_chamfer=case.access)
     latency = time.monotonic() - start
-    values = slot_values(r.plan, [i for i in r.issues if i.id in r.selected], r.options, r.intents)
+    values = {**slot_values(r.plan, [i for i in r.issues if i.id in r.selected], r.options, r.intents),
+              **_slots.values}
+    _slots.values = None
     results = {}
     for name in ([*COMMON, *checks] if r.issues else checks):
-        args = {"numbers_from_code": (r, values), "survived": (r,), "no_bare_question": (r,),
-                "nothing_raised": (r,)}.get(name, (r, g))
+        args = {"numbers_from_code": (r, values), "estimate_shown": (r, values), "survived": (r,),
+                "no_bare_question": (r,), "nothing_raised": (r,), "asks_without_removal": (r,),
+                "flags_and_asks": (r,)}.get(name, (r, g))
         results[name] = getattr(score, name)(*args)
     d = score.decision_for(r, g) if g else None
     return {
@@ -219,6 +244,9 @@ def main() -> int:
 
     sys.path.insert(0, str(a.repo.resolve()))  # the code under test, ahead of any installed copy
     import anville
+    import anville.agent.review as review
+
+    review.fill_slots = _record_slots(review.fill_slots)
     from anville.agent.model import OpenAICompatModel
     from anville.env import load_env
 

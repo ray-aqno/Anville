@@ -39,13 +39,6 @@ def test_numbers_must_come_from_slot_values():
     assert not score.numbers_from_code(result(comment="G3 adds 3 minutes."), VALUES)
 
 
-def test_removal_may_only_appear_as_the_conditional_line_with_a_question():
-    line = f"If G3 isn't needed, {REMOVE} also takes it to 1 setup(s)."
-    assert score.removal_conditional_only(result(propose(BUY, "Is G3 required?"), comment=line), "G3")
-    assert not score.removal_conditional_only(result(propose(BUY), comment=line), "G3")  # no question
-    assert not score.removal_conditional_only(result(propose(BUY), comment=f"Or try {REMOVE}."), "G3")
-
-
 def test_any_intent_fix_leads_or_does_not_apply():
     assert score.any_intent_leads(result(propose(BUY)), "G3")
     assert not score.any_intent_leads(result(propose(REMOVE)), "G3")
@@ -69,6 +62,71 @@ def test_an_unpriced_model_stops_the_gate_instead_of_costing_nothing():
     assert gate.cost([{"model": "muse-spark-1.3", "prompt_tokens": 1_000_000, "completion_tokens": 0}]) == 1.25
     with pytest.raises(ValueError, match="no price"):
         gate.cost([{"model": "some-new-model", "prompt_tokens": 10, "completion_tokens": 10}])
+
+
+BORE, BORE_OUT = "G9", "remove_feature/G9"
+UNDERCUT = {BORE_OUT: NS(side="part", changes_plan=True, face_group=BORE),
+            ROUTE: NS(side="shop", changes_plan=False, face_group=None)}
+
+
+def undercut(*decisions, comment=""):
+    return NS(decisions=list(decisions), comment=comment, fallbacks=[], options=UNDERCUT, model_calls=3,
+              issues=[NS(id="I1", face_group=BORE)], selected=["I1"], ask_allowed={"I1": True},
+              intents={BORE: NS(status="unknown")})
+
+
+def ask(question="Is G9 required?"):
+    return NS(issue_id="I1", action="ask", option_key=None, question=question)
+
+
+def test_asking_alone_is_allowed_only_where_removal_is_the_only_fix():
+    """Rayyan's ruling, 2026-10-30, lane 1: no shop fix and a part-only fix, so flag and ask."""
+    assert score.ask_only(undercut()) == {"I1"}
+    assert score.no_bare_question(undercut(ask()))
+    assert not score.no_bare_question(result(NS(issue_id="I1", action="ask", option_key=None, question="Is G3?"),
+                                             options=OPTIONS))  # a shop fix exists: still a bare question
+
+
+def test_where_only_removal_helps_the_review_asks_and_never_leads_with_it():
+    assert score.asks_without_removal(undercut(ask()))
+    assert not score.asks_without_removal(undercut(NS(issue_id="I1", action="propose", option_key=BORE_OUT,
+                                                      question="Is G9 required?")))
+    assert not score.asks_without_removal(undercut(NS(issue_id="I1", action="quiet", option_key=None,
+                                                      question=None)))
+    assert score.asks_without_removal(result(propose(BUY))) is None  # not that case
+
+
+def test_going_quiet_where_only_removal_helps_fails_even_if_removal_was_never_scored():
+    """Live, 2026-10-30: Plan didn't request remove_feature in 3 of 10 undercut runs, so no part fix was
+    offered, asking wasn't allowed, and both issues went quiet. asks_without_removal saw no such issue
+    (None); flags_and_asks judges the outcome."""
+    quiet = undercut(NS(issue_id="I1", action="quiet", option_key=None, question=None))
+    quiet.options = {ROUTE: UNDERCUT[ROUTE]}  # removal never scored
+    assert score.asks_without_removal(quiet) is None
+    assert not score.flags_and_asks(quiet)
+    assert score.flags_and_asks(undercut(ask()))
+
+
+def test_the_estimate_must_reach_the_comment_when_code_priced_it():
+    """Lane 3: the dollars of the part edit, filled from slots."""
+    values = {f"option.{BORE_OUT}.cost_lo": "267", f"option.{BORE_OUT}.cost_hi": "2,400"}
+    line = "At 20 parts, the plan after removing G9 runs $267–$2,400; designer time isn't priced."
+    assert score.estimate_shown(undercut(ask(), comment=line), values)
+    assert not score.estimate_shown(undercut(ask(), comment="Is G9 required?"), values)
+    assert score.estimate_shown(undercut(ask()), {}) is None  # unpriced shop: nothing to show
+
+
+def test_removal_is_judged_from_the_decision_not_keys_in_the_text():
+    """Rendered lines no longer carry option keys (main, 2026-10-30): "removing G3", not remove_feature/G3."""
+    line = "If G3 isn't needed, removing G3 also takes it to 1 setup(s)."
+    assert score.removal_conditional_only(result(propose(BUY, "Is G3 required?"), comment=line), "G3")
+    assert not score.removal_conditional_only(result(propose(BUY), comment=line), "G3")  # no question
+    assert not score.removal_conditional_only(result(propose(REMOVE, "Is G3 required?")), "G3")  # leads
+
+
+def test_the_cutter_part_number_in_a_rendered_name_is_code_not_the_model():
+    text = "G3: Buying the 910480 back-chamfer cutter takes it from 2 to 1 setup(s)."
+    assert score.numbers_from_code(result(comment=text), VALUES)
 
 
 def test_a_dropped_or_quiet_issue_is_not_raised():

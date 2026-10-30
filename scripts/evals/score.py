@@ -28,14 +28,59 @@ def survived(result) -> bool:
     return not set(result.fallbacks) & set(MODEL_STAGES)
 
 
+def ask_only(result) -> set[str]:
+    """Issues where asking alone is right (Rayyan's ruling, 2026-10-30, lane 1): intent unknown, the gate
+    allows a question, no shop-side fix changes the plan, and a part edit does."""
+    out = set()
+    for i in result.issues:
+        if i.id not in getattr(result, "selected", ()):
+            continue
+        mine = [o for o in result.options.values() if o.face_group in (None, i.face_group) and o.changes_plan]
+        if (getattr(result, "intents", {}).get(i.face_group) is not None
+                and result.intents[i.face_group].status == "unknown" and result.ask_allowed.get(i.id)
+                and not any(o.side == "shop" for o in mine) and any(o.side == "part" for o in mine)):
+            out.add(i.id)
+    return out
+
+
 def no_bare_question(result) -> bool:
-    """Flag, then suggest: a question only ever rides on a proposal."""
-    return all(d.action != "ask" and (not d.question or d.action == "propose") for d in result.decisions)
+    """Flag, then suggest: a question rides on a proposal, except where only removal would help (lane 1)."""
+    allowed = ask_only(result)
+    return all((d.action != "ask" or d.issue_id in allowed) and (not d.question or d.action in ("propose", "ask"))
+               for d in result.decisions)
+
+
+def asks_without_removal(result) -> bool | None:
+    """Where only removal helps: the review asks about the feature, and never proposes removing it.
+    None when the run has no such issue."""
+    only = ask_only(result)
+    if not only:
+        return None
+    mine = [d for d in result.decisions if d.issue_id in only]
+    leads = any(d.action == "propose" and result.options[d.option_key].side == "part" for d in mine)
+    return not leads and any(d.action == "ask" and d.question for d in mine)
+
+
+def flags_and_asks(result) -> bool:
+    """For a part where only removal can help (the scenario says so; the check doesn't trust the run's own
+    options): at least one issue is flagged with a question. Quiet everywhere fails, whatever was scored."""
+    return any(d.action in ("ask", "propose") and d.question for d in result.decisions)
+
+
+def estimate_shown(result, values: dict[str, str]) -> bool | None:
+    """Lane 3: where only removal helps and code priced it, the dollars reach the comment.
+    None when nothing was priced (a shop without cost inputs)."""
+    lows = [v for k, v in values.items() if k.endswith(".cost_lo")]
+    if not ask_only(result) or not lows:
+        return None
+    return any(f"${v}" in result.comment for v in lows)
 
 
 def numbers_from_code(result, values: dict[str, str]) -> bool:
-    """Every number in the comment is one code computed (locked decision 3)."""
-    allowed = {n for v in values.values() for n in _NUMBER.findall(v)}
+    """Every number in the comment is one code computed (locked decision 3). Numbers inside option keys
+    are code's too: a rendered fix names its catalog cutter ("the 910480 back-chamfer cutter")."""
+    keys = [_LABELS.sub("", k) for k in result.options]  # "remove_feature/G3" must not allow a bare 3
+    allowed = {n for v in [*values.values(), *keys] for n in _NUMBER.findall(v)}
     text = result.comment
     for key in sorted(result.options, key=len, reverse=True):
         text = text.replace(key, "")
@@ -70,14 +115,15 @@ def any_intent_leads(result, group: str) -> bool | None:
 
 
 def removal_conditional_only(result, group: str) -> bool:
-    """Unknown intent: a part edit is named only in code's conditional line, next to the question."""
+    """Unknown intent: a part edit never leads, and code's conditional line ("If G3 isn't needed, ...")
+    appears at most once, only next to the question. Judged from the decision: rendered lines name
+    fixes in words, not option keys (main, 2026-10-30). Model prose naming a part edit is rejected by
+    review.py's sentence check, which this doesn't repeat."""
     d = decision_for(result, group)
-    part_keys = [k for k, o in result.options.items() if o.side == "part" and o.face_group == group]
-    for line in result.comment.splitlines():
-        if any(k in line for k in part_keys):
-            if not (line.startswith(f"If {group} isn't needed,") and d is not None and d.question):
-                return False
-    return True
+    if d is not None and d.option_key and result.options[d.option_key].side == "part":
+        return False
+    conditional = [ln for ln in result.comment.splitlines() if ln.startswith(f"If {group} isn't needed,")]
+    return len(conditional) <= 1 and (not conditional or (d is not None and bool(d.question)))
 
 
 def plan_changing_fix(result, group: str) -> bool:
