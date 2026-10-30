@@ -79,7 +79,7 @@ def test_a_cutter_from_the_ledger_says_where_it_came_from(step, facts):
     source = {"review": "review:part-a/v3", "decision": "comment:c42", "option": "add_tool/G2/+Z/BC45-910480"}
     sheet = setup_sheet(f, OWNED, plan, back_chamfer=access, provenance={"910480": source})
     (cutter,) = [t for t in sheet["setups"][0]["tools"] if t["type"] == "back_chamfer"]
-    assert cutter["acquired"] == source
+    assert cutter["acquired"] == {**source, "why": "bought after review review:part-a/v3 (comment:c42)"}
 
 
 def test_unreachable_faces_are_on_the_sheet_so_the_shop_sees_what_the_plan_skips(facts):
@@ -124,3 +124,17 @@ def test_stock_size_and_the_part_it_is_for(facts):
     sheet = setup_sheet(f, SHOP, min_setups(f, SHOP))
     assert sheet["part"] == {"source_sha256": f.source_sha256, "stock_mm": [100.0, 60.0, 20.0]}
     assert sheet["basis"] == "predicted"
+
+
+def test_an_undated_acquisition_still_says_why():
+    from anville.shop.sheet import _why
+
+    assert _why({"review": "r1", "decision": "d1"}) == "bought after review r1 (d1)"
+
+
+def test_a_ledger_row_with_partial_provenance_still_makes_a_sheet():
+    """Codex, Part B review: Store.append_ledger takes any non-empty provenance; the sheet mustn't crash on it."""
+    from anville.shop.sheet import _why
+
+    assert _why({"on": "2026-10-30", "event": "comment:c42"}) == "bought on 2026-10-30"
+    assert _why({"review": "r1"}) == "bought after review r1"

@@ -9,6 +9,7 @@ from the start, and the plan can say which review and which decision put it ther
 """
 
 from dataclasses import fields, replace
+from datetime import datetime, timezone
 
 from anville.geometry.edits import Option
 from anville.geometry.shop import BackChamferTool, ShopProfile
@@ -37,6 +38,7 @@ def apply_ledger(shop: ShopProfile, entries: list[dict]) -> tuple[ShopProfile, d
 
     Entries are oldest first, as `read_ledger` returns them. Other shop outcomes are left alone; a
     cutter bought twice keeps its first source; a cutter the shop already had isn't credited to the ledger.
+    Each provenance gains "on", the UTC date the entry was written, when the row has its `created_at`.
     """
     owned = {t.name for t in shop.back_chamfer_tools}
     added, sources = [], {}
@@ -49,7 +51,9 @@ def apply_ledger(shop: ShopProfile, entries: list[dict]) -> tuple[ShopProfile, d
             continue
         owned.add(tool.name)
         added.append(tool)
-        sources[tool.name] = e["provenance"]
+        sources[tool.name] = dict(e["provenance"])
+        if e.get("created_at") is not None:
+            sources[tool.name]["on"] = datetime.fromtimestamp(e["created_at"], timezone.utc).date().isoformat()
     if not added:
         return shop, sources
     return replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, *added]), sources

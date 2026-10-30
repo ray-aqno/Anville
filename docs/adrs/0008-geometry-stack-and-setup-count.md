@@ -186,3 +186,83 @@ Cost is linear in rays, at about 18 µs per ray. A part with 150 faces at 2 mm s
   - when the shop-profile ADR defines tools with a reach length instead of L:D;
   - when real outcomes show the finishing-tool rule driving bad cost estimates.
 - **Follow-up (Rayyan, 2026-10-27): flag precision.** Limits apply group-wide (§5), so one sharp corner marks a whole wall ring unreachable: 9 faces in `kinked_pocket`, where only 2 meet at the kink. Setup counts are unaffected, but anchored comments and fix intents would point at more geometry than is at fault. This is to be handled as a broader pass on how flags are localized to faces, not as a patch to the sharp-corner rule alone.
+
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-29): reach depends on the holder, and the facts say how
+
+**Context.** The first real Onshape export (`tests/geometry/data/onshape_z_bracket.step`) is a Z bracket of 1/2" plate, 7" × 3" × 2.41". `extract` reads it cleanly in 1.25 s, in metres converted to mm. The plan is 4 setups on 3-axis and 1 on 5-axis (verified, `tests/geometry/test_onshape_export.py`). Its two 3/8" web holes come back `no_tool`: "needs Ø≤9.53 reaching 38.1 mm". §4 measures stick-out from the stock top, which here is the top of the −X flange. But the web is 12.7 mm thick, and the nearer hole sits 31.9 mm from the flange wall. A holder beside the flange needs 12.7 mm of stick-out, which EM6 reaches with 11 mm to spare. Any shop drills these holes, so Anville would tell the designer something false.
+
+**Why a switch is not the fix.** Changing `depth` from "stock top" to "local material" swaps one blind spot for another:
+- Stock-top depth is right when the holder is wider than the room beside the feature.
+- Local depth is right only when it is narrower.
+- Which one holds depends on the holder in this shop, the tool's radius, and how far the feature sits from taller material.
+
+That last one is a design choice: move the hole away from the flange. The holder is a shop choice: a slim or shrink-fit holder. A switch hides both. The facts should carry the trade-off, and the planner, `evaluate_edits` and the model should each decide with it.
+
+**Decision.**
+1. **Facts carry a reach curve.** Add `reach` to each `access[d]`: a list of `[clearance, stickout]` steps, non-decreasing in both values.
+   - **`clearance` marks where a step starts.** `[c, s]` reads: "material that begins `c` mm beyond the face needs `s` mm of stick-out to pass over it". A holder whose edge sweeps `w` mm beyond the face meets every step with `c ≤ w`, so it needs the `s` of the last such step.
+   - The first step is the local depth; the last always equals `depth`, so `depth` keeps its meaning as the worst case.
+   - A face whose curve reaches `depth` within 1 mm of clearance stores `[[0, depth]]`. Every flat-topped part reads exactly as today.
+   - The field is additive, so `schema_version` stays 1 (§8).
+2. **How it is measured.**
+   - One height map per direction: rays cast down along `d` on a 1 mm grid over the stock footprint give the top of material at each point.
+   - For each face, every point higher than the face's deepest point becomes a step, at its 2D distance from the face's projected bounding box.
+   - The distance is to the bounding box, not the face itself, so the clearance can only be understated, never overstated.
+   - Prototype on the bracket: 0.4 s for the six height maps, 1.05 s in total for all 17 faces × 6 directions, process start included (verified).
+3. **The shop states its holders.** `Tool` gains `holder_diameter: float | None`. `None` takes `ShopProfile.holder_diameter`, a stated assumption that goes on the setup sheet the way the soft-jaw sizes do (RFC 0002 §3).
+   - **Default: Ø50 mm, a standard ER32 collet nut, for every tool.** This is a realistic estimate, not a measurement. Rayyan's shop varies its holders by job, so no single size can be confirmed.
+     - ER32 is the general-purpose collet that holds every tool in the demo shop (EM3 to EM12).
+     - Its standard nut is Ø50 (verified 2026-10-29: Paulimot's ER32 union nut and Dorian's ER32NTS50 both list 50 mm, M40 × 1.5).
+     - It is the widest of the common small-shop nuts, so the estimate leans pessimistic. A slimmer holder shows up as the shop-side option (point 5), not as a silent assumption.
+     - Smaller nuts vary by maker: ER16 is listed at 28 or 32 mm, ER20 at 33 or 35 mm. Name one only with the shop's datasheet.
+4. **Fit uses the curve.** A tool of radius `r` in a holder of radius `R` sweeps the holder's edge `R − r` beyond the face. The fit rule becomes:
+   ```
+   sweep(tool)          = R − r + 1 mm
+   stickout(f, d, tool) = s of the last step [c, s] in reach[d] with c ≤ sweep(tool)   (the first step has c = 0)
+   fits(tool)           = tool.diameter ≤ limit  and  stickout(f, d, tool) ≤ tool.diameter × tool.max_ld
+   ```
+   - The 1 mm is a margin for the clearance being measured on a 1 mm grid.
+   - **Worked example, the bracket's hole F13 from +Z:** `reach = [[0, 12.7], [31.9, 38.1]]`, meaning the web is 12.7 mm deep and the flange starts 31.9 mm away. EM6 (r = 3, reach 6 × 4 = 24 mm):
+
+     | Holder | sweep = R − r + 1 | Steps with c ≤ sweep | Stick-out | Fits? |
+     |---|---|---|---|---|
+     | Ø50 | 25 − 3 + 1 = 23 | `[0, 12.7]` | 12.7 | yes, 12.7 ≤ 24 |
+     | Ø67 | 33.5 − 3 + 1 = 31.5 | `[0, 12.7]` | 12.7 | yes |
+     | Ø70 | 35 − 3 + 1 = 33 | `[0, 12.7]`, `[31.9, 38.1]` | 38.1 | no, 38.1 > 24 |
+5. **Each side's decision is a computed number.** When the curve decides fit:
+   - **Unreachable detail:** the `no_tool` reason gives both ends of the curve, e.g. "EM6 needs 12.7 mm of stick-out in a holder up to Ø67, which clears the flange 31.9 mm away, and 38.1 mm in a wider one". The model can then cite the trade-off without inventing a number (ADR 0003).
+   - **Shop-side edit:** `evaluate_edits` gains an `add_tool` variant for a slimmer holder on an owned tool, with params `{name, holder_diameter}` and side `shop`. It is offered only when it changes the plan, like every other option.
+   - **Design-side edit:** the clearance at which the curve steps up is the distance the feature needs from the taller wall. Proposing "move it" stays with the model, in prose, citing that number. A `move_feature` edit kind would need its own amendment to ADR 0002, and nothing in the demo needs one.
+
+**Options considered.**
+- **A. Status quo, stock-top depth.** Simple and never optimistic. Wrong on every stepped part: two false flags on the first real export.
+- **B. Local depth with one fixed holder radius, a switch.** One number and cheap. But it is wrong whenever the real holder differs, can't tell the designer how far to move a feature, and has the same blind-spot shape as A. Rejected per Rayyan.
+- **C. Reach curve plus shop holders. Chosen.** The facts carry the trade-off, and each consumer applies the shop's actual holder.
+- **D. Full tool-assembly collision.** Sweep holder, shank and cutter solids over toolpaths with OCC booleans, the way RFC 0002 check e does for one cutter. Exact, but it needs toolpaths, and booleans for every face × direction × tool. Revisit only if C is shown wrong on a real part.
+
+**Trade-offs and limits.**
+- **Supersedes the §Trade-offs line "Reach ignores holder clearance."** That line held only because stick-out was always measured from the stock top. Under C the holder is modelled, so a wrong curve could now be optimistic. Hence the bounding-box distance, the 1 mm margin, and the worst-case `depth` kept beside the curve.
+- **Holders are cylinders.** Collet-nut steps, tapers and the spindle nose are ignored. A tapered holder clears more than its nominal diameter suggests, so this is conservative (inference).
+- **Material is cleared within the setup.** The height map is the final part. Everything above it is visible from `d` by construction, so the same setup can clear it before finishing the feature. That is an inference about operation order; the planner does not order operations.
+- **Precision:** about the 1 mm grid. A wall thinner than the grid can be missed, the same class of limit as §Trade-offs' 2 mm sampling.
+
+**Consequences.**
+- **Easier:**
+  - Stepped parts get honest reach.
+  - Flags carry the numbers the designer and the shop each need.
+  - The strict xfail `test_web_holes_are_reachable` becomes the regression test.
+- **Unchanged:**
+  - The demo. On Part A, Part B and `two_pockets`, every face reaches its stock-top depth within 0.8 mm of clearance (verified), so any real holder gives today's plans.
+  - Setup counts on the bracket, since ±Z are needed anyway.
+- **Harder:**
+  - `extract` grows by about a second on a 7" part.
+  - Each `access` entry carries a list.
+  - The shop profile needs holder data.
+- **Main session:**
+  - The agent's facts digest should pass `reach` only where it has more than one step.
+  - The `evaluate_edits` schema enum doesn't change, since this is a new `add_tool` variant, but its params gain `holder_diameter`.
+- **Shop session:** `anville/shop/` (setup sheet) should print the assumed holder diameter next to the jaw sizes.
+- **Revisit:**
+  - when a shop states its real holder per tool, which replaces the Ø50 estimate;
+  - if a real part shows a curve optimistic by more than the 1 mm margin;
+  - if compound-angle reach (§7) arrives, since the height map is per principal direction.

@@ -83,9 +83,18 @@ def _tools(setup: Setup, shop: ShopProfile, cutters: dict, group: dict, provenan
         row["faces"] = sorted(ids)
         row["groups"] = sorted({group[fid] for fid in ids if fid in group}, key=lambda g: int(g[1:]))
         if name in provenance:
-            row["acquired"] = provenance[name]
+            row["acquired"] = {**provenance[name], "why": _why(provenance[name])}
         out.append(row)
     return out
+
+
+def _why(source: dict) -> str:
+    """One line for the machinist: when the shop got the tool and which review and decision put it there."""
+    line = f"bought on {source['on']}" if source.get("on") else "bought"
+    if source.get("review"):  # Store.append_ledger takes any provenance; tool_acquired always sets both
+        line += f"{',' if source.get('on') else ''} after review {source['review']}"
+        line += f" ({source['decision']})" if source.get("decision") else ""
+    return line
 
 
 def _workholding(shop: ShopProfile, chamfered: list, cutters: dict, facts: PartFacts, back_chamfer) -> dict:
