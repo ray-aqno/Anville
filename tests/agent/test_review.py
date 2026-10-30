@@ -250,31 +250,67 @@ def test_proposing_an_option_that_was_not_offered_is_rejected_then_falls_back(pa
     assert reasons and all("was not offered" in why for why in reasons)
 
 
-def test_asking_where_the_gate_forbids_it_is_rejected(part_a, shop, chamfer):
-    ask = decide({"issue_id": "I1", "action": "ask", "question": "Is it needed?", "reason": "x"})
-    model = Scripted(plan({"kind": "route_machine"}), ask, ask)
+def ask_with(question, key=ROUTE):
+    """A proposal that also asks: the flag-then-suggest shape (Rayyan, 2026-10-29)."""
+    return decide({"issue_id": "I1", "action": "propose", "option_key": key, "reason": "x", "question": question})
+
+
+def test_a_question_where_the_gate_forbids_it_is_rejected(part_a, shop, chamfer):
+    asks = ask_with("Is it needed?")
+    model = Scripted(plan({"kind": "route_machine"}), asks, asks)
     r = run_review(part_a, shop, model, stated={chamfer: "Weld clearance chamfer"})
-    assert r.fallbacks == ["decide"] and r.decisions[0].action == "propose"
+    assert r.fallbacks == ["decide"] and r.decisions[0].action == "propose" and not r.decisions[0].question
 
 
-def test_an_accepted_ask_is_placed_by_code_with_its_reason(part_a, shop, chamfer):
-    ask = decide({"issue_id": "I1", "action": "ask", "reason": "x", "question": f"Is the chamfer on {chamfer} needed?"})
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask))
-    assert r.fallbacks == [] and r.decisions[0].action == "ask"
-    assert r.comment.splitlines()[-1] == (f"{chamfer}: Is the chamfer on {chamfer} needed? Its purpose isn't on "
-                                          "record, and the answer changes the best plan.")
+def test_an_unknown_intent_is_flagged_and_a_fix_proposed_in_one_comment(part_a, shop, chamfer):
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with(f"Is the chamfer on {chamfer} needed?")))
+    assert r.fallbacks == [] and [(d.action, d.option_key) for d in r.decisions] == [("propose", ROUTE)]
+    lines = r.comment.splitlines()
+    assert any(line.startswith(f"{chamfer}: {ROUTE} takes it from 2 to 1 setup(s).") for line in lines)
+    assert lines[-1] == (f"{chamfer}'s purpose isn't on record. Is the chamfer on {chamfer} needed? "
+                         "The answer could change the best plan.")
+
+
+def test_ask_only_is_rejected_and_the_retry_must_propose(part_a, shop, chamfer):
+    ask_only = decide({"issue_id": "I1", "action": "ask", "question": "Is it needed?", "reason": "x"})
+    events = []
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_only, ask_with("Is it needed?")),
+                   emit=lambda kind, title, **d: events.append((kind, d)))
+    assert r.fallbacks == [] and r.decisions[0].action == "propose" and r.decisions[0].question == "Is it needed?"
+    assert any("propose" in d.get("reason", "") for kind, d in events if kind == "error" and d.get("stage") == "decide")
+
+
+def test_the_fallback_flags_and_proposes_when_intent_is_unknown(part_a, shop, chamfer, catalog_access):
+    """No model: the safest fix is the shop-side one (it assumes nothing about the feature), and the
+    question offers the part edit the answer could unlock."""
+    (d,) = run_review(part_a, shop, None).decisions
+    assert (d.action, d.option_key, bool(d.question)) == ("propose", ROUTE, True)
+    r = run_review(part_a, shop, None, back_chamfer=catalog_access)
+    (d,) = r.decisions
+    assert (d.action, d.option_key) == ("propose", BUY) and d.question
+    assert BUY in r.comment and "purpose isn't on record" in r.comment
+
+
+def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, shop, chamfer):
+    said = [{"text": f"Routing to a five-axis takes the part to {{{{option.{ROUTE}.setups_after}}}} setup.",
+             "role": "action", "cites": ["decision:I1", f"option:{ROUTE}"]}]
+    model = Scripted(plan(*requests_for(chamfer)), decide(
+        {"issue_id": "I1", "action": "propose", "option_key": ROUTE, "reason": "x", "question": "Is it needed?"},
+        comment=said))
+    r = run_review(part_a, shop, model, verifier=Scripted(verdicts(True), name="verifier"))
+    assert "Routing to a five-axis takes the part to 1 setup." in r.comment
+    assert r.comment.splitlines()[-1].endswith("Is it needed? The answer could change the best plan.")
+    assert f"{ROUTE} takes it from" not in r.comment  # the verified sentence replaces the rendered line
 
 
 def test_an_accepted_question_with_a_slot_is_filled_when_rendered(part_a, shop, chamfer):
-    ask = decide({"issue_id": "I1", "action": "ask", "reason": "x",
-                  "question": f"Is {chamfer} worth {{{{plan.setups}}}} setups?"})
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask))
-    assert f"{chamfer}: Is {chamfer} worth 2 setups?" in r.comment
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)),
+                                          ask_with(f"Is {chamfer} worth {{{{plan.setups}}}} setups?")))
+    assert f"Is {chamfer} worth 2 setups?" in r.comment
 
 
 def test_a_question_with_a_number_is_rejected_and_the_comment_is_never_empty(part_a, shop, chamfer):
-    numbered = decide({"issue_id": "I1", "action": "ask", "question": "Is the 10 mm clearance required?",
-                       "reason": "x"})
+    numbered = ask_with("Is the 10 mm clearance required?")
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), numbered, numbered))
     assert r.fallbacks == ["decide"]
     assert r.comment and "10 mm" not in r.comment
@@ -510,3 +546,131 @@ def test_an_assessment_survives_the_trip_from_the_geometry_image(catalog_access)
 
     for a in catalog_access:
         assert BackChamferAccess.from_dict(json.loads(json.dumps(a.to_dict()))) == a
+
+
+def test_shop_side_fixes_are_scored_even_when_the_planner_names_only_part_edits(
+        part_a, shop, chamfer, catalog_access):
+    """Live, 2026-10-29 (4 of 4 runs): Plan, which sees geometry only, asked for route and remove only,
+    so the 910480 was never scored or offered. Code adds the shop-side kinds for every chosen issue."""
+    model = Scripted(plan({"kind": "remove_feature", "face_group": chamfer}),
+                     decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}))
+    r = run_review(part_a, shop, model, back_chamfer=catalog_access)
+    assert {BUY, ROUTE} <= set(r.options) and r.fallbacks == []
+    assert [d.option_key for d in r.decisions] == [BUY]
+
+
+# --- unknown intent: a fix valid under any intent leads (council ruling, accepted 2026-10-29) ------------
+
+REMOVE = "remove_feature/G3"
+
+
+def test_with_unknown_intent_a_lead_with_removal_is_rejected_for_a_shop_side_fix(part_a, shop, chamfer):
+    removal = decide({"issue_id": "I1", "action": "propose", "option_key": REMOVE, "reason": "x",
+                      "question": "Is it needed?"})
+    events = []
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), removal, ask_with("Is it needed?")),
+                   emit=lambda kind, title, **d: events.append((kind, d)))
+    assert r.fallbacks == [] and r.decisions[0].option_key == ROUTE
+    assert any("whatever" in d.get("reason", "") for kind, d in events if kind == "error" and d.get("stage") == "decide")
+
+
+def test_removal_appears_only_as_codes_conditional_line_next_to_the_question(part_a, shop, chamfer):
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with("Is it needed?")))
+    lines = r.comment.splitlines()
+    assert lines[-2:] == [f"If {chamfer} isn't needed, {REMOVE} also takes it to 1 setup(s).",
+                          f"{chamfer}'s purpose isn't on record. Is it needed? The answer could change the best plan."]
+    assert sum(REMOVE in line for line in lines) == 1
+
+
+def test_model_prose_cannot_offer_the_removal_when_intent_is_unknown(part_a, shop, chamfer):
+    sneaky = [{"text": "Removing it would also work.", "role": "context",
+               "cites": ["issue:I1", f"option:{REMOVE}"]}]
+    model = Scripted(plan(*requests_for(chamfer)), decide(
+        {"issue_id": "I1", "action": "propose", "option_key": ROUTE, "reason": "x", "question": "Is it needed?"},
+        comment=sneaky))
+    verifier = Scripted(verdicts(True), name="verifier")
+    r = run_review(part_a, shop, model, verifier=verifier)
+    assert "Removing it would also work." not in r.comment and verifier.sent == []  # rejected before the verifier
+
+
+def test_a_free_face_may_still_lead_with_removal(part_a, shop, chamfer):
+    may = [{"id": 7, "face_group": chamfer, "rule": "may_change", "reason": "cosmetic"}]
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), decide(
+        {"issue_id": "I1", "action": "propose", "option_key": REMOVE, "reason": "x"})), constraints=may)
+    assert r.fallbacks == [] and r.decisions[0].option_key == REMOVE and "isn't needed" not in r.comment
+
+
+def test_with_unknown_intent_no_part_edit_may_lead_while_a_shop_fix_exists(part_a, shop, chamfer):
+    """Codex, PR #23: barring only the conditional option let another part edit lead."""
+    depth = f"set_depth/{chamfer}/+X/48"
+    other = decide({"issue_id": "I1", "action": "propose", "option_key": depth, "reason": "x"})
+    model = Scripted(plan(*requests_for(chamfer), {"kind": "set_depth", "face_group": chamfer}), other,
+                     ask_with("Is it needed?"))
+    r = run_review(part_a, shop, model)
+    assert depth in r.options and r.decisions[0].option_key == ROUTE and r.fallbacks == []
+
+
+# --- unknown intent with no shop-side fix (Rayyan's ruling, 2026-10-30: lanes 1 and 3) ------------------
+
+BORE_REMOVE, BORE_ROUTE = "remove_feature/G9", "route_machine/5"
+
+
+def bore_plan():
+    return plan({"kind": "remove_feature", "face_group": "G9"}, {"kind": "route_machine"}, dropped=("I2",))
+
+
+def test_a_proposal_that_changes_nothing_is_rejected(undercut, shop):
+    """Gate, PR #23: 2 of 9 runs proposed the 5-axis route, which leaves the bore unreachable
+    ("takes it from 1 to 1 setup(s)")."""
+    nothing = decide({"issue_id": "I1", "action": "propose", "option_key": BORE_ROUTE, "reason": "x"})
+    events = []
+    r = run_review(undercut, shop, Scripted(bore_plan(), nothing, nothing),
+                   emit=lambda kind, title, **d: events.append((title, d)))
+    assert r.fallbacks == ["decide"] and BORE_ROUTE not in [d.option_key for d in r.decisions]
+    assert any("changes nothing" in d.get("reason", "") for t, d in events if t == "Model answer rejected")
+
+
+def test_with_no_shop_fix_the_review_flags_and_asks_and_removal_is_only_conditional(undercut, shop):
+    r = run_review(undercut, shop, None)
+    d = next(x for x in r.decisions if x.issue_id == "I1")
+    assert (d.action, d.option_key) == ("ask", None) and d.question
+    lines = r.comment.splitlines()
+    assert "G9: only a part edit fixes this, and its purpose isn't on record." in lines
+    assert f"If G9 isn't needed, {BORE_REMOVE} takes it to 0 unreachable face(s)." in lines
+    assert not any(line.startswith(f"G9: {BORE_REMOVE}") for line in lines)  # never leads unconditionally
+
+
+def test_the_model_may_ask_only_where_no_shop_fix_exists(undercut, shop, part_a, chamfer):
+    lead_removal = decide({"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x",
+                           "question": "Is G9 needed?"})
+    ask = decide({"issue_id": "I1", "action": "ask", "question": "Is G9 needed?", "reason": "x"})
+    r = run_review(undercut, shop, Scripted(bore_plan(), lead_removal, ask))
+    assert r.fallbacks == [] and r.decisions[0].action == "ask"
+    ask_a = decide({"issue_id": "I1", "action": "ask", "question": "Is it needed?", "reason": "x"})
+    a = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_a, ask_with("Is it needed?")))
+    assert a.decisions[0].action == "propose"  # Part A has a shop fix: asking alone is still rejected
+
+
+def test_a_fix_for_unreachable_faces_says_so(undercut, shop):
+    free = [{"id": 1, "face_group": "G9", "rule": "may_change", "reason": "cosmetic"}]
+    r = run_review(undercut, shop, Scripted(bore_plan(), decide(
+        {"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x"})), constraints=free)
+    assert f"G9: {BORE_REMOVE} takes it from 2 to 0 unreachable face(s)." in r.comment.splitlines()
+
+
+def test_a_tool_only_change_is_said_as_one():
+    """Codex, PR #23: a fix that changes only the cutting tool read "takes it from 1 to 1 setup(s)"."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _effect
+
+    o = NS(key="set_min_radius/G1/r6", before=NS(setups=1, unreachable=0), after=NS(setups=1, unreachable=0),
+           tool_changes=[NS(face_id=4, before="EM3", after="EM12")])
+    assert _effect(o) == "changes the tool that cuts it and keeps {{option.set_min_radius/G1/r6.setups_after}} setup(s)"
+
+
+def test_the_rules_allow_the_one_ask_the_tool_offers():
+    """Codex, PR #23: RULES said a question never replaces a proposal, which contradicts `ask_only`."""
+    from anville.agent.review import RULES
+
+    assert "ask_only" in RULES
