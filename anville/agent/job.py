@@ -16,19 +16,19 @@ from anville.geometry.access import BackChamferAccess
 
 
 def flushing_at_stage_changes(add: Emit, flush) -> Emit:
-    """`add` that calls `flush` whenever an event opens a new stage, so each stage's events reach the
-    store while the next stage runs and the panel animates the run live (ADR 0007). Events without a
-    stage are not boundaries."""
+    """`add` that flushes right after an event that opens a new stage. The opening event ("Model
+    called") comes before the stage's slow call, so the panel sees each stage start live, and the
+    previous stage's events go out with it (ADR 0007; Codex, PR #24). Events without a stage are not
+    boundaries."""
     last = None
 
     def emit(kind: str, title: str, **detail) -> None:
         nonlocal last
         stage = detail.get("stage")
-        if stage is not None:
-            if last is not None and stage != last:
-                flush()
-            last = stage
         add(kind, title, **detail)
+        if stage is not None and stage != last:
+            last = stage
+            flush()
     return emit
 
 

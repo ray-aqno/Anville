@@ -316,15 +316,20 @@ class _Runner:
                 content += f"\n\nYour previous answer was rejected: {error}. Call {name} again."
             messages = [{"role": "system", "content": RULES}, {"role": "user", "content": content}]
             self.calls += 1
+            # Announced before the call, so the panel sees the stage start while the model works (Codex, PR #24).
+            self.emit("tool_call", "Model called", stage=stage, model=model.name,
+                      host=getattr(model, "host", None), attempt=attempt)
+            record = {"stage": stage, "model": model.name, "host": getattr(model, "host", None)}
             started = time.monotonic()
             try:
                 reply = model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage),
                                    reasoning_effort=STAGE_EFFORT.get(stage), timeout_s=left)
             except ModelUnavailable as e:
+                # Failed calls are often the slowest: their time belongs in the record too (Codex, PR #24).
+                self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), "error": str(e)})
                 error = f"model unavailable: {e}"
                 break
-            self.usage.append({"stage": stage, "model": model.name, "host": getattr(model, "host", None),
-                               "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
+            self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
             if reply.error:
                 error = reply.error
             elif reply.tool != name:

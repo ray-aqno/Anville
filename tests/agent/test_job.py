@@ -105,5 +105,6 @@ def test_events_are_flushed_when_the_stage_changes():
     emit("error", "Agent failed")  # no stage: not a boundary
     emit("decision", "Decision made", stage="decide")
     emit("verify", "Sentence verified", stage="verify")
-    assert log == ["Issues chosen", "Option scored", "Agent failed", "FLUSH", "Decision made", "FLUSH",
-                   "Sentence verified"]
+    # The event that opens a stage is written at once (Codex, PR #24): it comes before the stage's slow call.
+    assert log == ["Issues chosen", "FLUSH", "Option scored", "Agent failed", "Decision made", "FLUSH",
+                   "Sentence verified", "FLUSH"]
