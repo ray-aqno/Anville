@@ -208,6 +208,8 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
     for key, o in options.items():
         values[f"option.{key}.setups_before"] = str(o.before.setups)
         values[f"option.{key}.setups_after"] = str(o.after.setups)
+        if o.kind == "add_tool":  # tool names carry digits: they reach the designer through a slot
+            values[f"option.{key}.tool"] = str(o.params.get("name", key))
         values[f"option.{key}.unreachable_before"] = str(o.before.unreachable)
         values[f"option.{key}.unreachable_after"] = str(o.after.unreachable)
     return values
@@ -467,7 +469,6 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         if d.get("payback") is not None:
             lo, hi = d["payback"]
             paybacks[key] = ((lo, hi), d["payback_mid"])
-            values[f"option.{key}.tool"] = str(options[key].params.get("name", key))
             for name, v in (("payback_lo", lo), ("payback_hi", hi), ("payback_mid", d["payback_mid"])):
                 if v is not None:
                     values[f"option.{key}.{name}"] = str(v)
@@ -680,11 +681,13 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
             g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
             if key:  # the part edit, offered only on condition, next to the one question about intent
                 also = " also" if d.action == "propose" else ""
-                lines.append(f"If {g} isn't needed, {key}{also} {_effect(options[key], short=True)}.")
+                lines.append(f"If {g} isn't needed, {_name(options[key])}{also} {_effect(options[key], short=True)}.")
                 if key in (estimates or {}):  # lane 3: what the edit would cost, from the cost model's slots
-                    lines.append(f"At {{{{costs.quantity}}}} parts, {key}'s plan runs ${{{{option.{key}.cost_lo}}}}"
-                                 f"–${{{{option.{key}.cost_hi}}}}; designer time isn't priced.")
-            lines.append(f"{g}'s purpose isn't on record. {d.question} The answer could change the best plan.")
+                    lines.append(f"At {{{{costs.quantity}}}} parts, the plan after {_name(options[key])} runs "
+                                 f"${{{{option.{key}.cost_lo}}}}–${{{{option.{key}.cost_hi}}}}; designer time isn't priced.")
+            # An ask's own line already says the purpose isn't on record.
+            flag = "" if d.action == "ask" else f"{g}'s purpose isn't on record. "
+            lines.append(f"{flag}{d.question} The answer could change the best plan.")
     return "\n".join(lines)
 
 
@@ -762,7 +765,8 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
         return f"{g}: only a part edit fixes this, and its purpose isn't on record."
     if d.action == "propose":
         o = options[d.option_key]
-        line = f"{g}: {d.option_key} {_effect(o)}."
+        name = _name(o)
+        line = f"{g}: {name[0].upper()}{name[1:]} {_effect(o)}."
         if o.side == "shop":
             line += " It changes the shop, not the part."
         if intent and intent.status == "protected":
@@ -770,6 +774,26 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
             line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {g} stays as designed."
         return line
     return f"{g}: no change proposed."
+
+
+def _name(o: Option) -> str:
+    """An option in the designer's words, as a slot template: option keys are for the trace, not the
+    comment (shop lane's demo check of #26)."""
+    g, p = o.face_group, o.params
+    if o.kind == "remove_feature":
+        return f"removing {g}"
+    if o.kind == "set_depth":
+        return f"changing {g}'s depth"
+    if o.kind == "route_machine":
+        return "sending it to an outside 5-axis shop"
+    if o.kind == "add_tool":
+        tool = f"{{{{option.{o.key}.tool}}}}"
+        if p.get("type") == "back_chamfer":
+            return f"{'using the shop' + chr(39) + 's' if p.get('owned') else 'buying the'} {tool} back-chamfer cutter"
+        if p.get("type") == "holder":
+            return f"running the {tool} in a slimmer holder"
+        return f"buying a longer-reach {tool}"
+    return o.key
 
 
 def _effect(o: Option, *, short: bool = False) -> str:
