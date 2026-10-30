@@ -208,6 +208,7 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
     for key, o in options.items():
         values[f"option.{key}.setups_before"] = str(o.before.setups)
         values[f"option.{key}.setups_after"] = str(o.after.setups)
+        values[f"option.{key}.unreachable_before"] = str(o.before.unreachable)
         values[f"option.{key}.unreachable_after"] = str(o.after.unreachable)
     return values
 
@@ -272,14 +273,17 @@ _SENTENCE = _obj(["text", "role", "cites"], {
     "role": {"type": "string", "enum": ["context", "action", "reason"]},
     "cites": {"type": "array", "minItems": 1, "items": {"type": "string"}}})
 DECIDE_TOOL = _tool(
-    "decide", "For each selected issue, propose an offered option or stay quiet. Where ask_allowed is true, a "
-    "proposal may also carry a `question` for the designer: the comment flags the issue and suggests the fix "
-    "in one reply, without waiting for an answer. Then write the comment the designer will read: sentences "
-    "that each cite the nodes they rest on. Questions are written only in `decisions`; code places them.",
+    "decide", "For each selected issue, propose an offered option that changes the plan, or stay quiet. Where "
+    "ask_allowed is true, a proposal may also carry a `question` for the designer: the comment flags the issue "
+    "and suggests the fix in one reply, without waiting for an answer. Only for an issue listed in `ask_only` "
+    "(no shop-side fix exists, and the only fix is a part edit on a face whose purpose is unknown), choose "
+    "`ask` with a question and no option: code then states the part edit as a conditional. Then write the "
+    "comment the designer will read: sentences that each cite the nodes they rest on. Questions are written "
+    "only in `decisions`; code places them.",
     _obj(["decisions", "comment"], {
         "decisions": {"type": "array", "items": _obj(
             ["issue_id", "action", "reason"],
-            {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "quiet"]},
+            {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "ask", "quiet"]},
              "option_key": {"type": "string"}, "question": {"type": "string", "maxLength": 400},
              "reason": {"type": "string", "maxLength": 300}})},
         "comment": {"type": "array", "maxItems": MAX_SENTENCES, "items": _SENTENCE}}))
@@ -432,14 +436,19 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
     # A part edit then appears only as code's conditional line, next to the question.
     # Every part edit on such a face is barred from leading and from the model's prose (Codex, PR #23).
-    conditional, barred = {}, {}
+    # With no shop-side fix, a part edit still never leads: the review flags and asks, and code states the edit
+    # as a conditional (Rayyan's ruling, 2026-10-30, lane 1; lane 3 adds its dollars).
+    conditional, barred, ask_only = {}, {}, set()
     for i in chosen:
         mine = [o for o in options.values() if o.face_group in (None, i.face_group)]
-        if intents[i.face_group].status == "unknown" and best_option(mine, part_edits=False):
+        shop_fix = best_option(mine, part_edits=False)
+        if intents[i.face_group].status == "unknown" and (shop_fix or gates[i.id]):
             barred[i.id] = {o.key for o in mine if o.side == "part"}
             part = next((o for o in mine if o.side == "part" and o.changes_plan), None)
             if part:
                 conditional[i.id] = part.key
+                if not shop_fix and gates[i.id]:
+                    ask_only.add(i.id)
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
@@ -452,10 +461,12 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
             return None, "make exactly one decision per selected issue"
         for d in a["decisions"]:
             issue = by_id[d["issue_id"]]
-            if d["action"] == "ask":
+            if d["action"] == "ask" and issue.id not in ask_only:
                 return None, (f"don't only ask about {issue.id}: propose an offered option, and put the question "
                               "in that proposal's `question` field (flag, then suggest)")
-            if d["action"] not in ("propose", "quiet"):
+            if d["action"] == "ask" and not d.get("question"):
+                return None, f"an ask about {issue.id} needs its question"
+            if d["action"] not in ("propose", "ask", "quiet"):
                 return None, f"unknown action {d['action']!r}"
             if d["action"] == "propose":
                 key = d.get("option_key")
@@ -463,12 +474,14 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     return None, f"{key!r} was not offered; offered: {sorted(options)}"
                 if options[key].face_group not in (None, issue.face_group):
                     return None, f"{key} belongs to another face group"
+                if not options[key].changes_plan:  # eval gate, PR #23: "takes it from 1 to 1 setup(s)"
+                    return None, f"{key} changes nothing: propose an option whose changes_plan is true, or stay quiet"
                 if key in barred.get(issue.id, ()):
                     return None, (f"{issue.face_group}'s purpose is unknown: lead with a fix that works whatever it's "
                                   f"for (a shop-side option); a part edit appears only as code's conditional line")
             question = d.get("question") or None
             if question:
-                if d["action"] != "propose" or not gates[issue.id]:
+                if d["action"] == "quiet" or not gates[issue.id]:
                     return None, f"asking about {issue.id} is not allowed: the answer would not change the plan"
                 _, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
                 if err:
@@ -488,6 +501,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                       "ids only in `cites` (cite decision:<issue_id> for your own decisions), never in the text. "
                       "Use only these slots for numbers.",
                       base, {"selected": selected, "intents": intent_view, "ask_allowed": gates,
+                             "ask_only": sorted(ask_only),
                              "offered_options": offered, "rejected_requests": rejected,
                              "nodes": sorted(nodes), "slots": sorted(values)}, DECIDE_TOOL, v_decide)
     if decided is None:
@@ -503,7 +517,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     decided_by = {d.issue_id: d for d in decisions}
     checked = []
     for idx, sent in enumerate(sentences[:MAX_SENTENCES]):
-        err = check_sentence(sent, decided_by, nodes, values, keys, conditional_only=set().union(*barred.values()))
+        err = check_sentence(sent, decided_by, nodes, values, keys, conditional_only=set().union(*barred.values()),
+                             options_by_key=options)
         emit("verify" if not err else "error", "Sentence checked", stage="check", index=idx, ok=not err,
              reason=err or "", text=fill_slots(sent["text"], values, keys)[0] or sent["text"])  # the panel shows it
         if not err:
@@ -537,7 +552,8 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
 
 
 def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, values: dict,
-                   keys: list[str], *, conditional_only: set[str] = frozenset()) -> str:
+                   keys: list[str], *, conditional_only: set[str] = frozenset(),
+                   options_by_key: dict[str, Option] | None = None) -> str:
     """Code's half of the gate on prose. Returns why the sentence is rejected, or "" if it passes.
 
     `conditional_only`: part edits on faces of unknown purpose, which only code's conditional line names.
@@ -558,12 +574,13 @@ def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, val
     if _INTERNAL.search(_SLOT.sub("", sent["text"])):
         return "write for the designer: node ids and slot names belong in cites and {{slots}}, not the text"
     cited = [decided_by[c.split(":", 1)[1]] for c in cites if c.startswith("decision:")]
-    if sent["role"] == "action" and len(cited) != 1:
+    if sent["role"] == "action" and (len(cited) != 1 or cited[0].action == "ask"):
         return "an action sentence cites exactly one propose or quiet decision"
     if sent["role"] == "action" and cited[0].action == "propose":
         # It replaces the rendered proposal, so it must state the outcome, not just avoid overclaiming
         # (Greptile, PR #14: "G3 stays as designed." cited the decision and hid the machine change).
-        slot = f"{{{{option.{cited[0].option_key}.setups_after}}}}"
+        slot = _result_slot(options_by_key[cited[0].option_key]) if options_by_key else \
+            f"{{{{option.{cited[0].option_key}.setups_after}}}}"
         if slot not in sent["text"]:
             return f"an action sentence for a proposal states its result with {slot}"
     # Options the sentence may name: those of its cited decisions and the option nodes it cites.
@@ -640,7 +657,8 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
         if d.question:
             g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
             if key:  # the part edit, offered only on condition, next to the one question about intent
-                lines.append(f"If {g} isn't needed, {key} also takes it to {{{{option.{key}.setups_after}}}} setup(s).")
+                also = " also" if d.action == "propose" else ""
+                lines.append(f"If {g} isn't needed, {key}{also} {_effect(options[key], short=True)}.")
             lines.append(f"{g}'s purpose isn't on record. {d.question} The answer could change the best plan.")
     return "\n".join(lines)
 
@@ -653,12 +671,15 @@ def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option]) -> De
     if may_ask:
         # Intent unknown: propose the fix that assumes nothing about the feature (shop side, when one
         # exists) and ask about the part edit the answer could unlock. Never ask alone.
-        best = best_option(mine, part_edits=False) or best_option(mine, part_edits=True)
-        if best:
-            return Decision(issue.id, "propose", option_key=best.key,
-                            question=f"Is {issue.face_group} required as modelled?",
+        question = f"Is {issue.face_group} required as modelled?"
+        shop_fix = best_option(mine, part_edits=False)
+        if shop_fix:
+            return Decision(issue.id, "propose", option_key=shop_fix.key, question=question,
                             reason="its intent is unknown: the proposal assumes nothing about it, and the "
                                    "answer could unlock a part edit")
+        if best_option(mine, part_edits=True):  # only a part edit helps: flag and ask (ruling, 2026-10-30)
+            return Decision(issue.id, "ask", question=question,
+                            reason="its intent is unknown and only a part edit fixes it")
     best = best_option(mine, part_edits=True)
     if best:
         return Decision(issue.id, "propose", option_key=best.key, reason="the best plan-changing option offered")
@@ -669,10 +690,11 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
     """One decision as a slot template written by code: the fallback for any unverified statement."""
     g = by_id[d.issue_id].face_group
     intent = intents.get(g)
+    if d.action == "ask":
+        return f"{g}: only a part edit fixes this, and its purpose isn't on record."
     if d.action == "propose":
         o = options[d.option_key]
-        line = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "
-                f"to {{{{option.{d.option_key}.setups_after}}}} setup(s).")
+        line = f"{g}: {d.option_key} {_effect(o)}."
         if o.side == "shop":
             line += " It changes the shop, not the part."
         if intent and intent.status == "protected":
@@ -680,6 +702,21 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
             line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {g} stays as designed."
         return line
     return f"{g}: no change proposed."
+
+
+def _effect(o: Option, *, short: bool = False) -> str:
+    """What an option does, as a slot template: unreachable faces when it changes those, else setups (eval
+    gate, PR #23: an unreachable bore read "takes it from 1 to 1 setup(s)"). `short` drops the "from"."""
+    name, unit = ("unreachable", "unreachable face(s)") if o.before.unreachable != o.after.unreachable \
+        else ("setups", "setup(s)")
+    start = "" if short else f"from {{{{option.{o.key}.{name}_before}}}} "
+    return f"takes it {start}to {{{{option.{o.key}.{name}_after}}}} {unit}"
+
+
+def _result_slot(o: Option) -> str:
+    """The slot an action sentence must state for this proposal's result."""
+    name = "unreachable_after" if o.before.unreachable != o.after.unreachable else "setups_after"
+    return f"{{{{option.{o.key}.{name}}}}}"
 
 
 def _group_order(label: str) -> int:
