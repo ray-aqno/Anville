@@ -66,7 +66,7 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
   - when the cost model lands (the gate compares dollars);
   - when the multi-turn eval gate shows a stage failing its bar.
 
-## Amendment 1 (Proposed, 2026-10-29): flag, then suggest
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-30): flag, then suggest
 
 **Context.**
 - Rayyan, 2026-10-29: "Anville should always flag and segue to suggest. Models are now capable enough for a layered response like that without delay."
