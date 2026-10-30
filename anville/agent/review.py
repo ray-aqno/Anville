@@ -57,8 +57,9 @@ class Intent:
 @dataclass
 class Decision:
     issue_id: str
-    action: str        # propose | ask | quiet
+    action: str        # propose | quiet
     option_key: str | None = None
+    # Only on a proposal, and only where the gate allows: flag, then suggest (ADR 0009 Amendment 1).
     question: str | None = None
     reason: str = ""
 
@@ -154,6 +155,10 @@ def filter_requests(requests: list[dict], intents: dict[str, Intent],
     return kept, rejected
 
 
+def shop_side_requests(group: str) -> list[dict]:
+    return [{"kind": "add_tool", "face_group": group}, {"kind": "route_machine"}]
+
+
 def all_requests(group: str) -> list[dict]:
     return [{"kind": k, "face_group": group} for k in NEEDS_GROUP] + [{"kind": "route_machine"}]
 
@@ -233,7 +238,9 @@ RULES = (
     "`intents`: call it protected only if its status is protected, and say its purpose is unknown if it is "
     "unknown. An option with side 'shop' changes the shop (tools, machines, fixtures), never the part's "
     "geometry, so it is always compatible with a protected face. A protected face is therefore never a "
-    "reason to drop an issue: the fix may be on the shop side. Call exactly one tool."
+    "reason to drop an issue: the fix may be on the shop side. Flag, then suggest: every issue you raise "
+    "comes with a proposed fix in the same reply, and a question never replaces the proposal. "
+    "Call exactly one tool."
 )
 STAGE_MAX_TOKENS = {"plan": 6144, "decide": 6144, "verify": 4096}  # plan hit 4096 live; decide also writes
 # Live, 2026-10-29 (Spark Open, Part A, 8 reviews): "low" cut latency from 21-33 s to 4-17 s, but at
@@ -265,13 +272,14 @@ _SENTENCE = _obj(["text", "role", "cites"], {
     "role": {"type": "string", "enum": ["context", "action", "reason"]},
     "cites": {"type": "array", "minItems": 1, "items": {"type": "string"}}})
 DECIDE_TOOL = _tool(
-    "decide", "For each selected issue, propose an offered option, ask the designer (only where allowed) or stay "
-    "quiet. Then write the comment the designer will read: sentences that each cite the nodes they rest on. "
-    "Questions are written only in `decisions`; code places them in the comment.",
+    "decide", "For each selected issue, propose an offered option or stay quiet. Where ask_allowed is true, a "
+    "proposal may also carry a `question` for the designer: the comment flags the issue and suggests the fix "
+    "in one reply, without waiting for an answer. Then write the comment the designer will read: sentences "
+    "that each cite the nodes they rest on. Questions are written only in `decisions`; code places them.",
     _obj(["decisions", "comment"], {
         "decisions": {"type": "array", "items": _obj(
             ["issue_id", "action", "reason"],
-            {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "ask", "quiet"]},
+            {"issue_id": {"type": "string"}, "action": {"type": "string", "enum": ["propose", "quiet"]},
              "option_key": {"type": "string"}, "question": {"type": "string", "maxLength": 400},
              "reason": {"type": "string", "maxLength": 300}})},
         "comment": {"type": "array", "maxItems": MAX_SENTENCES, "items": _SENTENCE}}))
@@ -393,6 +401,11 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         requests = [r for i in issues for r in all_requests(i.face_group)]
     else:
         selected, requests = planned
+        # Shop-side fixes are always scored: Plan sees geometry only, so it can't know the shop could buy a
+        # catalog cutter (live, 2026-10-29: it asked for route and remove only, 4 of 4, and the 910480 was
+        # never offered). The model still chooses which part-side edits are worth scoring.
+        requests = requests + [r for i in selected for r in shop_side_requests(by_id[i].face_group)
+                               if r not in requests]
     emit("decision", "Issues chosen", stage="plan", selected=selected)
     if not selected:
         # Nothing chosen: the later stages would have nothing to work on (live run, 2026-10-28).
@@ -410,6 +423,15 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
              setups_after=o.after.setups, changes_plan=o.changes_plan)
 
+    # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
+    # A part edit then appears only as code's conditional line, next to the question.
+    conditional = {}
+    for i in chosen:
+        mine = [o for o in options.values() if o.face_group in (None, i.face_group)]
+        part = next((o for o in mine if o.side == "part" and o.changes_plan), None)
+        if intents[i.face_group].status == "unknown" and part and best_option(mine, part_edits=False):
+            conditional[i.id] = part.key
+
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
     keys = list(options)
@@ -421,7 +443,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
             return None, "make exactly one decision per selected issue"
         for d in a["decisions"]:
             issue = by_id[d["issue_id"]]
-            if d["action"] not in ("propose", "ask", "quiet"):
+            if d["action"] == "ask":
+                return None, (f"don't only ask about {issue.id}: propose an offered option, and put the question "
+                              "in that proposal's `question` field (flag, then suggest)")
+            if d["action"] not in ("propose", "quiet"):
                 return None, f"unknown action {d['action']!r}"
             if d["action"] == "propose":
                 key = d.get("option_key")
@@ -429,9 +454,12 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     return None, f"{key!r} was not offered; offered: {sorted(options)}"
                 if options[key].face_group not in (None, issue.face_group):
                     return None, f"{key} belongs to another face group"
-            question = d.get("question")
-            if d["action"] == "ask":
-                if not gates[issue.id] or not question:
+                if key == conditional.get(issue.id):
+                    return None, (f"{issue.face_group}'s purpose is unknown: lead with a fix that works whatever it's "
+                                  f"for (a shop-side option); {key} appears only as code's conditional line")
+            question = d.get("question") or None
+            if question:
+                if d["action"] != "propose" or not gates[issue.id]:
                     return None, f"asking about {issue.id} is not allowed: the answer would not change the plan"
                 _, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
                 if err:
@@ -460,19 +488,20 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         decisions, sentences = decided
     for d in decisions:
         emit("decision", "Decision made", stage="decide", issue_id=d.issue_id, action=d.action,
-             option_key=d.option_key, reason=d.reason)  # the model's reasoning: trace and panel
+             option_key=d.option_key, question=d.question, reason=d.reason)  # trace and panel
 
     # Check (code), then verify (a second model): only grounded, verified prose is published
     decided_by = {d.issue_id: d for d in decisions}
     checked = []
     for idx, sent in enumerate(sentences[:MAX_SENTENCES]):
-        err = check_sentence(sent, decided_by, nodes, values, keys)
+        err = check_sentence(sent, decided_by, nodes, values, keys, conditional_only=set(conditional.values()))
         emit("verify" if not err else "error", "Sentence checked", stage="check", index=idx, ok=not err,
              reason=err or "")
         if not err:
             checked.append(sent)
     verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
-    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options), values, keys)
+    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional),
+                            values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     emit("verify", "Comment assembled", stage="publish", model_sentences=len(verified))
@@ -499,9 +528,15 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
 
 
 def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, values: dict,
-                   keys: list[str]) -> str:
-    """Code's half of the gate on prose. Returns why the sentence is rejected, or "" if it passes."""
+                   keys: list[str], *, conditional_only: set[str] = frozenset()) -> str:
+    """Code's half of the gate on prose. Returns why the sentence is rejected, or "" if it passes.
+
+    `conditional_only`: part edits on faces of unknown purpose, which only code's conditional line names.
+    """
     cites = sent.get("cites") or []
+    named = [k for k in conditional_only if f"option:{k}" in cites or k in sent.get("text", "")]
+    if named:
+        return f"{named[0]} is offered only in code's conditional line while the face's purpose is unknown"
     if not cites or any(c not in nodes for c in cites):
         return f"cites unknown nodes {[c for c in cites if c not in nodes]}" if cites else "cites nothing"
     _, err = fill_slots(sent["text"], values, keys)
@@ -514,7 +549,7 @@ def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, val
     if _INTERNAL.search(_SLOT.sub("", sent["text"])):
         return "write for the designer: node ids and slot names belong in cites and {{slots}}, not the text"
     cited = [decided_by[c.split(":", 1)[1]] for c in cites if c.startswith("decision:")]
-    if sent["role"] == "action" and (len(cited) != 1 or cited[0].action == "ask"):
+    if sent["role"] == "action" and len(cited) != 1:
         return "an action sentence cites exactly one propose or quiet decision"
     if sent["role"] == "action" and cited[0].action == "propose":
         # It replaces the rendered proposal, so it must state the outcome, not just avoid overclaiming
@@ -580,17 +615,24 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
 
 
 def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dict[str, Issue],
-                     intents: dict[str, Intent], options: dict[str, Option]) -> str:
+                     intents: dict[str, Intent], options: dict[str, Option],
+                     conditional: dict[str, str] | None = None) -> str:
     """Verified model sentences in the model's order; every decision not stated by a verified action
-    sentence gets its code-rendered line; accepted questions are always placed by code."""
+    sentence gets its code-rendered line; accepted questions are always placed by code, after the
+    proposal they belong to (flag, then suggest)."""
     covered = {c.split(":", 1)[1] for s in verified if s["role"] == "action"
                for c in s["cites"] if c.startswith("decision:")}
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
     for d in decisions:
-        if d.action == "ask" or d.issue_id not in covered:
+        if d.issue_id not in covered:
             lines.append(render_line(d, by_id, intents, options))
+        if d.question:
+            g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
+            if key:  # the part edit, offered only on condition, next to the one question about intent
+                lines.append(f"If {g} isn't needed, {key} also takes it to {{{{option.{key}.setups_after}}}} setup(s).")
+            lines.append(f"{g}'s purpose isn't on record. {d.question} The answer could change the best plan.")
     return "\n".join(lines)
 
 
@@ -598,10 +640,16 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
 
 
 def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option]) -> Decision:
-    if may_ask:
-        return Decision(issue.id, "ask", question=f"Is {issue.face_group} required as modelled?",
-                        reason="its intent is unknown and the answer changes the best plan")
     mine = [o for o in options if o.face_group in (None, issue.face_group)]
+    if may_ask:
+        # Intent unknown: propose the fix that assumes nothing about the feature (shop side, when one
+        # exists) and ask about the part edit the answer could unlock. Never ask alone.
+        best = best_option(mine, part_edits=False) or best_option(mine, part_edits=True)
+        if best:
+            return Decision(issue.id, "propose", option_key=best.key,
+                            question=f"Is {issue.face_group} required as modelled?",
+                            reason="its intent is unknown: the proposal assumes nothing about it, and the "
+                                   "answer could unlock a part edit")
     best = best_option(mine, part_edits=True)
     if best:
         return Decision(issue.id, "propose", option_key=best.key, reason="the best plan-changing option offered")
@@ -612,8 +660,6 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
     """One decision as a slot template written by code: the fallback for any unverified statement."""
     g = by_id[d.issue_id].face_group
     intent = intents.get(g)
-    if d.action == "ask":
-        return f"{g}: {d.question} Its purpose isn't on record, and the answer changes the best plan."
     if d.action == "propose":
         o = options[d.option_key]
         line = (f"{g}: {d.option_key} takes it from {{{{option.{d.option_key}.setups_before}}}} "

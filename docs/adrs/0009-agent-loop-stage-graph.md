@@ -65,3 +65,27 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
 - **Revisit:**
   - when the cost model lands (the gate compares dollars);
   - when the multi-turn eval gate shows a stage failing its bar.
+
+## Amendment 1 (Proposed, 2026-10-29): flag, then suggest
+
+**Context.**
+- Rayyan, 2026-10-29: "Anville should always flag and segue to suggest. Models are now capable enough for a layered response like that without delay."
+- Live runs that day showed Spark Open already proposes `route_machine/5` when intent is unknown, and he considers that correct.
+- §5 made `ask` and `propose` mutually exclusive, and the fixed-script fallback asked whenever the gate allowed it. A review that only asks makes the designer wait a round trip, so the eval gate now counts ask-only as a failure.
+- **This mattered for the deployed job:** intent from CAD feature names (S5) isn't built, so every intent there is "unknown", and the first live save would have posted a bare question.
+
+**Decision.**
+1. **There is no ask-only decision.** A decision is `propose` or `quiet`. A proposal may carry a `question`, only where the value-of-information gate (§5, unchanged) allows one. A model reply with `action: "ask"` is rejected with the reason ("propose an offered option, and put the question in that proposal"), so the retry teaches the shape.
+2. **The fallback flags and suggests.** When the gate allows a question, the fixed-script step proposes the best option that assumes nothing about the feature: the shop-side one when it exists (on demo Part A, buying the 910480; without the catalog, routing to 5-axis). It then asks whether the feature is required, since the answer could unlock a part edit.
+3. **Code places the question** after the proposal, as `"<group>'s purpose isn't on record. <question> The answer could change the best plan."`. This happens whether the proposal is stated by a verified model sentence or by its rendered line. The number and slot rules for questions are unchanged.
+4. **A fix valid under any intent leads** (council ruling, accepted by Rayyan 2026-10-29, with the model-survival patch). When intent is unknown and a shop-side option changes the plan, the best part-side plan-changing option becomes *conditional only*:
+   - Decide rejects a proposal that leads with it, so the stage retries;
+   - Check rejects prose that cites or names it;
+   - code renders it once, just before the question: `"If <group> isn't needed, <option> also takes it to {{setups_after}} setup(s)."`.
+   The model still chooses freely among the shop-side fixes. When the cost model lands, code ranks the cheapest any-intent fix first.
+5. **The RULES prompt** says it once: every issue raised comes with a proposed fix in the same reply, and a question never replaces the proposal.
+
+**Consequences.**
+- **Easier:** one comment is enough to act on; the designer's reply refines the plan rather than unblocking it.
+- **Harder:** an unknown-intent proposal may suggest a change the designer didn't want. It's still only a suggestion, and the shop-side choice keeps it from touching the part.
+- **Revisit** when intent from CAD (S5) lands: most "unknown" cases should then become stated ones.
