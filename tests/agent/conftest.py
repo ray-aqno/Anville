@@ -39,3 +39,11 @@ def catalog_access(part_a_step, part_a, shop):
 def chamfer(part_a, shop):
     (issue,) = find_issues(part_a, min_setups(part_a, shop))
     return issue.face_group
+
+
+@pytest.fixture(scope="module")
+def undercut(tmp_path_factory):
+    """A bore no direction reaches: its only fix is a part edit (no shop-side fix exists)."""
+    from tests.geometry.parts import PARTS, write_step  # OCP
+
+    return extract(write_step(PARTS["undercut"](), tmp_path_factory.mktemp("agent") / "u.step"))

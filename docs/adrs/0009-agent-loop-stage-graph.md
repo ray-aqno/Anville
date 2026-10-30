@@ -83,7 +83,12 @@ RFC 0001 proposed the fix: the harness owns *what is allowed*, and the model own
    - Check rejects prose that cites or names it;
    - code renders it once, just before the question: `"If <group> isn't needed, <option> also takes it to {{setups_after}} setup(s)."`.
    The model still chooses freely among the shop-side fixes. When the cost model lands, code ranks the cheapest any-intent fix first.
-5. **The RULES prompt** says it once: every issue raised comes with a proposed fix in the same reply, and a question never replaces the proposal.
+5. **No shop-side fix: flag and ask** (Rayyan's ruling, 2026-10-30, on the eval gate's `undercut` gap). When a face's purpose is unknown and only a part edit fixes it, the part edit still never leads:
+   - the decision is `ask` (a question, no option), allowed only for such an issue (`ask_only`); anywhere else, ask-only is still rejected;
+   - code renders "<group>: only a part edit fixes this, and its purpose isn't on record.", then the conditional part edit, then the question;
+   - lane 3 adds the edit's dollar estimate from the cost model; lane 2 (searching documentation for the feature's purpose) is held out of the demo.
+6. **A proposal must change the plan.** Decide rejects an option whose `changes_plan` is false (gate: "takes it from 1 to 1 setup(s)"). A fix that changes unreachable faces is stated in unreachable faces, not setups.
+7. **The RULES prompt** says it once: every issue raised comes with a proposed fix in the same reply, and a question never replaces the proposal.
 
 **Consequences.**
 - **Easier:** one comment is enough to act on; the designer's reply refines the plan rather than unblocking it.

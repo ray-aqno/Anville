@@ -712,3 +712,51 @@ def test_the_cost_comparison_and_its_inputs_reach_the_trace(part_a, costed, cham
     (compared,) = [d for t, d in events if t == "Costs compared"]
     assert {v["quantity"] for v in compared["verdicts"]} == {4, 10, 20}
     assert any(i["status"] == "placeholder" for i in compared["inputs"].values())
+
+
+# --- unknown intent with no shop-side fix (Rayyan's ruling, 2026-10-30: lanes 1 and 3) ------------------
+
+BORE_REMOVE, BORE_ROUTE = "remove_feature/G9", "route_machine/5"
+
+
+def bore_plan():
+    return plan({"kind": "remove_feature", "face_group": "G9"}, {"kind": "route_machine"}, dropped=("I2",))
+
+
+def test_a_proposal_that_changes_nothing_is_rejected(undercut, shop):
+    """Gate, PR #23: 2 of 9 runs proposed the 5-axis route, which leaves the bore unreachable
+    ("takes it from 1 to 1 setup(s)")."""
+    nothing = decide({"issue_id": "I1", "action": "propose", "option_key": BORE_ROUTE, "reason": "x"})
+    events = []
+    r = run_review(undercut, shop, Scripted(bore_plan(), nothing, nothing),
+                   emit=lambda kind, title, **d: events.append((title, d)))
+    assert r.fallbacks == ["decide"] and BORE_ROUTE not in [d.option_key for d in r.decisions]
+    assert any("changes nothing" in d.get("reason", "") for t, d in events if t == "Model answer rejected")
+
+
+def test_with_no_shop_fix_the_review_flags_and_asks_and_removal_is_only_conditional(undercut, shop):
+    r = run_review(undercut, shop, None)
+    d = next(x for x in r.decisions if x.issue_id == "I1")
+    assert (d.action, d.option_key) == ("ask", None) and d.question
+    lines = r.comment.splitlines()
+    assert "G9: only a part edit fixes this, and its purpose isn't on record." in lines
+    assert f"If G9 isn't needed, {BORE_REMOVE} takes it to 0 unreachable face(s)." in lines
+    assert not any(line.startswith(f"G9: {BORE_REMOVE}") for line in lines)  # never leads unconditionally
+
+
+def test_the_model_may_ask_only_where_no_shop_fix_exists(undercut, shop, part_a, chamfer):
+    lead_removal = decide({"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x",
+                           "question": "Is G9 needed?"})
+    ask = decide({"issue_id": "I1", "action": "ask", "question": "Is G9 needed?", "reason": "x"})
+    r = run_review(undercut, shop, Scripted(bore_plan(), lead_removal, ask))
+    assert r.fallbacks == [] and r.decisions[0].action == "ask"
+    ask_a = decide({"issue_id": "I1", "action": "ask", "question": "Is it needed?", "reason": "x"})
+    a = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_a, ask_with("Is it needed?")))
+    assert a.decisions[0].action == "propose"  # Part A has a shop fix: asking alone is still rejected
+
+
+def test_a_fix_for_unreachable_faces_says_so(undercut, shop):
+    free = [{"id": 1, "face_group": "G9", "rule": "may_change", "reason": "cosmetic"}]
+    r = run_review(undercut, shop, Scripted(bore_plan(), decide(
+        {"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x"})), constraints=free)
+    assert f"G9: {BORE_REMOVE} takes it from 2 to 0 unreachable face(s)." in r.comment.splitlines()
