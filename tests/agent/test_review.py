@@ -598,3 +598,13 @@ def test_a_free_face_may_still_lead_with_removal(part_a, shop, chamfer):
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), decide(
         {"issue_id": "I1", "action": "propose", "option_key": REMOVE, "reason": "x"})), constraints=may)
     assert r.fallbacks == [] and r.decisions[0].option_key == REMOVE and "isn't needed" not in r.comment
+
+
+def test_with_unknown_intent_no_part_edit_may_lead_while_a_shop_fix_exists(part_a, shop, chamfer):
+    """Codex, PR #23: barring only the conditional option let another part edit lead."""
+    depth = f"set_depth/{chamfer}/+X/48"
+    other = decide({"issue_id": "I1", "action": "propose", "option_key": depth, "reason": "x"})
+    model = Scripted(plan(*requests_for(chamfer), {"kind": "set_depth", "face_group": chamfer}), other,
+                     ask_with("Is it needed?"))
+    r = run_review(part_a, shop, model)
+    assert depth in r.options and r.decisions[0].option_key == ROUTE and r.fallbacks == []
