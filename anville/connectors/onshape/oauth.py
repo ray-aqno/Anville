@@ -20,9 +20,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from anville.connectors.onshape.client import OnshapeError
+from anville.connectors.onshape.events import token_matches
 
 AUTHORIZE_URL = "https://oauth.onshape.com/oauth/authorize"
 TOKEN_URL = "https://oauth.onshape.com/oauth/token"
@@ -104,6 +105,32 @@ class GrantKeeper:
             fresh = self._refresh(grant)
             self._grants.put_grant(fresh)
             return fresh.access_token
+
+    def replace(self, grant: Grant) -> None:
+        """Save a new grant under the same lock, so a refresh of the old grant can't land after it and
+        overwrite it (Codex, OAuth PR)."""
+        with self._lock:
+            self._grants.put_grant(grant)
+
+
+def admin_key_ok(key: str, env: Mapping[str, str]) -> bool:
+    """The grant flow's own key (Codex, OAuth PR, P1). The webhook secret sits in the webhook URL, so it
+    can't also authorize swapping the posting identity: unset, or equal to it, closes the flow."""
+    admin = env.get("ANVILLE_OAUTH_ADMIN_TOKEN", "")
+    return bool(admin) and admin != env.get("ANVILLE_WEBHOOK_SECRET") and token_matches(key, admin)
+
+
+def account_error(me: dict, expected_email: str) -> str:
+    """Why the account that completed the flow can't become Anville's identity, or "" if it can.
+    `me` is /users/sessioninfo; with no email to compare, refuse rather than guess."""
+    if not expected_email:
+        return "ANVILLE_ACCOUNT_EMAIL isn't set, so no account can be confirmed as Anville's"
+    email = str(me.get("email") or "")
+    if not email:
+        return "Onshape didn't say which account this is"
+    if email.casefold() != expected_email.casefold():
+        return "this account isn't the configured Anville account"
+    return ""
 
 
 class Poster(Protocol):

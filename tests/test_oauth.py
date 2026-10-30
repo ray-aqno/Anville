@@ -7,7 +7,7 @@ import pytest
 
 from anville.connectors.onshape.client import OnshapeError
 from anville.connectors.onshape.oauth import (
-    EARLY_S, Grant, GrantKeeper, authorize_url, exchange_code, post_as_anville, refresh,
+    EARLY_S, Grant, GrantKeeper, account_error, admin_key_ok, authorize_url, exchange_code, post_as_anville, refresh,
 )
 from tests.store.conftest import race
 
@@ -124,3 +124,44 @@ def test_other_errors_are_not_retried_under_the_keys():
     with pytest.raises(OnshapeError):
         post_as_anville(FakeClient(fail=500), keys, {"message": "x"})
     assert keys.bodies == []
+
+
+def test_a_new_grant_waits_for_an_in_flight_refresh_and_wins():
+    """Codex, OAuth PR: a grant saved while the old one is refreshing must not be overwritten when that
+    refresh lands, or comments would post as the wrong account."""
+    grants = MemoryGrants(Grant("old-r0", "old-a0", expires_at=0.0))
+    started, release = threading.Event(), threading.Event()
+
+    def slow_refresh(g):
+        started.set()
+        release.wait(2)
+        return Grant("old-r1", "old-a1", 5000.0)
+
+    keeper = GrantKeeper(grants, slow_refresh)
+    refreshing = threading.Thread(target=keeper.token, kwargs={"now": 100.0})
+    refreshing.start()
+    assert started.wait(2)
+    saving = threading.Thread(target=keeper.replace, args=(Grant("new-r0", "new-a0", 9000.0, user="Anville"),))
+    saving.start()
+    release.set()
+    refreshing.join(2), saving.join(2)
+    assert grants.grant.refresh_token == "new-r0"
+
+
+def test_only_the_configured_anville_account_is_saved():
+    """Codex, OAuth PR (P1): whoever completes the flow must be the Anville account itself."""
+    me = {"name": "Anville", "email": "Anville@Example.com"}
+    assert account_error(me, "anville@example.com") == ""
+    assert "isn't" in account_error({"email": "someone@else.com"}, "anville@example.com")
+    assert account_error({"name": "Anville"}, "anville@example.com")  # no email: refuse, don't guess
+    assert account_error(me, "")  # not configured: refuse
+
+
+def test_the_grant_flow_has_its_own_admin_key():
+    """Codex, OAuth PR (P1): the webhook secret sits in the webhook URL, so it can't also authorize
+    swapping the posting identity."""
+    env = {"ANVILLE_OAUTH_ADMIN_TOKEN": "admin-123", "ANVILLE_WEBHOOK_SECRET": "hook-456"}
+    assert admin_key_ok("admin-123", env)
+    assert not admin_key_ok("hook-456", env) and not admin_key_ok("", env)
+    assert not admin_key_ok("x", {"ANVILLE_OAUTH_ADMIN_TOKEN": "x", "ANVILLE_WEBHOOK_SECRET": "x"})  # reused
+    assert not admin_key_ok("", {})  # unset: the flow is closed

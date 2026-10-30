@@ -86,7 +86,6 @@ STORE_OPS = frozenset({
     "reserve_post", "complete_post", "already_posted", "unconfirmed_posts",
     "append_trace", "trace_after", "append_ledger", "read_ledger",
     "reserve_call", "release_call", "calls",
-    "put_grant",  # get_grant is not exposed: callers get an access token from oauth_token(), never the refresh token
 })
 # The grant's redirect must match the OAuth app's registration exactly (ADR 0007, Amendment 1).
 OAUTH_CALLBACK = "/oauth/callback"
@@ -179,6 +178,12 @@ class StoreSvc:
             g, os.environ["ONSHAPE_OAUTH_CLIENT_ID"], os.environ["ONSHAPE_OAUTH_CLIENT_SECRET"]))
 
     @modal.method()
+    def save_grant(self, grant) -> None:
+        """A new grant from the callback, saved under the keeper's lock (Codex, OAuth PR). get_grant is
+        never exposed: callers get an access token from oauth_token(), never the refresh token."""
+        self.keeper.replace(grant)
+
+    @modal.method()
     def oauth_token(self) -> str | None:
         """Anville's access token, refreshed if it's near expiry; None before the account has granted access."""
         return self.keeper.token(now=time.time())
@@ -236,15 +241,16 @@ def web():
 
     @api.get("/oauth/start")
     def oauth_start(key: str = ""):
-        """Start the Anville account's one-time grant. Gated by the webhook secret, so nobody else can
-        swap in their own account and post as Anville; F2: a wrong key looks like an unknown route."""
+        """Start the Anville account's one-time grant. Gated by its own admin key, not the webhook secret
+        (Codex, OAuth PR); F2: a wrong key looks like an unknown route. Rotate the key after use: it
+        travels in a query string."""
         import secrets as pysecrets
 
         from fastapi.responses import RedirectResponse
 
-        from anville.connectors.onshape.oauth import authorize_url
+        from anville.connectors.onshape.oauth import admin_key_ok, authorize_url
 
-        if not token_matches(key, os.environ["ANVILLE_WEBHOOK_SECRET"]):
+        if not admin_key_ok(key, os.environ):
             raise HTTPException(status_code=404)
         nonce = pysecrets.token_urlsafe(24)
         state[f"oauth_state:{nonce}"] = time.time()
@@ -258,7 +264,7 @@ def web():
 
         from fastapi.responses import HTMLResponse
 
-        from anville.connectors.onshape.oauth import exchange_code
+        from anville.connectors.onshape.oauth import account_error, exchange_code
 
         try:
             issued = state.pop(f"oauth_state:{state_}") if state_ else None
@@ -268,15 +274,20 @@ def web():
             raise HTTPException(status_code=404)
         grant = exchange_code(code, os.environ["ONSHAPE_OAUTH_CLIENT_ID"],
                               os.environ["ONSHAPE_OAUTH_CLIENT_SECRET"], _oauth_redirect())
-        try:  # which account granted access, for the trace; the grant is good without it
+        try:  # which account granted access: only the configured Anville account is saved (Codex, OAuth PR)
             from anville.connectors.onshape.client import OnshapeClient
 
             me = OnshapeClient.from_env(os.environ, ledger=_StoreLedger(),
                                         auth_header=f"Bearer {grant.access_token}").get("/users/sessioninfo")
-            grant = replace(grant, user=str(me.get("name") or ""))
         except Exception as e:
             _log("oauth_whoami_failed", error=repr(e)[:200])
-        StoreSvc().call.remote("put_grant", grant)
+            me = {}
+        refused = account_error(me, os.environ.get("ANVILLE_ACCOUNT_EMAIL", ""))
+        if refused:
+            _log("oauth_refused", reason=refused)
+            return HTMLResponse(f"<p>Not connected: {escape(refused)}.</p>", status_code=403)
+        grant = replace(grant, user=str(me.get("name") or ""))
+        StoreSvc().save_grant.remote(grant)
         _log("oauth_granted", user=grant.user)
         return HTMLResponse(f"<p>Anville is connected as <b>{escape(grant.user or 'this account')}</b>. "
                             "Comments will post under its name.</p>")
