@@ -9,7 +9,7 @@ Labels: **verified** means checked, with the source given. **Prior** means from 
 
 ## Problem
 
-Every number Anville states is computed on face groups from `extract` (ADR 0008). A group's faces are OCCT indices in STEP order, and Onshape knows nothing about them. Two features need Onshape's own face IDs:
+Every number Anville states is computed on face groups from `extract` (ADR 0008). A group's faces are OCCT indices, numbered by `TopExp.MapShapes` traversal of the solid (not necessarily the file's entity order), and Onshape knows nothing about them. Two features need Onshape's own face IDs:
 1. **Comment anchoring (ADR 0006 §10).** A flag should sit on the faces it is about, not on the document.
 2. **"Show in model" (ADR 0007).** The panel should light up a flag's faces with `requestSelectionHighlight`.
 
@@ -36,7 +36,7 @@ So the question is: given a version's STEP file and its PartFacts, which Onshape
 - *Against:* depends on Onshape's boxes being as tight as OCCT's (unknown for curved faces), and on both kernels splitting faces the same way (unknown: Parasolid vs OCCT seams).
 - *Offline evidence (verified, `scripts/probe_face_anchoring.py --from-json`, against a `bodydetails` response synthesized from our own bracket in metres, shuffled, uppercase types):*
   - with boxes, all 17 faces pair correctly and the scale is detected as 1000;
-  - with type and area alone, only 7 of 17 do, because the symmetric pairs (the two web holes, the two flange tops) tie.
+  - with type and area alone, 7 of 17 are unique, but uniqueness says nothing about *where* a face is (a lone 100 mm² plane could be the mirror image). The probe therefore pairs none of them without a box; the symmetric pairs (the two web holes, the two flange tops) would tie anyway.
   
   **Position is the keystone.**
 
@@ -52,13 +52,15 @@ So the question is: given a version's STEP file and its PartFacts, which Onshape
 
 1. **PartFacts:** `FaceFacts` gains `box: [[x,y,z],[x,y,z]]` in mm. This is additive, so `schema_version` stays 1. `extract` already computes it.
 2. **Geometry, pure:** `match_faces(facts, bodydetails) -> {face_id: onshape_id | None}`.
-   - It detects the unit scale from total area and never assumes metres.
-   - It returns `None` for unmatched or ambiguous faces, and never a best guess.
+   - It detects the unit scale as the one under which most of our faces find an equal-area Onshape face. Total area would mislead, because the Part Studio may hold other bodies. It never assumes metres.
+   - It returns `None` for unmatched, ambiguous or box-less faces, and when two of our faces claim one Onshape ID. Never a best guess.
+   - Unknown Onshape surface names are reported and never matched.
    - It lives in `anville/geometry/anchor.py`, with no OCP.
 3. **Connector (main):**
    - one `bodydetails` GET on the analyzed version;
    - the map is stored with the run;
-   - a comment anchors to the group's **largest matched face** with `qTransient` (single-face anchoring is verified; a multi-face query is not).
+   - a comment anchors with `qTransient` to **the face its finding was measured on**: the fillet for a radius flag, the chamfer for a setup flag. Not the group's largest face, which could be a neighbouring wall. Single-face anchoring is verified; a multi-face query is not.
+   - If that face didn't match, the comment goes on the document (5), even when other faces of the group matched.
 4. **Panel (main):** "Show in model" sends **every matched face of the group** in one `requestSelectionHighlight` (a list is verified).
    - The panel views the workspace, not the version, so the IDs go through `idtranslations` first (ADR 0007's existing path) whenever the workspace microversion differs.
    - A face that doesn't translate isn't highlighted, and the panel says so.
@@ -72,7 +74,10 @@ It makes one GET to `bodydetails` on the version, saves the raw response, matche
 1. the `box` field names and units, from the printed sample;
 2. whether Onshape and OCCT have the same face count (Parasolid seams vs OCCT);
 3. the match rate, and the box residuals on planes vs cylinders;
-4. through the saved JSON, the rest of `bodydetails` (radius fields, loops), with no further calls.
+4. any surface names outside the 2021 schema, listed under `unknown_surface_types`;
+5. through the saved JSON, the rest of `bodydetails` (radius fields, loops), with no further calls.
+
+It checks its arguments and reads the STEP before the call, so a typo can't waste it.
 
 Not covered by the probe:
 - whether `qTransient` accepts several faces;
