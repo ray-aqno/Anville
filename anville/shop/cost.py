@@ -26,8 +26,9 @@ from anville.shop.profile import Input, Shop, ShopCosts
 
 CURRENT = "current"
 PART_EDITS = ("set_min_radius", "set_depth", "remove_feature")
-PAYBACK_CAP = 1000  # parts; a purchase that hasn't paid back by then is reported as open-ended
 TOOLS = ("long_reach_price",)  # with every "tool_price.<name>": bought tools, shared by Scenarios.tool_parts
+JAWS = ("jaw_blank", "jaw_machining")  # each part's own relieved jaws, wherever its plan back-chamfers
+TOL = 1e-9  # dollars
 
 
 @dataclass
@@ -41,7 +42,9 @@ class Route:
     chamfers: int     # faces finished with a back-chamfer cutter, each paying back_chamfer_pass
     one_time: tuple[float, float] = (0.0, 0.0)              # $, min and max over the corners
     costs: dict[int, tuple[float, float]] = field(default_factory=dict)  # quantity -> $, min and max
-    payback: tuple[int, int | None] | None = None  # parts from which a purchase stays ahead; None if no purchase
+    # Parts from which a tool purchase stays no dearer than the current plan, min and max over the corners.
+    # None if nothing is bought; an end is None where buying never stays cheaper, at any quantity.
+    payback: tuple[int | None, int | None] | None = None
     payback_mid: int | None = None  # the same with every input at its midpoint: one number, shown with the range
     unpriced: list[str] = field(default_factory=list)  # what the dollars leave out
 
@@ -73,8 +76,12 @@ def cost_options(facts: PartFacts, shop: Shop, options: list[Option], *, plan: S
         raise ValueError("this shop profile has no cost inputs: use anville.shop.Shop")
     cutters = {t.name for t in shop.back_chamfer_tools}
     on_cutter = {a.face_id for s in plan.setups for a in s.faces if a.tool in cutters}
-    routes = [Route(CURRENT, CURRENT, plan.count, not plan.unreachable, "mill", [], len(on_cutter))]
-    routes += [_route(o, costs, cutters, on_cutter) for o in options]
+    # The shop has no 5-axis mill: a 5-axis plan goes out, like route_machine/5 (Codex, PR #20).
+    if plan.axes == 5:
+        current = Route(CURRENT, CURRENT, plan.count, not plan.unreachable, "outsource", [], 0)
+    else:
+        current = Route(CURRENT, CURRENT, plan.count, not plan.unreachable, "mill", _jaws(on_cutter), len(on_cutter))
+    routes = [current] + [_route(o, costs, cutters, on_cutter) for o in options]
 
     ranged = _ranged(costs)
     corners = list(_corners(ranged))
@@ -85,10 +92,10 @@ def cost_options(facts: PartFacts, shop: Shop, options: list[Option], *, plan: S
         for q in costs.scenarios.quantities:
             v = [_route_cost(r, c, q, costs) for c in corners]
             r.costs[q] = (round(min(v), 2), round(max(v), 2))
-        if r.buys:
+        if any(_is_tool(n) for n in r.buys):
             paid = [_payback_at(r, routes[0], c, costs) for c in corners]
             known = [p for p in paid if p is not None]
-            r.payback = (min(known), None if None in paid else max(known)) if known else (PAYBACK_CAP, None)
+            r.payback = (min(known), None if None in paid else max(known)) if known else (None, None)
             r.payback_mid = _payback_at(r, routes[0], mid, costs)
 
     complete = [r for r in routes if r.complete]
@@ -107,7 +114,7 @@ def _route(o: Option, costs: ShopCosts, cutters: set[str], on_cutter: set[int]) 
     faces -= set(o.removed_faces)
     complete = o.after.unreachable == 0
     if o.kind in PART_EDITS:
-        return Route(o.key, "part", o.after.setups, complete, "mill", [], len(faces),
+        return Route(o.key, "part", o.after.setups, complete, "mill", _jaws(faces), len(faces),
                      unpriced=["the designer's time to make and check the CAD edit"])
     if o.kind == "route_machine":
         return Route(o.key, "outsource", o.after.setups, complete, "outsource", [], 0,
@@ -116,10 +123,19 @@ def _route(o: Option, costs: ShopCosts, cutters: set[str], on_cutter: set[int]) 
         if bought not in costs.tool_price:
             raise ValueError(f"no price for catalog tool {bought!r} in the shop profile")
         return Route(o.key, "shop", o.after.setups, complete, "mill",
-                     [f"tool_price.{bought}", "jaw_blank", "jaw_machining"], len(faces))
+                     [f"tool_price.{bought}", *_jaws(faces)], len(faces))
     if o.kind == "add_tool":
-        return Route(o.key, "shop", o.after.setups, complete, "mill", ["long_reach_price"], len(faces))
+        return Route(o.key, "shop", o.after.setups, complete, "mill", ["long_reach_price", *_jaws(faces)], len(faces))
     raise ValueError(f"cost_options can't price a {o.kind!r} option")
+
+
+def _jaws(back_chamfered) -> list[str]:
+    """A plan that back-chamfers holds this part in its own relieved jaws: re-cut for each stock size (RFC 0002 §3)."""
+    return list(JAWS) if back_chamfered else []
+
+
+def _is_tool(name: str) -> bool:
+    return name in TOOLS or name.startswith("tool_price.")
 
 
 # ---- inputs and corners -------------------------------------------------------------------
@@ -152,8 +168,8 @@ def _one_time(r: Route, point: dict, costs: ShopCosts) -> float:
     """Tools are shared by the part designs they serve; jaws and their machining belong to this part."""
     get, inputs = _getter(point, costs), _inputs(costs)
     share = 1.0 / costs.scenarios.tool_parts
-    return sum(get(n) * (get("mill_rate") if inputs[n].unit == "hr" else 1.0) * (share if n in TOOLS or
-               n.startswith("tool_price.") else 1.0) for n in r.buys)
+    return sum(get(n) * (get("mill_rate") if inputs[n].unit == "hr" else 1.0) * (share if _is_tool(n) else 1.0)
+               for n in r.buys)
 
 
 def _terms(r: Route, point: dict, costs: ShopCosts) -> tuple[float, float, float]:
@@ -171,17 +187,30 @@ def _route_cost(r: Route, point: dict, q: int, costs: ShopCosts) -> float:
 
 
 def _payback_at(r: Route, current: Route, point: dict, costs: ShopCosts) -> int | None:
-    """The quantity from which buying stays no dearer than the current plan, up to the cap; None if it never does.
+    """The quantity from which buying stays no dearer than the current plan, at one point; None if it never does.
 
     Not the first such quantity: when the pass costs more than the load it saves, savings fall within a
-    batch and rise at the next one's saved setup, so buying can lead and then trail again. The cost terms are worked out once per point
-    and only their difference is scanned (Greptile, PR #20).
+    batch and rise at the next one's saved setup, so buying can lead and then trail again.
+
+    buy − current at q parts is gap(q) = d_one + ceil(q/n)·d_batch + q·d_part. Batch k's worst point (its
+    last part if d_part > 0, else its first) is d_one + k·s + extra, with s = d_batch + n·d_part. If s > 0
+    buying ends up dearer at any quantity (Codex, PR #20: a scan to 1,000 parts missed that). Otherwise batch
+    worsts fall, so the first batch K whose worst is ≤ 0 is computed, and the last losing quantity lies just
+    below it.
     """
     (o1, b1, p1), (o0, b0, p0) = _terms(r, point, costs), _terms(current, point, costs)
     n = costs.scenarios.batch_size
-    for q in range(PAYBACK_CAP, 0, -1):
-        if (o1 - o0) + math.ceil(q / n) * (b1 - b0) + q * (p1 - p0) > 1e-9:
-            return None if q == PAYBACK_CAP else q + 1
+    d_one, d_batch, d_part = o1 - o0, b1 - b0, p1 - p0
+    s, extra = d_batch + n * d_part, max(0.0, -(n - 1) * d_part)
+    if s > TOL or (s >= -TOL and d_one + extra > TOL):
+        return None
+    if d_one + extra <= TOL:
+        k = 1
+    else:
+        k = math.ceil((d_one + extra) / -s)
+    for q in range(k * n, 0, -1):  # every batch from K on stays ahead; the last loss is in batch K - 1
+        if d_one + math.ceil(q / n) * d_batch + q * d_part > TOL:
+            return q + 1
     return 1
 
 

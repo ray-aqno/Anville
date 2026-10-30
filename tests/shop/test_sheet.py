@@ -105,6 +105,13 @@ def test_a_back_chamfer_plan_whose_assessment_failed_is_refused(step, facts):
         setup_sheet(f, OWNED, plan, back_chamfer=failed)
 
 
+def test_a_back_chamfer_plan_in_a_shop_with_no_fixture_is_refused(step, facts):
+    """Codex, PR #20: with no fixture stated, the guard was skipped and the sheet said "cut the jaw reliefs"."""
+    f, plan, _ = _one_setup(step, facts, "demo_bracket")
+    with pytest.raises(ValueError, match="910480"):
+        setup_sheet(f, replace(OWNED, fixture=None), plan)
+
+
 def test_a_plan_with_a_tool_the_shop_does_not_have_is_an_error(facts):
     f = facts("demo_bracket")
     plan = SetupPlan(3, [Setup(["+Z"], [Assignment(f.faces[0].id, "EM99")])], [])

@@ -73,15 +73,24 @@ def test_a_bought_tool_is_spread_over_the_parts_it_serves_but_the_jaws_are_not()
     assert route(result, LONG.key).one_time == (40.0, 40.0)  # any bought tool, not only the catalog cutter
 
 
-def test_once_the_shop_owns_the_cutter_the_current_plan_pays_only_the_pass():
-    """Part B (S8): the cutter came from Part A, so its one-time cost isn't charged again."""
+def test_once_the_shop_owns_the_cutter_the_current_plan_pays_its_pass_and_its_own_jaws():
+    """Part B (S8): the cutter came from Part A, so its price isn't charged again. Part B's stock differs, so
+    its relieved jaws are its own (Codex, PR #20: they were free)."""
     from anville.geometry import HARVEY_910480
 
     owned = replace(SHOP, back_chamfer_tools=[HARVEY_910480])
     plan = SetupPlan(3, [Setup(["+Z"], [Assignment(1, "EM12"), Assignment(7, "910480")])], [])
     current = route(cost_options(FACTS, owned, [], plan=plan), "current")
-    # $30 setup + 10 × (0.1 + 0.5 + 0.05) h × $60 = $390 → $420
-    assert current.setups == 1 and current.one_time == (0.0, 0.0) and current.costs[10] == (420.0, 420.0)
+    # jaws $40 + 0.5 h × $60 = $70; $30 setup + 10 × (0.1 + 0.5 + 0.05) h × $60 = $390 → $490
+    assert current.setups == 1 and current.one_time == (70.0, 70.0) and current.costs[10] == (490.0, 490.0)
+    assert current.payback is None  # nothing is bought on this route
+
+
+def test_a_current_five_axis_plan_is_priced_at_the_outside_shop():
+    """Codex, PR #20: the shop has no 5-axis mill, so a 5-axis plan is outsourced, like route_machine/5."""
+    plan = SetupPlan(5, [Setup(["+Z", "-Z"], [Assignment(1, "EM12"), Assignment(7, "EM6")])], [])
+    current = route(cost_options(FACTS, SHOP, [], plan=plan), "current")
+    assert current.machine == "outsource" and current.costs[10] == (1075.0, 1075.0)
 
 
 def test_removing_a_back_chamfered_face_stops_paying_its_pass():
@@ -263,12 +272,44 @@ def test_corners_cover_every_ranged_input():
 
 
 def test_payback_never_reached_still_runs_fast():
-    """Greptile, PR #20: a purchase that never pays back scanned every quantity at every corner (9 s measured).
-    Corners that differ only in inputs the purchase can't change give the same scan; it runs once."""
+    """Greptile, PR #20: a purchase that never pays back scanned every quantity at every corner (9 s measured)."""
     import time
 
     never = replace(DLL_COSTS, back_chamfer_pass=Input(1.0, 2.0, "hr", "placeholder", "worst case"))
     start = time.perf_counter()
     buy = route(cost_options(FACTS, Shop(tools=[], name="dll", costs=never), [BUY], plan=PLAN), BUY.key)
-    assert buy.payback == (1000, None)
+    assert buy.payback == (None, None) and buy.payback_mid is None  # never, at any corner
     assert time.perf_counter() - start < 2.0
+
+
+def test_payback_holds_past_any_scan_limit():
+    """Codex, PR #20: with 750-part batches, buying led from part 751 but was $193.25 dearer at 1,500.
+    The gap grows by d_batch + n × d_part each batch; when that is positive, buying never stays cheaper."""
+    costs = replace(COSTS, setup_time=fixed(5.0, "hr"), back_chamfer_pass=fixed(0.1066833333, "hr"),
+                    scenarios=replace(COSTS.scenarios, batch_size=750, tool_parts=2))
+    buy = route(cost_options(FACTS, replace(SHOP, costs=costs), [BUY], plan=PLAN), BUY.key)
+    assert buy.payback == (None, None)
+
+
+def test_payback_far_past_a_thousand_parts_is_found_exactly():
+    """The old scan stopped at 1,000 parts and called this "never". The pass (0.149 h) costs $2.94 a part more
+    than the load it saves (0.1 h); each batch's saved setup wins back $30, so each batch nets $0.60. Within a
+    batch buying loses ground, so its worst point is the batch's last part: buy − current = $313.50 − $0.60k.
+    At q = 5,220 (batch 522) that is +$0.30; at q = 5,230 it is −$0.30. Buying stays cheaper from q = 5,221."""
+    costs = replace(COSTS, back_chamfer_pass=fixed(0.149, "hr"))
+    buy = route(cost_options(FACTS, replace(SHOP, costs=costs), [BUY], plan=PLAN), BUY.key)
+    assert buy.payback == (5221, 5221)
+
+
+def test_payback_when_buying_adds_a_setup_but_saves_per_part():
+    """A purchase that adds a setup per batch but saves per part peaks at each batch's first part.
+    Current: 1 setup, back-chamfered with a 0.2 h pass, $70 of jaws. Buy: an $80 long-reach endmill, 2 setups, no
+    pass. buy − current = $10 + $30 × batches − $6 × q: q = 11 is +$4 (a new batch's setup), q = 12 is −$2."""
+    from anville.shop.cost import Route, _payback_at, _route_cost
+
+    costs = replace(COSTS, back_chamfer_pass=fixed(0.2, "hr"))
+    current = Route("current", "current", 1, True, "mill", ["jaw_blank", "jaw_machining"], 1)
+    buy = Route("add_tool/x", "shop", 2, True, "mill", ["long_reach_price"], 0)
+    assert _payback_at(buy, current, {}, costs) == 12
+    last_loss = max(q for q in range(1, 500) if _route_cost(buy, {}, q, costs) > _route_cost(current, {}, q, costs) + 1e-9)
+    assert last_loss + 1 == 12  # the same answer by brute force
