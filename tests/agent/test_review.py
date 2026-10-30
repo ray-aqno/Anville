@@ -785,3 +785,21 @@ def test_rendered_comments_never_show_option_keys(part_a, undercut, costed, cata
         assert r.comment and not any(key in r.comment for key in r.options), r.comment
     assert "Buying the 910480 back-chamfer cutter takes it from 2 to 1 setup(s)." in \
         run_review(part_a, costed, None, back_chamfer=catalog_access).comment
+
+
+def test_a_tool_only_change_is_said_as_one():
+    """Codex, PR #23: a fix that changes only the cutting tool read "takes it from 1 to 1 setup(s)"."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _effect
+
+    o = NS(key="set_min_radius/G1/r6", before=NS(setups=1, unreachable=0), after=NS(setups=1, unreachable=0),
+           tool_changes=[NS(face_id=4, before="EM3", after="EM12")])
+    assert _effect(o) == "changes the tool that cuts it and keeps {{option.set_min_radius/G1/r6.setups_after}} setup(s)"
+
+
+def test_the_rules_allow_the_one_ask_the_tool_offers():
+    """Codex, PR #23: RULES said a question never replaces a proposal, which contradicts `ask_only`."""
+    from anville.agent.review import RULES
+
+    assert "ask_only" in RULES
