@@ -41,7 +41,8 @@ def test_part_a_buying_the_cutter_makes_part_b_one_setup(step, facts):
 
     assert plan.count == 1 and plan.unreachable == []
     assert b.edge_chamfers[0].face_id in {a.face_id for s in plan.setups for a in s.faces if a.tool == "910480"}
-    assert sources["910480"] == {"review": REVIEW, "decision": DECISION, "option": entry["provenance"]["option"]}
+    assert sources["910480"] == {"review": REVIEW, "decision": DECISION, "option": entry["provenance"]["option"],
+                                "on": "1970-01-01"}  # _as_stored's created_at is 0.0
 
 
 def test_the_entry_carries_the_cutter_and_where_it_came_from(step, facts):
@@ -100,3 +101,11 @@ def test_an_acquisition_needs_both_the_review_and_the_decision(step, facts, revi
 def _tool_dict():
     return {"name": "910480", "angle": 45.0, "head_diameter": 12.7, "neck_diameter": 8.05,
             "neck_length": 63.5, "length_of_cut": 2.24}
+
+
+def test_the_date_is_left_out_when_the_entry_has_no_row_time():
+    """Hand-built entries (no created_at) still apply; there is just no date to report."""
+    entry = {"payload": {"kind": TOOL_ACQUIRED, "type": "back_chamfer", "tool": _tool_dict()},
+             "provenance": {"review": REVIEW, "decision": DECISION, "option": "add_tool/x"}}
+    _, sources = apply_ledger(SHOP, [entry])
+    assert "on" not in sources["910480"]
