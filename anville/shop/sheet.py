@@ -6,9 +6,11 @@ it comes from the plan, the shop profile and the back-chamfer checks; it is `pre
 runs it. Face groups are the agent's G-labels, so the panel can tie a sheet line to a review comment.
 """
 
+from dataclasses import replace
+
 from anville.geometry.facts import PartFacts
 from anville.geometry.plan import Setup, SetupPlan
-from anville.geometry.shop import ShopProfile
+from anville.geometry.shop import BACK_CHAMFER_CATALOG, ShopProfile
 
 SCHEMA = "anville.setup_sheet/1"
 ORIENTATION = {
@@ -20,12 +22,23 @@ WORKHOLDING_STATUS = "stated in the shop profile; not confirmed by the shop's ma
 
 
 def setup_sheet(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, *, back_chamfer=(),
-                provenance: dict[str, dict] | None = None) -> dict:
+                provenance: dict[str, dict] | None = None, buying: tuple[str, ...] = ()) -> dict:
     """The setup sheet for `plan` in `shop`.
 
     `back_chamfer`: the `assess_back_chamfer` results the plan was made with; their reliefs go on the
     setups that back-chamfer. `provenance`: tool name -> where the shop got it (`apply_ledger`).
+    `buying`: catalog cutters the plan uses that the shop has decided to buy but doesn't own yet; their
+    rows say `"owned": false`, which the traveler turns into an "arrived" checkbox.
     """
+    catalog = {c.name: c for c in BACK_CHAMFER_CATALOG}
+    owned = {t.name for t in shop.back_chamfer_tools}
+    for name in buying:
+        if name not in catalog:
+            raise ValueError(f"{name!r} isn't a catalog back-chamfer cutter, so the sheet can't describe it")
+        if name in owned:
+            raise ValueError(f"the shop already owns {name!r}: it isn't being bought")
+    if buying:
+        shop = replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, *(catalog[n] for n in buying)])
     group = {fid: label for label, ids in facts.labelled_groups().items() for fid in ids}
     lo, hi = facts.bbox
     return {
@@ -33,7 +46,7 @@ def setup_sheet(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, *, back_ch
         "part": {"source_sha256": facts.source_sha256, "stock_mm": [round(b - a, 3) for a, b in zip(lo, hi)]},
         "shop": getattr(shop, "name", None),
         "axes": plan.axes,
-        "setups": [_setup(n, s, facts, shop, group, back_chamfer, provenance or {})
+        "setups": [_setup(n, s, facts, shop, group, back_chamfer, provenance or {}, set(buying))
                    for n, s in enumerate(plan.setups, 1)],
         "unreachable": [{"face_id": u.face_id, "group": group.get(u.face_id), "reason": u.reason, "detail": u.detail}
                         for u in plan.unreachable],
@@ -43,7 +56,7 @@ def setup_sheet(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, *, back_ch
 
 
 def _setup(n: int, setup: Setup, facts: PartFacts, shop: ShopProfile, group: dict, back_chamfer,
-           provenance: dict) -> dict:
+           provenance: dict, buying: set[str]) -> dict:
     cutters = {t.name: t for t in shop.back_chamfer_tools}
     chamfered = [a for a in setup.faces if a.tool in cutters]
     dirs = setup.directions
@@ -58,12 +71,13 @@ def _setup(n: int, setup: Setup, facts: PartFacts, shop: ShopProfile, group: dic
         "directions": list(dirs),
         "orientation": ORIENTATION[dirs[0]] if len(dirs) == 1 else f"one fixturing, indexed to {', '.join(dirs)}",
         "workholding": _workholding(shop, chamfered, cutters, facts, back_chamfer),
-        "tools": _tools(setup, shop, cutters, group, provenance),
+        "tools": _tools(setup, shop, cutters, group, provenance, buying),
         "notes": notes,
     }
 
 
-def _tools(setup: Setup, shop: ShopProfile, cutters: dict, group: dict, provenance: dict) -> list[dict]:
+def _tools(setup: Setup, shop: ShopProfile, cutters: dict, group: dict, provenance: dict,
+           buying: set[str]) -> list[dict]:
     mills = {t.name: t for t in shop.tools}
     faces: dict[str, list[int]] = {}
     for a in setup.faces:
@@ -80,6 +94,7 @@ def _tools(setup: Setup, shop: ShopProfile, cutters: dict, group: dict, provenan
             row = {"name": name, "type": "endmill", "diameter_mm": t.diameter, "reach_mm": round(t.reach, 3)}
         else:
             raise ValueError(f"the plan uses {name!r}, which this shop profile doesn't have")
+        row["owned"] = name not in buying
         row["faces"] = sorted(ids)
         row["groups"] = sorted({group[fid] for fid in ids if fid in group}, key=lambda g: int(g[1:]))
         if name in provenance:
@@ -91,9 +106,12 @@ def _tools(setup: Setup, shop: ShopProfile, cutters: dict, group: dict, provenan
 def _why(source: dict) -> str:
     """One line for the machinist: when the shop got the tool and which review and decision put it there."""
     line = f"bought on {source['on']}" if source.get("on") else "bought"
+    comma = "," if source.get("on") else ""
     if source.get("review"):  # Store.append_ledger takes any provenance; tool_acquired always sets both
-        line += f"{',' if source.get('on') else ''} after review {source['review']}"
+        line += f"{comma} after review {source['review']}"
         line += f" ({source['decision']})" if source.get("decision") else ""
+    elif str(source.get("decision", "")).startswith("shop_note:"):  # shop_note_entries
+        line += f"{comma} from shop note {source['decision'].removeprefix('shop_note:')}"
     return line
 
 

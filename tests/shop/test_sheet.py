@@ -138,3 +138,27 @@ def test_a_ledger_row_with_partial_provenance_still_makes_a_sheet():
 
     assert _why({"on": "2026-10-30", "event": "comment:c42"}) == "bought on 2026-10-30"
     assert _why({"review": "r1"}) == "bought after review r1"
+
+
+def test_a_cutter_the_shop_is_buying_is_on_the_sheet_marked_not_owned(step, facts):
+    """Panel P2 traveler: the "910480 arrived" checkbox needs to know which tools the shop doesn't own yet.
+    Part A after the "buy the 910480" decision: planned with the catalog cutter, the shop still without it."""
+    f, plan, access = _one_setup(step, facts, "demo_bracket")
+    (only,) = setup_sheet(f, SHOP, plan, back_chamfer=access, buying=("910480",))["setups"]
+    owned = {t["name"]: t["owned"] for t in only["tools"]}
+    assert owned.pop("910480") is False and owned and all(owned.values())
+    assert only["workholding"]["relieved"] is True  # the reliefs are still on the sheet
+
+
+def test_every_tool_row_says_whether_the_shop_owns_it(step, facts):
+    f, plan, access = _one_setup(step, facts, "demo_bracket")
+    (only,) = setup_sheet(f, OWNED, plan, back_chamfer=access)["setups"]
+    assert all(t["owned"] is True for t in only["tools"])
+
+
+@pytest.mark.parametrize("buying, match", [(("910481",), "catalog"), (("910480",), "already owns")])
+def test_buying_must_name_a_catalog_cutter_the_shop_doesnt_have(step, facts, buying, match):
+    f, plan, access = _one_setup(step, facts, "demo_bracket")
+    shop = OWNED if match == "already owns" else SHOP
+    with pytest.raises(ValueError, match=match):
+        setup_sheet(f, shop, plan, back_chamfer=access, buying=buying)
