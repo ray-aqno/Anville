@@ -426,12 +426,15 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
     # A part edit then appears only as code's conditional line, next to the question.
-    conditional = {}
+    # Every part edit on such a face is barred from leading and from the model's prose (Codex, PR #23).
+    conditional, barred = {}, {}
     for i in chosen:
         mine = [o for o in options.values() if o.face_group in (None, i.face_group)]
-        part = next((o for o in mine if o.side == "part" and o.changes_plan), None)
-        if intents[i.face_group].status == "unknown" and part and best_option(mine, part_edits=False):
-            conditional[i.id] = part.key
+        if intents[i.face_group].status == "unknown" and best_option(mine, part_edits=False):
+            barred[i.id] = {o.key for o in mine if o.side == "part"}
+            part = next((o for o in mine if o.side == "part" and o.changes_plan), None)
+            if part:
+                conditional[i.id] = part.key
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
@@ -455,9 +458,9 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     return None, f"{key!r} was not offered; offered: {sorted(options)}"
                 if options[key].face_group not in (None, issue.face_group):
                     return None, f"{key} belongs to another face group"
-                if key == conditional.get(issue.id):
+                if key in barred.get(issue.id, ()):
                     return None, (f"{issue.face_group}'s purpose is unknown: lead with a fix that works whatever it's "
-                                  f"for (a shop-side option); {key} appears only as code's conditional line")
+                                  f"for (a shop-side option); a part edit appears only as code's conditional line")
             question = d.get("question") or None
             if question:
                 if d["action"] != "propose" or not gates[issue.id]:
@@ -495,7 +498,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     decided_by = {d.issue_id: d for d in decisions}
     checked = []
     for idx, sent in enumerate(sentences[:MAX_SENTENCES]):
-        err = check_sentence(sent, decided_by, nodes, values, keys, conditional_only=set(conditional.values()))
+        err = check_sentence(sent, decided_by, nodes, values, keys, conditional_only=set().union(*barred.values()))
         emit("verify" if not err else "error", "Sentence checked", stage="check", index=idx, ok=not err,
              reason=err or "", text=fill_slots(sent["text"], values, keys)[0] or sent["text"])  # the panel shows it
         if not err:

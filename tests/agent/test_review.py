@@ -608,3 +608,13 @@ def test_sentence_events_carry_the_words_the_designer_would_read(part_a, shop, c
     texts = {t: [d.get("text") for title, d in events if title == t]
              for t in ("Sentence checked", "Sentence verified", "Sentence not supported")}
     assert all(texts.values()) and all(isinstance(x, str) and x and "{{" not in x for v in texts.values() for x in v)
+
+
+def test_with_unknown_intent_no_part_edit_may_lead_while_a_shop_fix_exists(part_a, shop, chamfer):
+    """Codex, PR #23: barring only the conditional option let another part edit lead."""
+    depth = f"set_depth/{chamfer}/+X/48"
+    other = decide({"issue_id": "I1", "action": "propose", "option_key": depth, "reason": "x"})
+    model = Scripted(plan(*requests_for(chamfer), {"kind": "set_depth", "face_group": chamfer}), other,
+                     ask_with("Is it needed?"))
+    r = run_review(part_a, shop, model)
+    assert depth in r.options and r.decisions[0].option_key == ROUTE and r.fallbacks == []
