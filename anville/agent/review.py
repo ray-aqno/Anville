@@ -321,14 +321,20 @@ class _Runner:
                 content += f"\n\nYour previous answer was rejected: {error}. Call {name} again."
             messages = [{"role": "system", "content": RULES}, {"role": "user", "content": content}]
             self.calls += 1
+            # Announced before the call, so the panel sees the stage start while the model works (Codex, PR #24).
+            self.emit("tool_call", "Model called", stage=stage, model=model.name,
+                      host=getattr(model, "host", None), attempt=attempt)
+            record = {"stage": stage, "model": model.name, "host": getattr(model, "host", None)}
+            started = time.monotonic()
             try:
                 reply = model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage),
                                    reasoning_effort=STAGE_EFFORT.get(stage), timeout_s=left)
             except ModelUnavailable as e:
+                # Failed calls are often the slowest: their time belongs in the record too (Codex, PR #24).
+                self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), "error": str(e)})
                 error = f"model unavailable: {e}"
                 break
-            self.usage.append({"stage": stage, "model": model.name, "host": getattr(model, "host", None),
-                               **(reply.usage or {})})
+            self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
             if reply.error:
                 error = reply.error
             elif reply.tool != name:
@@ -515,7 +521,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         err = check_sentence(sent, decided_by, nodes, values, keys, conditional_only=set().union(*barred.values()),
                              options_by_key=options)
         emit("verify" if not err else "error", "Sentence checked", stage="check", index=idx, ok=not err,
-             reason=err or "")
+             reason=err or "", text=fill_slots(sent["text"], values, keys)[0] or sent["text"])  # the panel shows it
         if not err:
             checked.append(sent)
     verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
@@ -629,7 +635,7 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
     for i, sent in enumerate(checked):
         ok = bool(verdicts[i]["supported"])
         emit("verify" if ok else "error", "Sentence verified" if ok else "Sentence not supported",
-             stage="verify", index=i, reason=verdicts[i]["why"])
+             stage="verify", index=i, reason=verdicts[i]["why"], text=items[i]["text"])
         if ok:
             out.append(sent)
     return out

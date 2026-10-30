@@ -600,6 +600,16 @@ def test_a_free_face_may_still_lead_with_removal(part_a, shop, chamfer):
     assert r.fallbacks == [] and r.decisions[0].option_key == REMOVE and "isn't needed" not in r.comment
 
 
+def test_sentence_events_carry_the_words_the_designer_would_read(part_a, shop, chamfer):
+    events = []
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=sentences(chamfer)))
+    run_review(part_a, shop, model, verifier=Scripted(verdicts(True, False), name="verifier"),
+               emit=lambda kind, title, **d: events.append((title, d)))
+    texts = {t: [d.get("text") for title, d in events if title == t]
+             for t in ("Sentence checked", "Sentence verified", "Sentence not supported")}
+    assert all(texts.values()) and all(isinstance(x, str) and x and "{{" not in x for v in texts.values() for x in v)
+
+
 def test_with_unknown_intent_no_part_edit_may_lead_while_a_shop_fix_exists(part_a, shop, chamfer):
     """Codex, PR #23: barring only the conditional option let another part edit lead."""
     depth = f"set_depth/{chamfer}/+X/48"
@@ -608,6 +618,28 @@ def test_with_unknown_intent_no_part_edit_may_lead_while_a_shop_fix_exists(part_
                      ask_with("Is it needed?"))
     r = run_review(part_a, shop, model)
     assert depth in r.options and r.decisions[0].option_key == ROUTE and r.fallbacks == []
+
+
+def test_each_model_call_is_announced_before_it_runs(part_a, shop, chamfer):
+    """Codex, PR #24: the panel must see a stage start before its slow call, not after it returns."""
+    events, seen_at_call = [], []
+
+    class Watching(Scripted):
+        def call(self, *a, **k):
+            seen_at_call.append(events[-1])
+            return super().call(*a, **k)
+
+    model = Watching(plan(*requests_for(chamfer)), decide(propose_route(), comment=sentences(chamfer)))
+    run_review(part_a, shop, model, verifier=Watching(verdicts(True, True), name="verifier"),
+               emit=lambda kind, title, **d: events.append((title, d.get("stage"))))
+    assert seen_at_call == [("Model called", "plan"), ("Model called", "decide"), ("Model called", "verify")]
+
+
+def test_a_failed_call_still_records_its_latency(part_a, shop, chamfer):
+    """Codex, PR #24: the slowest calls are the ones that time out; they belong in the timing data."""
+    r = run_review(part_a, shop, Scripted(*[ModelUnavailable("no complete reply within 9 s")] * 2))
+    failed = r.usage[0]
+    assert failed["stage"] == "plan" and isinstance(failed["latency_s"], float) and "no complete reply" in failed["error"]
 
 
 # --- unknown intent with no shop-side fix (Rayyan's ruling, 2026-10-30: lanes 1 and 3) ------------------

@@ -15,6 +15,23 @@ from anville.geometry import PartFacts, ShopProfile
 from anville.geometry.access import BackChamferAccess
 
 
+def flushing_at_stage_changes(add: Emit, flush) -> Emit:
+    """`add` that flushes right after an event that opens a new stage. The opening event ("Model
+    called") comes before the stage's slow call, so the panel sees each stage start live, and the
+    previous stage's events go out with it (ADR 0007; Codex, PR #24). Events without a stage are not
+    boundaries."""
+    last = None
+
+    def emit(kind: str, title: str, **detail) -> None:
+        nonlocal last
+        stage = detail.get("stage")
+        add(kind, title, **detail)
+        if stage is not None and stage != last:
+            last = stage
+            flush()
+    return emit
+
+
 def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, *,
                   model: ChatModel | None = None, verifier: ChatModel | None = None,
                   deadline: float | None = None, back_chamfer: list[dict] = ()) -> tuple[str | None, dict]:
