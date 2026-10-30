@@ -104,7 +104,7 @@ The agent emits trace events. The panel only reads them, plus one write endpoint
 - **Harder:** another surface to keep in sync with the trace schema. OAuth app maintenance.
 - **Revisit:** if the fix-branch spike shows API edits don't appear live in open sessions, the panel's "action" events carry the visible proof instead, with a link to the branch. Also revisit if Onshape exposes camera control to apps.
 
-## Amendment 1 (Proposed, 2026-10-29): Anville's identity through OAuth
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-30): Anville's identity through OAuth
 
 **Context.**
 - The Anville account is on Onshape's free plan, which can't create API keys (Rayyan, 2026-10-29). It can register an OAuth application.
