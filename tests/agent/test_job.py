@@ -147,3 +147,21 @@ def test_a_malformed_ledger_row_costs_only_that_row():
     broken = {**good, "payload": {"kind": "tool_acquired", "type": "back_chamfer", "tool": {"name": "x"}}}
     shop, learned = review_shop([broken, good])
     assert [t.name for t in shop.back_chamfer_tools] == [BACK_CHAMFER_CATALOG[0].name] and list(learned) == ["910480"]
+
+
+def test_part_b_says_it_plans_with_the_cutter_the_shop_bought(shop):
+    """Shop lane's demo check of #26: Part B has no issues, so without this line the learning beat never
+    reaches the comment."""
+    from anville.geometry import BACK_CHAMFER_CATALOG, assess_back_chamfer, extract
+    from tests.geometry.parts import PARTS, write_step
+
+    import tempfile, pathlib
+    step = write_step(PARTS["demo_bracket_b"](), pathlib.Path(tempfile.mkdtemp()) / "b.step")
+    facts = extract(step)
+    owned, learned = review_shop([_bought(BACK_CHAMFER_CATALOG[0])])
+    learned = {name: {**src, "on": "2026-10-26"} for name, src in learned.items()}  # `on` arrives with #25
+    access = assess_back_chamfer(step, facts, owned)
+    comment, _ = agent_comment(facts.to_dict(), owned, {}, lambda *a, **k: None, model=Scripted(),
+                               back_chamfer=[a.to_dict() for a in access], learned=learned)
+    assert "1 setup" in comment
+    assert comment.splitlines()[-1] == "It plans with the 910480 the shop bought on 2026-10-26."

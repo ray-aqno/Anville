@@ -453,6 +453,15 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
+    estimates = {}  # conditional part edit -> its cost slot, where only a part edit helps (ruling, lane 3)
+    if priced:
+        q = max(shop.costs.scenarios.quantities)
+        values["costs.quantity"] = str(q)
+        for issue_id, key in conditional.items():
+            if issue_id in ask_only and key in priced and str(q) in priced[key]["costs"]:
+                lo, hi = priced[key]["costs"][str(q)]
+                values[f"option.{key}.cost_lo"], values[f"option.{key}.cost_hi"] = f"{lo:,.0f}", f"{hi:,.0f}"
+                estimates[key] = True
     paybacks = {}  # key -> (payback, payback_mid), for options that buy a tool
     for key, d in priced.items():
         if d.get("payback") is not None:
@@ -534,8 +543,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         if not err:
             checked.append(sent)
     verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
-    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks),
-                            values, keys)
+    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
+                                             estimates), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     emit("verify", "Comment assembled", stage="publish", model_sentences=len(verified))
@@ -653,7 +662,7 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
 def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dict[str, Issue],
                      intents: dict[str, Intent], options: dict[str, Option],
                      conditional: dict[str, str] | None = None,
-                     paybacks: dict[str, tuple] | None = None) -> str:
+                     paybacks: dict[str, tuple] | None = None, estimates: dict[str, bool] | None = None) -> str:
     """Verified model sentences in the model's order; every decision not stated by a verified action
     sentence gets its code-rendered line; accepted questions are always placed by code, after the
     proposal they belong to (flag, then suggest)."""
@@ -672,6 +681,9 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
             if key:  # the part edit, offered only on condition, next to the one question about intent
                 also = " also" if d.action == "propose" else ""
                 lines.append(f"If {g} isn't needed, {key}{also} {_effect(options[key], short=True)}.")
+                if key in (estimates or {}):  # lane 3: what the edit would cost, from the cost model's slots
+                    lines.append(f"At {{{{costs.quantity}}}} parts, {key}'s plan runs ${{{{option.{key}.cost_lo}}}}"
+                                 f"–${{{{option.{key}.cost_hi}}}}; designer time isn't priced.")
             lines.append(f"{g}'s purpose isn't on record. {d.question} The answer could change the best plan.")
     return "\n".join(lines)
 
@@ -684,7 +696,8 @@ def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[s
     try:
         from anville.shop import cost_options
 
-        result = cost_options(facts, shop, list(options.values()), plan=plan)
+        # Only options that change the plan are priced: the rest are noise in the panel (shop lane, #26).
+        result = cost_options(facts, shop, [o for o in options.values() if o.changes_plan], plan=plan)
     except Exception as e:
         emit("error", "Costing failed; the review goes out without dollars", stage="plan", error=repr(e)[:300])
         return {}

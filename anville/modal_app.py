@@ -388,7 +388,7 @@ def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], tr
         trace.add("tool_result", "Used what the shop learned", tools=learned)
     # Each stage's events reach the store when the next stage starts: the panel animates live.
     comment, stats = agent_comment(facts, shop, os.environ, flushing_at_stage_changes(trace.add, trace.flush),
-                                   deadline=deadline, back_chamfer=back_chamfer)
+                                   deadline=deadline, back_chamfer=back_chamfer, learned=learned)
     trace.flush()
     usage = stats.pop("agent_usage", [])
     timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))

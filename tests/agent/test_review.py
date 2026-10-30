@@ -760,3 +760,20 @@ def test_a_fix_for_unreachable_faces_says_so(undercut, shop):
     r = run_review(undercut, shop, Scripted(bore_plan(), decide(
         {"issue_id": "I1", "action": "propose", "option_key": BORE_REMOVE, "reason": "x"})), constraints=free)
     assert f"G9: {BORE_REMOVE} takes it from 2 to 0 unreachable face(s)." in r.comment.splitlines()
+
+
+def test_with_no_shop_fix_the_conditional_edit_carries_its_dollar_estimate(undercut, costed):
+    """Rayyan's ruling, 2026-10-30, lane 3: estimate the change with the cost model, from slots."""
+    r = run_review(undercut, costed, None)
+    q = max(costed.costs.scenarios.quantities)
+    line = next(line for line in r.comment.splitlines() if line.startswith(f"At {q} parts,"))
+    assert BORE_REMOVE in line and "$" in line and "designer time isn't priced" in line
+
+
+def test_only_plan_changing_options_are_priced(part_a, costed, chamfer, catalog_access):
+    events = []
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer), {"kind": "set_depth", "face_group": chamfer}),
+                                        decide(propose_route())),
+               back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+    scored = [d for t, d in events if t == "Option scored"]
+    assert all(("costs" in d) == d["changes_plan"] for d in scored) and any(not d["changes_plan"] for d in scored)
