@@ -443,8 +443,11 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
              edit_kind=r["kind"], face_group=r.get("face_group"), reason=r["reason"])
     priced = _price(facts, shop, plan, options, emit)
     for o in options.values():
-        emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
-             setups_after=o.after.setups, changes_plan=o.changes_plan, **priced.get(o.key, {}))
+        # The comment's own wording, slots filled, so the panel never re-derives names from keys (panel lane).
+        name = _name(o).replace(f"{{{{option.{o.key}.tool}}}}", str(o.params.get("name", o.key)))
+        emit("option", "Option scored", stage="plan", key=o.key, name=name, edit_kind=o.kind, params=dict(o.params),
+             side=o.side, setups_before=o.before.setups, setups_after=o.after.setups,
+             changes_plan=o.changes_plan, **priced.get(o.key, {}))
 
     # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
     # A part edit then appears only as code's conditional line, next to the question.
