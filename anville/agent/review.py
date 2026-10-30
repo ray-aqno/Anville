@@ -464,7 +464,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
             if issue_id in ask_only and key in priced and str(q) in priced[key]["costs"]:
                 lo, hi = priced[key]["costs"][str(q)]
                 values[f"option.{key}.cost_lo"], values[f"option.{key}.cost_hi"] = f"{lo:,.0f}", f"{hi:,.0f}"
-                estimates[key] = True
+                # Say so wherever dollars rest on placeholder inputs (shop profile rule; Codex, PR #26).
+                estimates[key] = priced[key]["placeholder"]
     paybacks = {}  # key -> (payback, payback_mid), for options that buy a tool
     for key, d in priced.items():
         if d.get("payback") is not None:
@@ -664,7 +665,8 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
 def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dict[str, Issue],
                      intents: dict[str, Intent], options: dict[str, Option],
                      conditional: dict[str, str] | None = None,
-                     paybacks: dict[str, tuple] | None = None, estimates: dict[str, bool] | None = None) -> str:
+                     paybacks: dict[str, tuple] | None = None,
+                     estimates: dict[str, bool] | None = None) -> str:  # estimates: key -> rests on placeholders
     """Verified model sentences in the model's order; every decision not stated by a verified action
     sentence gets its code-rendered line; accepted questions are always placed by code, after the
     proposal they belong to (flag, then suggest)."""
@@ -684,8 +686,10 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
                 also = " also" if d.action == "propose" else ""
                 lines.append(f"If {g} isn't needed, {_name(options[key])}{also} {_effect(options[key], short=True)}.")
                 if key in (estimates or {}):  # lane 3: what the edit would cost, from the cost model's slots
+                    rates = " on placeholder shop rates" if estimates[key] else ""
                     lines.append(f"At {{{{costs.quantity}}}} parts, the plan after {_name(options[key])} runs "
-                                 f"${{{{option.{key}.cost_lo}}}}–${{{{option.{key}.cost_hi}}}}; designer time isn't priced.")
+                                 f"${{{{option.{key}.cost_lo}}}}–${{{{option.{key}.cost_hi}}}}{rates}; "
+                                 "designer time isn't priced.")
             # An ask's own line already says the purpose isn't on record.
             flag = "" if d.action == "ask" else f"{g}'s purpose isn't on record. "
             lines.append(f"{flag}{d.question} The answer could change the best plan.")
@@ -709,13 +713,14 @@ def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[s
     # so the panel shows which dollars rest on placeholders (Codex, PR #26).
     emit("decision", "Costs compared", stage="plan", verdicts=[asdict(v) for v in result.verdicts],
          inputs=result.inputs, scenarios=result.scenarios)
+    placeholder = any(i.get("status") == "placeholder" for i in result.inputs.values())
     current = next((r for r in result.routes if r.key == "current"), None)
     whole = current is not None and current.complete
     # A route that can't make the whole part has no break-even quantity: no payback is claimed (Codex, PR #26).
     return {r.key: {"one_time": list(r.one_time), "costs": {str(q): list(v) for q, v in r.costs.items()},
                     "payback": list(r.payback) if r.payback is not None and whole and r.complete else None,
                     "payback_mid": r.payback_mid if whole and r.complete else None,
-                    "complete": r.complete, "unpriced": r.unpriced}
+                    "complete": r.complete, "unpriced": r.unpriced, "placeholder": placeholder}
             for r in result.routes if r.key in options}
 
 
@@ -785,8 +790,12 @@ def _name(o: Option) -> str:
         return f"removing {g}"
     if o.kind == "set_depth":
         return f"changing {g}'s depth"
+    if o.kind == "set_min_radius":
+        return f"opening up {g}'s inside corner radius"
     if o.kind == "route_machine":
         return "sending it to an outside 5-axis shop"
+    if o.kind == "add_fixture":  # not offered yet (edits.py skips it), named so a new kind can't leak a key
+        return "a different fixture"
     if o.kind == "add_tool":
         tool = f"{{{{option.{o.key}.tool}}}}"
         if p.get("type") == "back_chamfer":

@@ -5,6 +5,8 @@ evaluate_edits offers remove_feature (part side, 2 -> 1) and route_machine/5 (sh
 A review is three model calls: plan, decide-and-write, verify (the verifier is a second model).
 """
 
+import re
+
 import http.server
 import json
 import threading
@@ -803,3 +805,22 @@ def test_the_rules_allow_the_one_ask_the_tool_offers():
     from anville.agent.review import RULES
 
     assert "ask_only" in RULES
+
+
+def test_every_catalog_kind_has_a_plain_name():
+    """Codex, PR #26 (P1): set_min_radius fell through to its option key."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _name
+    from anville.geometry.edits import CATALOG
+
+    for kind in CATALOG:
+        name = _name(NS(kind=kind, key=f"{kind}/G1/x", face_group="G1", params={"name": "EM6"}))
+        prose = re.sub(r"\{\{[^}]*\}\}", "", name)  # slots carry keys by design; the prose must not
+        assert "/" not in prose and kind not in prose, (kind, name)
+
+
+def test_the_estimate_says_its_rates_are_placeholders(undercut, costed):
+    """Codex, PR #26: most DLL inputs are placeholders, and the comment must say so where it shows dollars."""
+    line = next(x for x in run_review(undercut, costed, None).comment.splitlines() if x.startswith("At "))
+    assert "placeholder shop rates" in line
