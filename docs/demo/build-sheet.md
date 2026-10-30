@@ -23,7 +23,7 @@ Onshape feature names and dialogs below are from memory, not checked against the
 **Expected Anville results** (shop: EM12, EM6, EM3 flat endmills at L:D 4):
 - **2 setups: +Z, then −Z.** The weld-clearance chamfer is the *only* face in the −Z setup.
 - The 1 mm top edge break costs nothing: it is cut in the +Z setup.
-- **The fix is shop-side.** The feature's name states its intent, so the face is protected and Anville must not propose removing it. The demo fix is a back-chamfer cutter that reaches the bottom edge from +Z: **1 setup, intent intact.** This needs tool types in the shop profile (an RFC is pending), so it isn't modelled yet.
+- **The fix is shop-side.** The feature's name states its intent, so the face is protected and Anville must not propose removing it. The demo fix is a back-chamfer cutter that reaches the bottom edge from +Z: **1 setup, intent intact.** It is modelled by RFC 0002 (PR #15). With Harvey 910480 and relieved soft jaws, checks a–f all pass (neck clearance 0.825 mm), and the plan is 1 setup. A shop that doesn't own the cutter is offered buying it (PR #18).
 - On 3+2 (5-axis): 1 setup, another shop-side route.
 - `remove_feature` still computes the removal as a capability: predicted 2 → 1, matching re-extraction of the part with feature 5 suppressed (`test_demo_parts.py`).
 - Finishing tools: pocket walls, floor and r6 corners EM12; holes EM6; chamfers EM12.
@@ -42,7 +42,7 @@ Onshape feature names and dialogs below are from memory, not checked against the
 
 **Expected Anville results:**
 - **2 setups: +Z, then −Z.** The chamfer is again the only −Z face.
-- The same shop-side fix applies. As a capability, removal computes 2 → 1, predicted and measured.
+- The same shop-side fix applies: with the 910480 and relieved jaws, 1 setup (+Z), keeping 97% of the jaw grip. As a capability, removal computes 2 → 1, predicted and measured.
 - Finishing tools: everything EM6 (the r5 corners cap the tool at Ø10).
 
 **For the learning beat:** this part arrives with the same pattern, a bottom chamfer that alone costs a flip. Whatever Anville learned on Part A (the designer's reason for the chamfer, or the shop's note on bottom edge breaks) should shape this review from the start. Which lesson to record is the main session's call.

@@ -11,6 +11,7 @@ from anville.geometry.facts import DIRECTIONS, FaceFacts, PartFacts
 from anville.geometry.shop import ShopProfile, Tool
 
 FIT_TOL = 1e-6  # mm
+HOLDER_MARGIN = 1.0  # mm added to the holder's sweep: reach curves are measured on a 1 mm grid
 # 5-axis fixture sides to try, part resting on its bottom first.
 FIXTURE_ORDER = ("-Z", "+Z", "-X", "+X", "-Y", "+Y")
 
@@ -90,17 +91,29 @@ class _Part:
         return best
 
 
-def _fit(part: _Part, face: FaceFacts, d: str, tools: list[Tool]) -> tuple[Tool | None, str]:
+def sweep(tool: Tool, shop: ShopProfile) -> float:
+    """How far the holder's edge passes beyond the face the tool is cutting (ADR 0008 Amendment 1)."""
+    return shop.holder(tool) / 2 - tool.diameter / 2 + HOLDER_MARGIN
+
+
+def stickout(face: FaceFacts, d: str, tool: Tool, shop: ShopProfile) -> float:
+    return face.access[d].stickout(sweep(tool, shop))
+
+
+def _fit(part: _Part, face: FaceFacts, d: str, tools: list[Tool], shop: ShopProfile) -> tuple[Tool | None, str]:
     """The largest tool that finishes `face` from `d`, or None with the reason."""
     a = face.access.get(d)
     if a is None or a.fraction < 1.0:
         return None, ""
     lim = part.limit(face, d)
     for tool in tools:
-        if tool.diameter <= lim.diameter + FIT_TOL and a.depth <= tool.reach + FIT_TOL:
+        if tool.diameter <= lim.diameter + FIT_TOL and stickout(face, d, tool, shop) <= tool.reach + FIT_TOL:
             return tool, ""
     width = "any diameter" if math.isinf(lim.diameter) else f"Ø≤{lim.diameter:.3g} ({lim.cause})"
-    return None, f"{d}: needs {width} reaching {a.depth:.3g} mm"
+    why = f"{d}: needs {width} reaching {a.depth:.3g} mm"
+    if a.reach and len(a.reach) > 1:  # both ends of the curve: the shop's holder and the designer's clearance
+        why += f", or {a.reach[0][1]:.3g} mm with a holder whose edge stops short of {a.reach[1][0]:.3g} mm from the face"
+    return None, why
 
 
 def min_setups(facts: PartFacts, shop: ShopProfile, *, axes: int = 3, back_chamfer=()) -> SetupPlan:
@@ -134,7 +147,7 @@ def _plan(facts: PartFacts, shop: ShopProfile, axes: int, from_top: dict) -> Set
             continue
         misses = []
         for d in DIRECTIONS:
-            tool, why = _fit(part, face, d, tools)
+            tool, why = _fit(part, face, d, tools, shop)
             if tool:
                 fits[d][face.id] = tool
             elif why:
