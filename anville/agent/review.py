@@ -193,6 +193,7 @@ def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Inten
 # --- slots ---------------------------------------------------------------------
 
 _SLOT = re.compile(r"\{\{([^{}]+)\}\}")
+_COST_CLAIM = re.compile(r"\bcheap(?:est|er)\b|\bleast expensive\b|\bcosts? less\b|\bless expensive\b", re.I)
 _INTERNAL = re.compile(r"\b(?:issue|intent|option|decision):|\b(?:intent|option|issue|plan)\.\w|\bI\d+\b")
 _ALLOWED_DIGITS = re.compile(r"\b[GI]\d+\b|\b[35]-axis\b|[+-][XYZ]\b")
 
@@ -441,10 +442,13 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     for r in rejected:
         emit("tool_result", "Edit rejected: the face's intent is stated", stage="plan",
              edit_kind=r["kind"], face_group=r.get("face_group"), reason=r["reason"])
-    priced = _price(facts, shop, plan, options, emit)
+    priced, costed = _price(facts, shop, plan, options, emit)
     for o in options.values():
         emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
              setups_after=o.after.setups, changes_plan=o.changes_plan, **priced.get(o.key, {}))
+    ranked = _rank(costed, shop, chosen, options, emit)
+    # A lead that wins only on the tie-break must not read as the cheapest (ADR 0010 §5): code names its rivals.
+    rivals = {r.lead: [k for k in r.top if k != r.lead] for r in ranked.values() if r.lead and r.basis == "mid_range"}
 
     # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
     # A part edit then appears only as code's conditional line, next to the question.
@@ -507,6 +511,12 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     return None, f"{key} belongs to another face group"
                 if not options[key].changes_plan:  # eval gate, PR #23: "takes it from 1 to 1 setup(s)"
                     return None, f"{key} changes nothing: propose an option whose changes_plan is true, or stay quiet"
+                rank = ranked.get(issue.id)
+                if rank and options[key].side == "shop" and rank.lead and key != rank.lead:
+                    return None, (f"{rank.lead} costs less at mid-range inputs and is in the top tier for "
+                                  f"{issue.face_group}: lead with it (ADR 0010)")
+                if rank and options[key].side == "shop" and not rank.lead and key not in rank.top:
+                    return None, f"{key} costs more than {rank.top} at every input: lead with one of those (ADR 0010)"
                 if key in barred.get(issue.id, ()):
                     return None, (f"{issue.face_group}'s purpose is unknown: lead with a fix that works whatever it's "
                                   f"for (a shop-side option); a part edit appears only as code's conditional line")
@@ -524,6 +534,9 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     and sent.get("role") in ("context", "action", "reason") and isinstance(sent.get("cites"), list)
                     and all(isinstance(c, str) for c in sent["cites"])):
                 return None, f"comment entry {i} needs text (string), role (context|action|reason) and cites (strings)"
+            if rivals and _COST_CLAIM.search(sent["text"]):
+                return None, (f"comment entry {i} ranks the fixes by cost, but the lead wins only at mid-range inputs: "
+                              "don't call a fix cheapest or cheaper; code states the costs")
         return (out, list(a["comment"])), ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
@@ -533,10 +546,12 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                       "Use only these slots for numbers.",
                       base, {"selected": selected, "intents": intent_view, "ask_allowed": gates,
                              "ask_only": sorted(ask_only),
+                             "cost_ranking": {i: {"top": list(r.top), "lead": r.lead, "basis": r.basis}
+                                              for i, r in ranked.items()},
                              "offered_options": offered, "rejected_requests": rejected,
                              "nodes": sorted(nodes), "slots": sorted(values)}, DECIDE_TOOL, v_decide)
     if decided is None:
-        decisions = [_fallback_decision(by_id[i], gates[i], list(options.values())) for i in selected]
+        decisions = [_fallback_decision(by_id[i], gates[i], list(options.values()), ranked.get(i)) for i in selected]
         sentences = []
     else:
         decisions, sentences = decided
@@ -556,7 +571,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
             checked.append(sent)
     verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
     comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
-                                             estimates), values, keys)
+                                             estimates, rivals), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     emit("verify", "Comment assembled", stage="publish", model_sentences=len(verified))
@@ -675,7 +690,8 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
                      intents: dict[str, Intent], options: dict[str, Option],
                      conditional: dict[str, str] | None = None,
                      paybacks: dict[str, tuple] | None = None,
-                     estimates: dict[str, bool] | None = None) -> str:  # estimates: key -> rests on placeholders
+                     estimates: dict[str, bool] | None = None,  # estimates: key -> rests on placeholders
+                     rivals: dict[str, list[str]] | None = None) -> str:  # rivals: tie-break lead -> the others
     """Verified model sentences in the model's order; every decision not stated by a verified action
     sentence gets its code-rendered line; accepted questions are always placed by code, after the
     proposal they belong to (flag, then suggest)."""
@@ -694,6 +710,9 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
             said.add(d.option_key)
         if d.action == "propose" and d.option_key in (paybacks or {}):  # dollars are stated by code only
             lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
+        for r in (rivals or {}).get(d.option_key, []) if d.action == "propose" else []:  # ADR 0010 §5
+            name = _name(options[r])
+            lines.append(f"{name[0].upper()}{name[1:]} costs less at some inputs.")
         if d.question:
             g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
             if key:  # the part edit, offered only on condition, next to the one question about intent
@@ -710,11 +729,13 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     return "\n".join(lines)
 
 
-def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[str, Option], emit: Emit) -> dict:
+def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[str, Option],
+           emit: Emit) -> tuple[dict, object | None]:
     """Each option's dollars from the shop lane's cost model (S7), for the trace and the slots; {} for a
-    shop without cost inputs. A costing bug costs only the dollars, never the review."""
+    shop without cost inputs. A costing bug costs only the dollars, never the review. Also returns the
+    CostResult, for ranking (ADR 0010)."""
     if getattr(shop, "costs", None) is None or not options:
-        return {}
+        return {}, None
     try:
         from anville.shop import cost_options
 
@@ -722,7 +743,7 @@ def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[s
         result = cost_options(facts, shop, [o for o in options.values() if o.changes_plan], plan=plan)
     except Exception as e:
         emit("error", "Costing failed; the review goes out without dollars", stage="plan", error=repr(e)[:300])
-        return {}
+        return {}, None
     # The verdict per quantity ("depends" when recommended is None) and each input's status and source,
     # so the panel shows which dollars rest on placeholders (Codex, PR #26).
     emit("decision", "Costs compared", stage="plan", verdicts=[asdict(v) for v in result.verdicts],
@@ -731,11 +752,36 @@ def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[s
     current = next((r for r in result.routes if r.key == "current"), None)
     whole = current is not None and current.complete
     # A route that can't make the whole part has no break-even quantity: no payback is claimed (Codex, PR #26).
-    return {r.key: {"one_time": list(r.one_time), "costs": {str(q): list(v) for q, v in r.costs.items()},
+    return ({r.key: {"one_time": list(r.one_time), "costs": {str(q): list(v) for q, v in r.costs.items()},
                     "payback": list(r.payback) if r.payback is not None and whole and r.complete else None,
                     "payback_mid": r.payback_mid if whole and r.complete else None,
                     "complete": r.complete, "unpriced": r.unpriced, "placeholder": placeholder}
-            for r in result.routes if r.key in options}
+            for r in result.routes if r.key in options}, result)
+
+
+def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Option], emit: Emit) -> dict:
+    """ADR 0010: per issue, its plan-changing shop-side fixes ranked by cost (dominance at every corner and
+    quantity, then the mid-range tie-break Rayyan chose, 2026-10-30). Each issue over its own fixes, so a
+    cutter for one face never leads for another. A ranking bug costs only the ranking, never the review."""
+    if result is None:
+        return {}
+    from anville.shop import rank_fixes
+
+    out = {}
+    for issue in issues:
+        keys = [k for k, o in options.items()  # best_option order: `top` keeps it, the fallback relies on it
+                if o.changes_plan and o.side == "shop" and o.face_group in (None, issue.face_group)]
+        if not keys:
+            continue
+        try:
+            ranking = rank_fixes(result, shop, keys)
+        except Exception as e:
+            emit("error", "Ranking failed; any shop fix may lead", stage="plan", issue_id=issue.id, error=repr(e)[:300])
+            continue
+        out[issue.id] = ranking
+        emit("decision", "Fixes ranked", stage="plan", issue_id=issue.id, top=list(ranking.top), lead=ranking.lead,
+             basis=ranking.basis)
+    return out
 
 
 def payback_line(key: str, payback: tuple, mid: int | None) -> str:
@@ -757,8 +803,11 @@ def payback_line(key: str, payback: tuple, mid: int | None) -> str:
 # --- fixed-script steps ------------------------------------------------------------
 
 
-def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option]) -> Decision:
+def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option], ranking=None) -> Decision:
     mine = [o for o in options if o.face_group in (None, issue.face_group)]
+    if ranking and ranking.top:  # ADR 0010: the ranked lead, else the first of the top tier, leads on the shop side
+        first = ranking.lead or ranking.top[0]
+        mine = sorted(mine, key=lambda o: o.side == "shop" and o.key != first)
     if may_ask:
         # Intent unknown: propose the fix that assumes nothing about the feature (shop side, when one
         # exists) and ask about the part edit the answer could unlock. Never ask alone.
