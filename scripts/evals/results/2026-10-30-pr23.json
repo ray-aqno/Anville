@@ -1,0 +1,423 @@
+{
+ "what": "Eval gate on PR #23 (flag, then suggest): origin/main + feat/flag-and-suggest, detached merge",
+ "repo_sha": "b57161b",
+ "runs": [
+  1,
+  9
+ ],
+ "n_per_scenario": 10,
+ "models": {
+  "plan, decide": "meta-models/muse-spark-open-1026 (inference.baseten.co)",
+  "verify": "muse-spark-1.3 (api.meta.ai)"
+ },
+ "spent_usd": 1.804,
+ "prices_per_1m": {
+  "muse-spark-open": [
+   1.25,
+   0.15,
+   4.25
+  ],
+  "muse-spark-1.3": [
+   1.25,
+   1.25,
+   4.25
+  ]
+ },
+ "bars": {
+  "no_bare_question": 1.0,
+  "numbers_from_code": 1.0,
+  "removal_conditional_only": 1.0,
+  "any_intent_leads": 1.0,
+  "nothing_raised": 1.0,
+  "survived": 0.9,
+  "raised": 0.95,
+  "shop_fix": 0.95,
+  "plan_changing_fix": 0.95
+ },
+ "summary": {
+  "a_stated": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2412,
+   "latency_p50_s": 20.95,
+   "latency_max_s": 26.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1819,
+     "max": 3074
+    },
+    "decide": {
+     "p50": 683.0,
+     "max": 1480
+    },
+    "verify": {
+     "p50": 1501.5,
+     "max": 2237
+    }
+   },
+   "rejections": {
+    "invalid_answer": 1,
+    "no_tool_call": 4
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:route_machine/5": 10
+   },
+   "proposals": {
+    "shop:route_machine/5": 9
+   },
+   "model_sentences": 22,
+   "sentences_checked": 30,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "a_reply_keep": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.503,
+   "latency_p50_s": 21.15,
+   "latency_max_s": 29.8,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1947,
+     "max": 3078
+    },
+    "decide": {
+     "p50": 769,
+     "max": 1720
+    },
+    "verify": {
+     "p50": 2153.0,
+     "max": 3073
+    }
+   },
+   "rejections": {
+    "invalid_answer": 1,
+    "no_tool_call": 5
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:route_machine/5": 19,
+    "shop:add_tool/G3/+Z/BC45-910480": 1
+   },
+   "proposals": {
+    "shop:route_machine/5 +question": 5,
+    "shop:route_machine/5": 12,
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 1
+   },
+   "model_sentences": 41,
+   "sentences_checked": 65,
+   "repeated_fixes": 0,
+   "questions": 6,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "9/10"
+  },
+  "a_reply_not_needed": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 19,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "plan_changing_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4659,
+   "latency_p50_s": 20.65,
+   "latency_max_s": 30.8,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1859,
+     "max": 2873
+    },
+    "decide": {
+     "p50": 776,
+     "max": 1497
+    },
+    "verify": {
+     "p50": 1692.5,
+     "max": 3060
+    }
+   },
+   "rejections": {
+    "no_tool_call": 6,
+    "invalid_answer": 1
+   },
+   "fallbacks": {
+    "decide": 1
+   },
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 9,
+    "shop:route_machine/5": 7,
+    "part:remove_feature/G3": 4
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 5,
+    "shop:add_tool/G3/+Z/BC45-910480": 2,
+    "shop:route_machine/5": 4,
+    "shop:route_machine/5 +question": 3,
+    "part:remove_feature/G3": 4
+   },
+   "model_sentences": 26,
+   "sentences_checked": 60,
+   "repeated_fixes": 0,
+   "questions": 9,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "3/10"
+  },
+  "b_cutter_owned": {
+   "trials": 10,
+   "gated": {
+    "nothing_raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.0,
+   "latency_p50_s": 0.0,
+   "latency_max_s": 0.0,
+   "completion_tokens": {},
+   "rejections": {},
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {},
+   "model_sentences": 0,
+   "sentences_checked": 0,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "two_pockets": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 9,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.3396,
+   "latency_p50_s": 30.35,
+   "latency_max_s": 37.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 4118,
+     "max": 6006
+    },
+    "decide": {
+     "p50": 861,
+     "max": 1457
+    },
+    "verify": {
+     "p50": 1894,
+     "max": 2706
+    }
+   },
+   "rejections": {
+    "invalid_answer": 2,
+    "no_tool_call": 1
+   },
+   "fallbacks": {
+    "decide": 1
+   },
+   "leads": {},
+   "proposals": {
+    "shop:route_machine/5": 5,
+    "shop:route_machine/5 +question": 4
+   },
+   "model_sentences": 18,
+   "sentences_checked": 30,
+   "repeated_fixes": 0,
+   "questions": 4,
+   "questions_naming_a_fix": 0
+  },
+  "undercut": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2542,
+   "latency_p50_s": 22.700000000000003,
+   "latency_max_s": 31.2,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1617,
+     "max": 2833
+    },
+    "decide": {
+     "p50": 1100.0,
+     "max": 1493
+    },
+    "verify": {
+     "p50": 1926.0,
+     "max": 3141
+    }
+   },
+   "rejections": {
+    "no_tool_call": 1
+   },
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {
+    "part:remove_feature/G9 +question": 5,
+    "shop:route_machine/5 +question": 2,
+    "part:remove_feature/G9": 1
+   },
+   "model_sentences": 23,
+   "sentences_checked": 38,
+   "repeated_fixes": 0,
+   "questions": 7,
+   "questions_naming_a_fix": 0
+  }
+ },
+ "note": "Re-summarised after the Codex review: questions now counted per issue. shop_fix now also requires changes_plan; every Part A lead here (route_machine/5, add_tool BC45-910480) takes it 2 -> 1, so the gated results are unchanged. questions_naming_a_fix covers single-issue parts only in this run."
+}
