@@ -77,16 +77,16 @@ REAPER_PERIOD_MIN = 5
 RECEIVED_GRACE_S = 60
 UNCONFIRMED_POST_S = 120
 
-# Placeholder shop until the shop-profile format is decided (CLAUDE.md §4); same tools as the geometry tests.
-DEFAULT_TOOLS = (("EM12", 12.0, 4.0), ("EM6", 6.0, 4.0), ("EM3", 3.0, 4.0))
+def _shop_ledger(store) -> list[dict]:
+    """The shop's learned outcomes (S8): what it bought since. A ledger failure costs only the
+    learning, never the review."""
+    from anville.agent.job import SHOP_SCOPE
 
-
-def _shop():
-    """The shop the plan is made for: end mills it owns, no back-chamfer cutter yet, relieved soft
-    jaws (RFC 0002 §3). The catalog's cutters are offered as purchases, never counted as owned."""
-    from anville.geometry import ShopProfile, SoftJaws, Tool
-
-    return ShopProfile(tools=[Tool(*t) for t in DEFAULT_TOOLS], fixture=SoftJaws())
+    try:
+        return store.call.remote("read_ledger", "shop_outcome", SHOP_SCOPE)
+    except Exception as e:
+        _log("shop_ledger_failed", error=repr(e)[:300])
+        return []
 
 # The Store methods a remote caller may run.
 STORE_OPS = frozenset({
@@ -331,13 +331,15 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     Path(f"/data/step/{vid}.step").write_bytes(step)
     data.commit()
 
-    result = analyze.remote(vid)
+    ledger = _shop_ledger(store)
+    result = analyze.remote(vid, ledger)
     timing["analyzed_at"] = time.time()
     plan = result["plan"]
     trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
               directions=[s["directions"] for s in plan["setups"]],
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
-    message = _agent_comment(result["facts"], result["back_chamfer"], trace, timing, deadline) or _review_message(vid, plan)
+    message = (_agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing, deadline)
+               or _review_message(vid, plan))
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
@@ -376,13 +378,16 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     _log("timing", **timing)
 
 
-def _agent_comment(facts: dict, back_chamfer: list[dict], trace: "_Trace", timing: dict,
+def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], trace: "_Trace", timing: dict,
                    deadline: float) -> str | None:
     """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
-    from anville.agent.job import agent_comment, flushing_at_stage_changes
+    from anville.agent.job import agent_comment, flushing_at_stage_changes, review_shop
 
+    shop, learned = review_shop(ledger)
+    if learned:  # the panel lights "learned": this review starts from what the shop told us
+        trace.add("tool_result", "Used what the shop learned", tools=learned)
     # Each stage's events reach the store when the next stage starts: the panel animates live.
-    comment, stats = agent_comment(facts, _shop(), os.environ, flushing_at_stage_changes(trace.add, trace.flush),
+    comment, stats = agent_comment(facts, shop, os.environ, flushing_at_stage_changes(trace.add, trace.flush),
                                    deadline=deadline, back_chamfer=back_chamfer)
     trace.flush()
     usage = stats.pop("agent_usage", [])
@@ -407,21 +412,22 @@ def _review_message(vid: str, plan: dict) -> str:
 
 
 @app.function(image=geo_image, volumes={"/data": data}, timeout=300)
-def analyze(version_id: str) -> dict:
+def analyze(version_id: str, ledger: list[dict] = ()) -> dict:
     """STEP → PartFacts → SetupPlan (ADR 0008). PartFacts are kept on the Volume for later stages."""
     from dataclasses import replace
 
-    from anville.geometry import BACK_CHAMFER_CATALOG, assess_back_chamfer, extract, min_setups
+    from anville.agent.job import catalog_for, review_shop
+    from anville.geometry import assess_back_chamfer, extract, min_setups
 
     data.reload()  # the STEP was committed by handle_event's container
     step = f"/data/step/{version_id}.step"
     facts = extract(step)
-    shop = _shop()
+    shop, _ = review_shop(list(ledger))  # the same shop the review prices: owned cutters included (S8)
     try:
         # Checks a-f for the shop's cutters and the catalog's (RFC 0002), on this part. The review gives
         # the same list to the plan, the options and the ask gate; a catalog cutter is a purchase to offer.
         access = assess_back_chamfer(step, facts, replace(
-            shop, back_chamfer_tools=[*shop.back_chamfer_tools, *BACK_CHAMFER_CATALOG]))
+            shop, back_chamfer_tools=[*shop.back_chamfer_tools, *catalog_for(shop)]))
     except Exception as e:  # a back-chamfer bug costs only the buy option, never the review
         _log("back_chamfer_failed", error=repr(e)[:300])
         access = []

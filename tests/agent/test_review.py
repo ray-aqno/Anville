@@ -640,3 +640,47 @@ def test_a_failed_call_still_records_its_latency(part_a, shop, chamfer):
     r = run_review(part_a, shop, Scripted(*[ModelUnavailable("no complete reply within 9 s")] * 2))
     failed = r.usage[0]
     assert failed["stage"] == "plan" and isinstance(failed["latency_s"], float) and "no complete reply" in failed["error"]
+
+
+# --- dollars (S7, shop lane PR #20): code states the payback, never the model --------------------------
+
+from anville.agent.review import payback_line  # noqa: E402
+from anville.shop import DLL_COSTS, Shop  # noqa: E402
+
+
+@pytest.fixture
+def costed(shop):
+    return Shop(tools=shop.tools, fixture=shop.fixture, name="Test shop", costs=DLL_COSTS)
+
+
+def test_a_purchase_proposal_states_its_payback_range_in_code(part_a, costed, chamfer, catalog_access):
+    events = []
+    model = Scripted(plan(*requests_for(chamfer)),
+                     decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}))
+    r = run_review(part_a, costed, model, back_chamfer=catalog_access,
+                   emit=lambda kind, title, **d: events.append((title, d)))
+    assert ("Buying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); "
+            "below that, keep the flip.") in r.comment.splitlines()
+    (buy,) = [d for t, d in events if t == "Option scored" and d["key"] == BUY]
+    assert buy["payback_mid"] == 21 and buy["payback"] == [3, 331] and buy["costs"]  # the panel's dollars
+
+
+def test_other_proposals_and_unpriced_shops_carry_no_dollars(part_a, shop, costed, chamfer, catalog_access):
+    route = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())),
+                       back_chamfer=catalog_access)
+    assert "pays off" not in route.comment
+    buy = decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"})
+    plain = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), buy), back_chamfer=catalog_access)
+    assert plain.decisions[0].option_key == BUY and "pays off" not in plain.comment
+
+
+@pytest.mark.parametrize("payback, mid, line", [
+    ((None, None), None, "Buying the {{option.K.tool}} doesn't pay off at these inputs."),
+    ((3, None), 21, "Buying the {{option.K.tool}} pays off past ~{{option.K.payback_mid}} parts at mid-range "
+                    "inputs (from {{option.K.payback_lo}} at best; at the worst inputs it never does); "
+                    "below that, keep the flip."),
+    ((3, 331), None, "Buying the {{option.K.tool}} pays off past {{option.K.payback_lo}} parts at the best "
+                     "inputs, but never at mid-range ones."),
+])
+def test_payback_wording_never_invents_an_end_of_the_range(payback, mid, line):
+    assert payback_line("K", payback, mid) == line

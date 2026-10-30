@@ -15,6 +15,31 @@ from anville.geometry import PartFacts, ShopProfile
 from anville.geometry.access import BackChamferAccess
 
 
+# The demo shop's ledger scope (the shop lane writes its tool_acquired rows here).
+SHOP_SCOPE = "shop:dll"
+# Placeholder end mills until the shop-profile format is decided (CLAUDE.md §4); same as the geometry tests.
+DEFAULT_TOOLS = (("EM12", 12.0, 4.0), ("EM6", 6.0, 4.0), ("EM3", 3.0, 4.0))
+
+
+def review_shop(ledger: list[dict]) -> tuple[ShopProfile, dict[str, dict]]:
+    """The shop a review plans and prices for: Marquette's DLL with its cost inputs, relieved soft jaws
+    (RFC 0002 §3), and every cutter the ledger says it bought since (S8). Returns the provenance of
+    each learned tool, by name, for the trace: "it knew the shop has that cutter now"."""
+    from anville.geometry import SoftJaws, Tool
+    from anville.shop import DLL_COSTS, Shop, apply_ledger
+
+    base = Shop(tools=[Tool(*t) for t in DEFAULT_TOOLS], fixture=SoftJaws(), name="Marquette DLL", costs=DLL_COSTS)
+    return apply_ledger(base, ledger)
+
+
+def catalog_for(shop: ShopProfile) -> list:
+    """The catalog cutters the shop doesn't own yet: assessed as purchases to offer."""
+    from anville.geometry import BACK_CHAMFER_CATALOG
+
+    owned = {t.name for t in shop.back_chamfer_tools}
+    return [c for c in BACK_CHAMFER_CATALOG if c.name not in owned]
+
+
 def flushing_at_stage_changes(add: Emit, flush) -> Emit:
     """`add` that flushes right after an event that opens a new stage. The opening event ("Model
     called") comes before the stage's slow call, so the panel sees each stage start live, and the

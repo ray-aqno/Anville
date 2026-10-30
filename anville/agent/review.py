@@ -425,9 +425,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     for r in rejected:
         emit("tool_result", "Edit rejected: the face's intent is stated", stage="plan",
              edit_kind=r["kind"], face_group=r.get("face_group"), reason=r["reason"])
+    priced = _price(facts, shop, plan, options, emit)
     for o in options.values():
         emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
-             setups_after=o.after.setups, changes_plan=o.changes_plan)
+             setups_after=o.after.setups, changes_plan=o.changes_plan, **priced.get(o.key, {}))
 
     # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
     # A part edit then appears only as code's conditional line, next to the question.
@@ -443,6 +444,15 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
+    paybacks = {}  # key -> (payback, payback_mid), for options that buy a tool
+    for key, d in priced.items():
+        if d.get("payback") is not None:
+            lo, hi = d["payback"]
+            paybacks[key] = ((lo, hi), d["payback_mid"])
+            values[f"option.{key}.tool"] = str(options[key].params.get("name", key))
+            for name, v in (("payback_lo", lo), ("payback_hi", hi), ("payback_mid", d["payback_mid"])):
+                if v is not None:
+                    values[f"option.{key}.{name}"] = str(v)
     keys = list(options)
     nodes = comment_nodes(plan, chosen, intents, options)
 
@@ -509,7 +519,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         if not err:
             checked.append(sent)
     verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
-    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional),
+    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks),
                             values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
@@ -625,7 +635,8 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
 
 def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dict[str, Issue],
                      intents: dict[str, Intent], options: dict[str, Option],
-                     conditional: dict[str, str] | None = None) -> str:
+                     conditional: dict[str, str] | None = None,
+                     paybacks: dict[str, tuple] | None = None) -> str:
     """Verified model sentences in the model's order; every decision not stated by a verified action
     sentence gets its code-rendered line; accepted questions are always placed by code, after the
     proposal they belong to (flag, then suggest)."""
@@ -637,12 +648,48 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     for d in decisions:
         if d.issue_id not in covered:
             lines.append(render_line(d, by_id, intents, options))
+        if d.action == "propose" and d.option_key in (paybacks or {}):  # dollars are stated by code only
+            lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
         if d.question:
             g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
             if key:  # the part edit, offered only on condition, next to the one question about intent
                 lines.append(f"If {g} isn't needed, {key} also takes it to {{{{option.{key}.setups_after}}}} setup(s).")
             lines.append(f"{g}'s purpose isn't on record. {d.question} The answer could change the best plan.")
     return "\n".join(lines)
+
+
+def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[str, Option], emit: Emit) -> dict:
+    """Each option's dollars from the shop lane's cost model (S7), for the trace and the slots; {} for a
+    shop without cost inputs. A costing bug costs only the dollars, never the review."""
+    if getattr(shop, "costs", None) is None or not options:
+        return {}
+    try:
+        from anville.shop import cost_options
+
+        result = cost_options(facts, shop, list(options.values()), plan=plan)
+    except Exception as e:
+        emit("error", "Costing failed; the review goes out without dollars", stage="plan", error=repr(e)[:300])
+        return {}
+    return {r.key: {"one_time": list(r.one_time), "costs": {str(q): list(v) for q, v in r.costs.items()},
+                    "payback": list(r.payback) if r.payback is not None else None, "payback_mid": r.payback_mid,
+                    "unpriced": r.unpriced}
+            for r in result.routes if r.key in options}
+
+
+def payback_line(key: str, payback: tuple, mid: int | None) -> str:
+    """When buying the tool pays off, as a slot template. The verdict stays "depends": an end of the range
+    that never pays off is said so, never filled in (shop lane, 2026-10-29)."""
+    lo, hi = payback
+    tool = f"{{{{option.{key}.tool}}}}"
+    if lo is None:
+        return f"Buying the {tool} doesn't pay off at these inputs."
+    if mid is None:
+        return (f"Buying the {tool} pays off past {{{{option.{key}.payback_lo}}}} parts at the best inputs, "
+                "but never at mid-range ones.")
+    span = (f"anywhere from {{{{option.{key}.payback_lo}}}} to {{{{option.{key}.payback_hi}}}}" if hi is not None
+            else f"from {{{{option.{key}.payback_lo}}}} at best; at the worst inputs it never does")
+    return (f"Buying the {tool} pays off past ~{{{{option.{key}.payback_mid}}}} parts at mid-range inputs "
+            f"({span}); below that, keep the flip.")
 
 
 # --- fixed-script steps ------------------------------------------------------------
