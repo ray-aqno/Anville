@@ -1,0 +1,424 @@
+{
+ "what": "Eval gate on PR #26 (feat/wire-shop, carrying #23 and #24) merged with origin/main",
+ "repo_sha": "fc134a5",
+ "n_per_scenario": 10,
+ "spent_usd": 1.6182,
+ "models": {
+  "plan, decide": "meta-models/muse-spark-open-1026 (inference.baseten.co)",
+  "verify": "muse-spark-1.3 (api.meta.ai)"
+ },
+ "prices_per_1m": {
+  "muse-spark-open": [
+   1.25,
+   0.15,
+   4.25
+  ],
+  "muse-spark-1.3": [
+   1.25,
+   1.25,
+   4.25
+  ]
+ },
+ "bars": {
+  "no_bare_question": 1.0,
+  "numbers_from_code": 1.0,
+  "removal_conditional_only": 1.0,
+  "any_intent_leads": 1.0,
+  "nothing_raised": 1.0,
+  "survived": 0.9,
+  "raised": 0.95,
+  "shop_fix": 0.95,
+  "plan_changing_fix": 0.95,
+  "flags_and_asks": 0.95,
+  "asks_without_removal": 0.95,
+  "estimate_shown": 1.0
+ },
+ "summary": {
+  "a_stated": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2133,
+   "latency_p50_s": 19.45,
+   "latency_max_s": 22.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 2019.0,
+     "max": 3133
+    },
+    "decide": {
+     "p50": 622.0,
+     "max": 831
+    },
+    "verify": {
+     "p50": 2040,
+     "max": 2595
+    }
+   },
+   "rejections": {},
+   "fallbacks": {},
+   "leads": {
+    "shop:route_machine/5": 10
+   },
+   "proposals": {
+    "shop:route_machine/5": 10
+   },
+   "model_sentences": 10,
+   "sentences_checked": 31,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "a_reply_keep": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4209,
+   "latency_p50_s": 18.049999999999997,
+   "latency_max_s": 33.4,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1790,
+     "max": 4292
+    },
+    "decide": {
+     "p50": 601.5,
+     "max": 903
+    },
+    "verify": {
+     "p50": 1783,
+     "max": 2337
+    }
+   },
+   "rejections": {
+    "invalid_answer": 1
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:route_machine/5": 14,
+    "shop:add_tool/G3/+Z/BC45-910480": 6
+   },
+   "proposals": {
+    "shop:route_machine/5": 14,
+    "shop:add_tool/G3/+Z/BC45-910480": 6
+   },
+   "model_sentences": 31,
+   "sentences_checked": 64,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "6/10"
+  },
+  "a_reply_not_needed": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "plan_changing_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4213,
+   "latency_p50_s": 19.2,
+   "latency_max_s": 33.0,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1929.0,
+     "max": 4266
+    },
+    "decide": {
+     "p50": 623.5,
+     "max": 993
+    },
+    "verify": {
+     "p50": 1395.5,
+     "max": 3081
+    }
+   },
+   "rejections": {
+    "no_tool_call": 1,
+    "invalid_answer": 1
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:route_machine/5": 9,
+    "shop:add_tool/G3/+Z/BC45-910480": 7,
+    "part:remove_feature/G3": 4
+   },
+   "proposals": {
+    "shop:route_machine/5": 9,
+    "shop:add_tool/G3/+Z/BC45-910480": 7,
+    "part:remove_feature/G3": 4
+   },
+   "model_sentences": 23,
+   "sentences_checked": 62,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "3/10"
+  },
+  "b_cutter_owned": {
+   "trials": 10,
+   "gated": {
+    "nothing_raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.0,
+   "latency_p50_s": 0.0,
+   "latency_max_s": 0.0,
+   "completion_tokens": {},
+   "rejections": {},
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {},
+   "model_sentences": 0,
+   "sentences_checked": 0,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "two_pockets": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.3262,
+   "latency_p50_s": 31.55,
+   "latency_max_s": 45.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 4083.0,
+     "max": 6144
+    },
+    "decide": {
+     "p50": 753,
+     "max": 948
+    },
+    "verify": {
+     "p50": 1361,
+     "max": 2406
+    }
+   },
+   "rejections": {
+    "out_of_tokens": 1,
+    "invalid_answer": 4
+   },
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {
+    "shop:route_machine/5": 10
+   },
+   "model_sentences": 10,
+   "sentences_checked": 31,
+   "repeated_fixes": 0,
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "undercut": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    },
+    "flags_and_asks": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "asks_without_removal": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "estimate_shown": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2364,
+   "latency_p50_s": 19.65,
+   "latency_max_s": 32.4,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1665,
+     "max": 2484
+    },
+    "decide": {
+     "p50": 906.5,
+     "max": 1430
+    },
+    "verify": {
+     "p50": 1735.5,
+     "max": 2752
+    }
+   },
+   "rejections": {
+    "no_tool_call": 3
+   },
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {},
+   "model_sentences": 15,
+   "sentences_checked": 32,
+   "repeated_fixes": 0,
+   "questions": 10,
+   "questions_naming_a_fix": 0
+  }
+ },
+ "note": "An earlier run on wire-shop at f19ba79 failed: Plan dropped the issue in 2/30 Part A reviews, and undercut went quiet 3/10. Main's d4938f3 fixed both; this run is after it."
+}
