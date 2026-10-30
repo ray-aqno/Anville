@@ -25,6 +25,7 @@ try:  # Present in the container image; module-level so FastAPI can resolve the 
 except ImportError:  # local deploy environment doesn't need FastAPI
     FastAPI = HTTPException = Query = Request = None
 
+from anville.deploy import image_ignore, panel_secret
 from anville.connectors.onshape.events import (
     COMMENT_CREATE,
     CREATE_VERSION,
@@ -37,7 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 app = modal.App("anville")
 _base = modal.Image.debian_slim(python_version="3.12")
-image = _base.pip_install("fastapi[standard]").add_local_python_source("anville")
+# Modal ships only .py files by default: the panel's page and scripts must be let in (anville/deploy.py).
+image = _base.pip_install("fastapi[standard]").add_local_python_source("anville", ignore=image_ignore)
 # OCP links libGL/libX11, which its wheel doesn't bundle (ADR 0008). ~380 MB installed,
 # so only analyze() uses this image; the webhook stays small and starts fast.
 geo_image = (
@@ -237,6 +239,19 @@ class _Trace:
 @modal.asgi_app()
 def web():
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    # The docked panel (ADR 0007, PR #33). Without its own token it stays unmounted: a missing variable
+    # must not take the webhook endpoint down with it.
+    secret = panel_secret(os.environ)
+    if secret:
+        from anville.panel import make_router
+
+        api.include_router(make_router(
+            lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n),
+            lambda key, doc, payload: StoreSvc().call.remote("record", key, doc, payload),
+            panel_secret=secret, allowed_docs=_allowed))
+    else:
+        _log("panel_unmounted", reason="ANVILLE_PANEL_TOKEN is unset or equals the webhook secret")
 
     @api.get("/healthz")
     async def healthz():
