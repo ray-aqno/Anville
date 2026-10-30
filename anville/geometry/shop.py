@@ -11,6 +11,7 @@ class Tool:
     name: str
     diameter: float  # mm
     max_ld: float    # usable reach as a multiple of diameter
+    holder_diameter: float | None = None  # mm; None takes ShopProfile.holder_diameter
 
     @property
     def reach(self) -> float:
@@ -63,3 +64,10 @@ class ShopProfile:
     tools: list[Tool]
     back_chamfer_tools: list[BackChamferTool] = field(default_factory=list)
     fixture: SoftJaws | None = None
+    # ADR 0008 Amendment 1: a realistic estimate, not a measurement. A standard ER32 collet nut is Ø50
+    # (Paulimot, Dorian, checked 2026-10-29) and holds every tool here; it is the widest common nut, so
+    # the estimate leans pessimistic and a slimmer holder is offered as an edit.
+    holder_diameter: float = 50.0
+
+    def holder(self, tool: Tool) -> float:
+        return tool.holder_diameter or self.holder_diameter

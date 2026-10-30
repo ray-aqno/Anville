@@ -101,9 +101,11 @@ class OnshapeClient:
         daily_cap: int = 100,
         ledger: CallLedger | MutableMapping[str, Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        auth_header: str | None = None,
     ):
+        # auth_header: "Bearer <token>" to act as the Anville account (ADR 0007, Amendment 1).
         token = base64.b64encode(f"{access_key}:{secret_key}".encode()).decode()
-        self._auth = f"Basic {token}"
+        self._auth = auth_header or f"Basic {token}"
         self._base = base_url.rstrip("/")
         self._cap = daily_cap
         if ledger is None:

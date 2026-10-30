@@ -29,6 +29,13 @@ class Access:
     fraction: float           # share of the face's samples with a clear ray to the spindle
     depth: float              # mm from the stock top along d to the face's deepest point
     gap: float | None = None  # mm of clearance straight out from the face, if it is wall-like
+    # ADR 0008 Amendment 1: [clearance, stickout] steps. Material that begins `clearance` mm beyond the face
+    # needs `stickout` mm to pass over it. The first step has clearance 0; None means [[0, depth]].
+    reach: list[list[float]] | None = None
+
+    def stickout(self, sweep: float) -> float:
+        """Stick-out needed by a holder whose edge sweeps `sweep` mm beyond the face: the last step it meets."""
+        return [s for c, s in (self.reach or [[0.0, self.depth]]) if c <= sweep][-1]
 
 
 @dataclass

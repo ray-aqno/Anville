@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 from anville.agent.model import ChatModel, ModelUnavailable
@@ -208,6 +208,8 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
     for key, o in options.items():
         values[f"option.{key}.setups_before"] = str(o.before.setups)
         values[f"option.{key}.setups_after"] = str(o.after.setups)
+        if o.kind == "add_tool":  # tool names carry digits: they reach the designer through a slot
+            values[f"option.{key}.tool"] = str(o.params.get("name", key))
         values[f"option.{key}.unreachable_before"] = str(o.before.unreachable)
         values[f"option.{key}.unreachable_after"] = str(o.after.unreachable)
     return values
@@ -307,6 +309,7 @@ class _Runner:
         """One tool call, retried once; None means the stage falls back to its fixed-script step."""
         model = model or self.model
         name, error = tool["function"]["name"], "no model configured"
+        effort = STAGE_EFFORT.get(stage)
         for attempt in (1, 2):
             if model is None or self.calls >= MAX_MODEL_CALLS:
                 error = error if model is None else "call cap reached"
@@ -328,13 +331,15 @@ class _Runner:
             started = time.monotonic()
             try:
                 reply = model.call(messages, [tool], max_tokens=STAGE_MAX_TOKENS.get(stage),
-                                   reasoning_effort=STAGE_EFFORT.get(stage), timeout_s=left)
+                                   reasoning_effort=effort, timeout_s=left)
             except ModelUnavailable as e:
                 # Failed calls are often the slowest: their time belongs in the record too (Codex, PR #24).
                 self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), "error": str(e)})
                 error = f"model unavailable: {e}"
                 break
             self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
+            if reply.finish_reason == "length":  # RFC 0001 budget policy: the retry thinks less (gate on #26)
+                effort = "low"
             if reply.error:
                 error = reply.error
             elif reply.tool != name:
@@ -396,6 +401,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         sel, drop = [x["issue_id"] for x in a["selected"]], [x["issue_id"] for x in a["dropped"]]
         if set(sel) & set(drop) or sorted(sel + drop) != sorted(by_id):
             return None, "every issue must be selected or dropped exactly once"
+        if not sel:  # code found these issues; raising none of them left a bare setup count (gate on #26)
+            return None, "select at least one issue: each one costs this part a setup or a reachable face"
         groups = {by_id[i].face_group for i in sel}
         for r in a["requests"]:
             if set(r) - {"kind", "face_group"}:
@@ -417,6 +424,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         # never offered). The model still chooses which part-side edits are worth scoring.
         requests = requests + [r for i in selected for r in shop_side_requests(by_id[i].face_group)
                                if r not in requests]
+        # Part edits too, where the designer's answer could change the plan (the ask gate is open): without
+        # them `ask_only` and the conditional line never exist (gate on #26: undercut went quiet 3 of 10).
+        requests = requests + [r for i in selected if gates[i] for r in all_requests(by_id[i].face_group)
+                               if r not in requests]
     emit("decision", "Issues chosen", stage="plan", selected=selected)
     if not selected:
         # Nothing chosen: the later stages would have nothing to work on (live run, 2026-10-28).
@@ -430,9 +441,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     for r in rejected:
         emit("tool_result", "Edit rejected: the face's intent is stated", stage="plan",
              edit_kind=r["kind"], face_group=r.get("face_group"), reason=r["reason"])
+    priced = _price(facts, shop, plan, options, emit)
     for o in options.values():
         emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
-             setups_after=o.after.setups, changes_plan=o.changes_plan)
+             setups_after=o.after.setups, changes_plan=o.changes_plan, **priced.get(o.key, {}))
 
     # Intent unknown: a fix that works whatever the face is for leads (council ruling, ADR 0009 Amendment 1).
     # A part edit then appears only as code's conditional line, next to the question.
@@ -453,6 +465,24 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
+    estimates = {}  # conditional part edit -> its cost slot, where only a part edit helps (ruling, lane 3)
+    if priced:
+        q = max(shop.costs.scenarios.quantities)
+        values["costs.quantity"] = str(q)
+        for issue_id, key in conditional.items():
+            if issue_id in ask_only and key in priced and str(q) in priced[key]["costs"]:
+                lo, hi = priced[key]["costs"][str(q)]
+                values[f"option.{key}.cost_lo"], values[f"option.{key}.cost_hi"] = f"{lo:,.0f}", f"{hi:,.0f}"
+                # Say so wherever dollars rest on placeholder inputs (shop profile rule; Codex, PR #26).
+                estimates[key] = priced[key]["placeholder"]
+    paybacks = {}  # key -> (payback, payback_mid), for options that buy a tool
+    for key, d in priced.items():
+        if d.get("payback") is not None:
+            lo, hi = d["payback"]
+            paybacks[key] = ((lo, hi), d["payback_mid"])
+            for name, v in (("payback_lo", lo), ("payback_hi", hi), ("payback_mid", d["payback_mid"])):
+                if v is not None:
+                    values[f"option.{key}.{name}"] = str(v)
     keys = list(options)
     nodes = comment_nodes(plan, chosen, intents, options)
 
@@ -525,8 +555,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         if not err:
             checked.append(sent)
     verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
-    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional),
-                            values, keys)
+    comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
+                                             estimates), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     emit("verify", "Comment assembled", stage="publish", model_sentences=len(verified))
@@ -643,7 +673,9 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
 
 def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dict[str, Issue],
                      intents: dict[str, Intent], options: dict[str, Option],
-                     conditional: dict[str, str] | None = None) -> str:
+                     conditional: dict[str, str] | None = None,
+                     paybacks: dict[str, tuple] | None = None,
+                     estimates: dict[str, bool] | None = None) -> str:  # estimates: key -> rests on placeholders
     """Verified model sentences in the model's order; every decision not stated by a verified action
     sentence gets its code-rendered line; accepted questions are always placed by code, after the
     proposal they belong to (flag, then suggest)."""
@@ -652,16 +684,74 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
+    said = set()  # a part-wide fix (the 5-axis route) is named once, for the first issue it fixes
     for d in decisions:
-        if d.issue_id not in covered:
+        if d.issue_id not in covered and d.action == "propose" and d.option_key in said:
+            lines.append(f"{by_id[d.issue_id].face_group}: the same change covers it.")
+        elif d.issue_id not in covered:
             lines.append(render_line(d, by_id, intents, options))
+        if d.action == "propose":
+            said.add(d.option_key)
+        if d.action == "propose" and d.option_key in (paybacks or {}):  # dollars are stated by code only
+            lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
         if d.question:
             g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
             if key:  # the part edit, offered only on condition, next to the one question about intent
                 also = " also" if d.action == "propose" else ""
-                lines.append(f"If {g} isn't needed, {key}{also} {_effect(options[key], short=True)}.")
-            lines.append(f"{g}'s purpose isn't on record. {d.question} The answer could change the best plan.")
+                lines.append(f"If {g} isn't needed, {_name(options[key])}{also} {_effect(options[key], short=True)}.")
+                if key in (estimates or {}):  # lane 3: what the edit would cost, from the cost model's slots
+                    rates = " on placeholder shop rates" if estimates[key] else ""
+                    lines.append(f"At {{{{costs.quantity}}}} parts, the plan after {_name(options[key])} runs "
+                                 f"${{{{option.{key}.cost_lo}}}}–${{{{option.{key}.cost_hi}}}}{rates}; "
+                                 "designer time isn't priced.")
+            # An ask's own line already says the purpose isn't on record.
+            flag = "" if d.action == "ask" else f"{g}'s purpose isn't on record. "
+            lines.append(f"{flag}{d.question} The answer could change the best plan.")
     return "\n".join(lines)
+
+
+def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[str, Option], emit: Emit) -> dict:
+    """Each option's dollars from the shop lane's cost model (S7), for the trace and the slots; {} for a
+    shop without cost inputs. A costing bug costs only the dollars, never the review."""
+    if getattr(shop, "costs", None) is None or not options:
+        return {}
+    try:
+        from anville.shop import cost_options
+
+        # Only options that change the plan are priced: the rest are noise in the panel (shop lane, #26).
+        result = cost_options(facts, shop, [o for o in options.values() if o.changes_plan], plan=plan)
+    except Exception as e:
+        emit("error", "Costing failed; the review goes out without dollars", stage="plan", error=repr(e)[:300])
+        return {}
+    # The verdict per quantity ("depends" when recommended is None) and each input's status and source,
+    # so the panel shows which dollars rest on placeholders (Codex, PR #26).
+    emit("decision", "Costs compared", stage="plan", verdicts=[asdict(v) for v in result.verdicts],
+         inputs=result.inputs, scenarios=result.scenarios)
+    placeholder = any(i.get("status") == "placeholder" for i in result.inputs.values())
+    current = next((r for r in result.routes if r.key == "current"), None)
+    whole = current is not None and current.complete
+    # A route that can't make the whole part has no break-even quantity: no payback is claimed (Codex, PR #26).
+    return {r.key: {"one_time": list(r.one_time), "costs": {str(q): list(v) for q, v in r.costs.items()},
+                    "payback": list(r.payback) if r.payback is not None and whole and r.complete else None,
+                    "payback_mid": r.payback_mid if whole and r.complete else None,
+                    "complete": r.complete, "unpriced": r.unpriced, "placeholder": placeholder}
+            for r in result.routes if r.key in options}
+
+
+def payback_line(key: str, payback: tuple, mid: int | None) -> str:
+    """When buying the tool pays off, as a slot template. The verdict stays "depends": an end of the range
+    that never pays off is said so, never filled in (shop lane, 2026-10-29)."""
+    lo, hi = payback
+    tool = f"{{{{option.{key}.tool}}}}"
+    if lo is None:
+        return f"Buying the {tool} doesn't pay off at these inputs."
+    if mid is None:
+        return (f"Buying the {tool} pays off past {{{{option.{key}.payback_lo}}}} parts at the best inputs, "
+                "but never at mid-range ones.")
+    span = (f"anywhere from {{{{option.{key}.payback_lo}}}} to {{{{option.{key}.payback_hi}}}}" if hi is not None
+            else f"from {{{{option.{key}.payback_lo}}}} at best; at the worst inputs it never does")
+    return (f"Buying the {tool} pays off past ~{{{{option.{key}.payback_mid}}}} parts at mid-range inputs "
+            f"({span}); below that, keep the flip.")
 
 
 # --- fixed-script steps ------------------------------------------------------------
@@ -695,7 +785,8 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
         return f"{g}: only a part edit fixes this, and its purpose isn't on record."
     if d.action == "propose":
         o = options[d.option_key]
-        line = f"{g}: {d.option_key} {_effect(o)}."
+        name = _name(o)
+        line = f"{g}: {name[0].upper()}{name[1:]} {_effect(o)}."
         if o.side == "shop":
             line += " It changes the shop, not the part."
         if intent and intent.status == "protected":
@@ -703,6 +794,30 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
             line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {g} stays as designed."
         return line
     return f"{g}: no change proposed."
+
+
+def _name(o: Option) -> str:
+    """An option in the designer's words, as a slot template: option keys are for the trace, not the
+    comment (shop lane's demo check of #26)."""
+    g, p = o.face_group, o.params
+    if o.kind == "remove_feature":
+        return f"removing {g}"
+    if o.kind == "set_depth":
+        return f"changing {g}'s depth"
+    if o.kind == "set_min_radius":
+        return f"opening up {g}'s inside corner radius"
+    if o.kind == "route_machine":
+        return "sending it to an outside 5-axis shop"
+    if o.kind == "add_fixture":  # not offered yet (edits.py skips it), named so a new kind can't leak a key
+        return "a different fixture"
+    if o.kind == "add_tool":
+        tool = f"{{{{option.{o.key}.tool}}}}"
+        if p.get("type") == "back_chamfer":
+            return f"{'using the shop' + chr(39) + 's' if p.get('owned') else 'buying the'} {tool} back-chamfer cutter"
+        if p.get("type") == "holder":
+            return f"running the {tool} in a slimmer holder"
+        return f"buying a longer-reach {tool}"
+    return o.key
 
 
 def _effect(o: Option, *, short: bool = False) -> str:

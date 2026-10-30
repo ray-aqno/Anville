@@ -207,10 +207,17 @@ def narrow_bar():
     return _chamfer(_box(0, 0, 0, 100, 6, 20), 1.5, lambda x, y, z: abs(y) < 1e-6 and abs(z) < 1e-6)
 
 
+def thin_wall_step():
+    """Codex, holder-reach review: a 0.2 mm wall at x 10.1..10.3 rising 2 mm above a z = 10 step falls between
+    1 mm height-map rays; a 10 mm wall at x 15..20 does not. The step at x 0..10.1 must still see the thin wall."""
+    part = _fuse(_box(0, 0, 0, 40, 20, 10), _box(10.1, 0, 0, 0.2, 20, 12))
+    return _fuse(part, _box(15, 0, 0, 5, 20, 20))
+
+
 PARTS = {f.__name__: f for f in (plain_block, two_pockets, side_hole, deep_slot, tight_corner, clevis, undercut,
                                  wedge, kinked_pocket, demo_bracket, demo_bracket_unchamfered,
                                  demo_bracket_b, demo_bracket_b_unchamfered, demo_bracket_2mm, split_edge_chamfer,
-                                 stopped_chamfer, both_long_chamfers, narrow_bar)}
+                                 stopped_chamfer, both_long_chamfers, narrow_bar, thin_wall_step)}
 
 
 def write_step(shape, path: Path) -> Path:

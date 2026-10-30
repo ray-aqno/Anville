@@ -104,6 +104,37 @@ The agent emits trace events. The panel only reads them, plus one write endpoint
 - **Harder:** another surface to keep in sync with the trace schema. OAuth app maintenance.
 - **Revisit:** if the fix-branch spike shows API edits don't appear live in open sessions, the panel's "action" events carry the visible proof instead, with a link to the branch. Also revisit if Onshape exposes camera control to apps.
 
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-30): Anville's identity through OAuth
+
+**Context.**
+- The Anville account is on Onshape's free plan, which can't create API keys (Rayyan, 2026-10-29). It can register an OAuth application.
+- OAuth tokens act "on behalf of the users of the application", while API keys act only as the user who generated them (Onshape developer docs).
+- **Verified 2026-10-29** on onshape-public.github.io/docs/auth/oauth:
+  - the authorize and token endpoints;
+  - access tokens last 60 minutes;
+  - **every refresh returns a new refresh token.**
+- **Correction:** the identity was never needed for reply → re-plan. Anville recognises its own events by the IDs it created (`events.py`, F1), not by user.
+
+**Decision.**
+1. **The Anville account registers the OAuth app** (scopes: read profile, read, write), and grants it once through `/oauth/start`. `/oauth/callback` accepts only a `state` that `/oauth/start` issued, once, within 10 minutes. Two more checks (Codex review of the OAuth PR, 2026-10-30):
+   - **The flow has its own key,** `ANVILLE_OAUTH_ADMIN_TOKEN`, not the webhook secret. Anyone who can read the webhook URL holds that secret, so it can't also authorize swapping the posting identity. The flow is closed when the key is unset or equal to the webhook secret. Rotate the key after the grant, since it travels in a query string.
+   - **Only the configured account is saved.** The callback reads `/users/sessioninfo` with the new token and saves the grant only if its email matches `ANVILLE_ACCOUNT_EMAIL`. Otherwise it refuses (403), including when the email is missing.
+   - **The save goes through the keeper's lock,** so an in-flight refresh of the old grant can't overwrite the new one.
+2. **Only comments go out on the OAuth token,** and so carry Anville's name. Reads, STEP exports and webhooks stay on the owner's API keys. An app's calls count against its owner's API limits, here the free account's, so this keeps that usage to one call per review. Fix-branch edits will follow the same rule when they're built.
+3. **The grant lives in the store** (`oauth_grant`, one row), saved durably on every refresh.
+   - The **store service** refreshes it, under one lock in its single container (`GrantKeeper`).
+   - Rotation means two concurrent refreshes would leave one job holding a dead token.
+   - Callers get an access token (`oauth_token()`), never the refresh token.
+4. **Fallback:** with no grant, a failed refresh, or a 401/403 from Onshape, the comment posts on the owner's keys with an `Anville:` header. Any other error is raised and not retried, so a comment is never posted twice. The trace records `posted_as`.
+
+**Trade-offs.**
+- The store service now holds the OAuth client secret, and makes one outbound call per refresh.
+- The redirect URL is fixed to production, so staging can't run its own grant: a second grant could revoke the first.
+
+**Revisit:**
+- if the free plan's API limits turn out too small for comment volume;
+- if the panel needs per-designer OAuth (ADR 0007's "Later").
+
 ## Amendment 2 (Accepted, Rayyan Aquino, 2026-10-30): panel contract details
 
 Drafted by the panel lane against `anville/panel/DESIGN.md`. Main agreed the panel lane drafts it (2026-10-29). Only Rayyan accepts it. Each claim is labelled **verified**, **prior** or **inference**.
