@@ -3,7 +3,7 @@ per-call record (stage, model, host, tokens) for the trace."""
 
 import time
 
-from anville.agent.job import agent_comment
+from anville.agent.job import agent_comment, flushing_at_stage_changes
 from anville.agent.model import OpenAICompatModel
 from tests.agent.test_review import (
     Scripted, decide, plan, propose_route, requests_for, sentences, verdicts,
@@ -86,3 +86,24 @@ def test_the_job_imports_on_the_image_without_ocp():
     code = "import sys; sys.modules['OCP'] = None; import anville.agent.job, anville.geometry"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-400:]
+
+
+def test_every_call_records_its_latency(part_a, shop, chamfer):
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=sentences(chamfer)))
+    _, stats = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
+                             verifier=Scripted(verdicts(True, True), name="verifier"))
+    assert all(isinstance(c["latency_s"], float) and c["latency_s"] >= 0 for c in stats["agent_usage"])
+
+
+def test_events_are_flushed_when_the_stage_changes():
+    """The panel animates the run live: each stage's events reach the store when the next stage starts,
+    not in one burst after the agent returns (panel ask, 2026-10-29)."""
+    log = []
+    emit = flushing_at_stage_changes(lambda kind, title, **d: log.append(title), lambda: log.append("FLUSH"))
+    emit("decision", "Issues chosen", stage="plan")
+    emit("option", "Option scored", stage="plan")
+    emit("error", "Agent failed")  # no stage: not a boundary
+    emit("decision", "Decision made", stage="decide")
+    emit("verify", "Sentence verified", stage="verify")
+    assert log == ["Issues chosen", "Option scored", "Agent failed", "FLUSH", "Decision made", "FLUSH",
+                   "Sentence verified"]

@@ -379,10 +379,11 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
 def _agent_comment(facts: dict, back_chamfer: list[dict], trace: "_Trace", timing: dict,
                    deadline: float) -> str | None:
     """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
-    from anville.agent.job import agent_comment
+    from anville.agent.job import agent_comment, flushing_at_stage_changes
 
-    comment, stats = agent_comment(facts, _shop(), os.environ, trace.add, deadline=deadline,
-                                   back_chamfer=back_chamfer)
+    # Each stage's events reach the store when the next stage starts: the panel animates live.
+    comment, stats = agent_comment(facts, _shop(), os.environ, flushing_at_stage_changes(trace.add, trace.flush),
+                                   deadline=deadline, back_chamfer=back_chamfer)
     trace.flush()
     usage = stats.pop("agent_usage", [])
     timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))

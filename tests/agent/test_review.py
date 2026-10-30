@@ -598,3 +598,13 @@ def test_a_free_face_may_still_lead_with_removal(part_a, shop, chamfer):
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), decide(
         {"issue_id": "I1", "action": "propose", "option_key": REMOVE, "reason": "x"})), constraints=may)
     assert r.fallbacks == [] and r.decisions[0].option_key == REMOVE and "isn't needed" not in r.comment
+
+
+def test_sentence_events_carry_the_words_the_designer_would_read(part_a, shop, chamfer):
+    events = []
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route(), comment=sentences(chamfer)))
+    run_review(part_a, shop, model, verifier=Scripted(verdicts(True, False), name="verifier"),
+               emit=lambda kind, title, **d: events.append((title, d)))
+    texts = {t: [d.get("text") for title, d in events if title == t]
+             for t in ("Sentence checked", "Sentence verified", "Sentence not supported")}
+    assert all(texts.values()) and all(isinstance(x, str) and x and "{{" not in x for v in texts.values() for x in v)

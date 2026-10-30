@@ -15,6 +15,23 @@ from anville.geometry import PartFacts, ShopProfile
 from anville.geometry.access import BackChamferAccess
 
 
+def flushing_at_stage_changes(add: Emit, flush) -> Emit:
+    """`add` that calls `flush` whenever an event opens a new stage, so each stage's events reach the
+    store while the next stage runs and the panel animates the run live (ADR 0007). Events without a
+    stage are not boundaries."""
+    last = None
+
+    def emit(kind: str, title: str, **detail) -> None:
+        nonlocal last
+        stage = detail.get("stage")
+        if stage is not None:
+            if last is not None and stage != last:
+                flush()
+            last = stage
+        add(kind, title, **detail)
+    return emit
+
+
 def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, *,
                   model: ChatModel | None = None, verifier: ChatModel | None = None,
                   deadline: float | None = None, back_chamfer: list[dict] = ()) -> tuple[str | None, dict]:
