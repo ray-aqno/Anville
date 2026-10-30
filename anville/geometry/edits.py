@@ -167,7 +167,8 @@ def _candidates(facts, shop, axes, base, kind, label, back_chamfer=()):
             # Raising the floor by `shift` lowers every reach step by `shift` (the material around stays put).
             shifts = {max(stickout(by_id[fid], d, t, shop) for fid in feature) - t.reach
                       for t in tools if t.diameter <= limit + 1e-6}
-            reaches = sorted({round(deepest - s, 4) for s in shifts if s > 1e-6}, reverse=True)
+            # Round down: a depth rounded up would shift the floor a hair short of the tool.
+            reaches = sorted({math.floor((deepest - s) * 1e4) / 1e4 for s in shifts if s > 1e-6}, reverse=True)
             for depth in reaches:
                 params = {"direction": d, "depth": depth}
                 yield (f"set_depth/{label}/{d}/{depth:g}", "part", params,

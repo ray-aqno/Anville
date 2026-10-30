@@ -189,7 +189,7 @@ Cost is linear in rays, at about 18 µs per ray. A part with 150 faces at 2 mm s
 
 ## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-29): reach depends on the holder, and the facts say how
 
-**Context.** The first real Onshape export (`tests/geometry/data/onshape_z_bracket.step`) is a Z bracket of 1/2" plate, 7" × 3" × 2.41". `extract` reads it cleanly in 1.25 s, in metres converted to mm. The plan is 4 setups on 3-axis and 1 on 5-axis (verified, `tests/geometry/test_onshape_export.py`). Its two 3/8" web holes come back `no_tool`: "needs Ø≤9.53 reaching 38.1 mm". §4 measures stick-out from the stock top, which here is the top of the −X flange. But the web is 12.7 mm thick, and the nearer hole sits 31.9 mm from the flange wall. A holder beside the flange needs 12.7 mm of stick-out, which EM6 reaches with 11 mm to spare. Any shop drills these holes, so Anville would tell the designer something false.
+**Context.** The first real Onshape export (`tests/geometry/data/onshape_z_bracket.step`) is a Z bracket of 1/2" plate, 7" × 3" × 2.41". `extract` reads it cleanly in 1.25 s, in metres converted to mm. The plan is 4 setups on 3-axis and 1 on 5-axis (verified, `tests/geometry/test_onshape_export.py`). Its two 3/8" web holes come back `no_tool`: "needs Ø≤9.53 reaching 38.1 mm". §4 measures stick-out from the stock top, which here is the top of the −X flange. But the web is 12.7 mm thick, and the nearer hole sits 31.8 mm from the flange wall. A holder beside the flange needs 12.7 mm of stick-out, which EM6 reaches with 11 mm to spare. Any shop drills these holes, so Anville would tell the designer something false.
 
 **Why a switch is not the fix.** Changing `depth` from "stock top" to "local material" swaps one blind spot for another:
 - Stock-top depth is right when the holder is wider than the room beside the feature.
@@ -208,6 +208,8 @@ That last one is a design choice: move the hole away from the flange. The holder
    - One height map per direction: rays cast down along `d` on a 1 mm grid over the stock footprint give the top of material at each point.
    - For each face, every point higher than the face's deepest point becomes a step, at its 2D distance from the face's projected bounding box.
    - The distance is to the bounding box, not the face itself, so the clearance can only be understated, never overstated.
+   - **Thin faces come from the B-rep, not the grid** (Codex review). A wall thinner than the grid can fall between rays, but it always has side faces, and a vertical face is a line in plan view. Every face narrower than 2 mm in plan view joins as an obstacle: its plan-view bounding box at its top along `d`. The bracket's flange walls then set F13's step at 31.7 mm (31.76, floored), not the grid's 31.9.
+   - **A rise under 0.05 mm joins the step before**, so the last step always equals the tallest material (Codex review). Moving a rise to a smaller clearance only asks for more stick-out sooner.
    - Prototype on the bracket: 0.4 s for the six height maps, 1.05 s in total for all 17 faces × 6 directions, process start included (verified). As implemented, the curves add 0.26 s to `extract` on the bracket (1.25 s → 1.51 s).
 3. **The shop states its holders.** `Tool` gains `holder_diameter: float | None`. `None` takes `ShopProfile.holder_diameter`, a stated assumption that goes on the setup sheet the way the soft-jaw sizes do (RFC 0002 §3).
    - **Default: Ø50 mm, a standard ER32 collet nut, for every tool.** This is a realistic estimate, not a measurement. Rayyan's shop varies its holders by job, so no single size can be confirmed.
@@ -222,15 +224,15 @@ That last one is a design choice: move the hole away from the flange. The holder
    fits(tool)           = tool.diameter ≤ limit  and  stickout(f, d, tool) ≤ tool.diameter × tool.max_ld
    ```
    - The 1 mm is a margin for the clearance being measured on a 1 mm grid.
-   - **Worked example, the bracket's hole F13 from +Z:** `reach = [[0, 12.7], [31.9, 38.1]]`, meaning the web is 12.7 mm deep and the flange starts 31.9 mm away. EM6 (r = 3, reach 6 × 4 = 24 mm):
+   - **Worked example, the bracket's hole F13 from +Z:** `reach = [[0, 12.7], [31.7, 38.1]]`, meaning the web is 12.7 mm deep and the flange starts 31.7 mm away. EM6 (r = 3, reach 6 × 4 = 24 mm):
 
      | Holder | sweep = R − r + 1 | Steps with c ≤ sweep | Stick-out | Fits? |
      |---|---|---|---|---|
      | Ø50 | 25 − 3 + 1 = 23 | `[0, 12.7]` | 12.7 | yes, 12.7 ≤ 24 |
      | Ø67 | 33.5 − 3 + 1 = 31.5 | `[0, 12.7]` | 12.7 | yes |
-     | Ø70 | 35 − 3 + 1 = 33 | `[0, 12.7]`, `[31.9, 38.1]` | 38.1 | no, 38.1 > 24 |
+     | Ø70 | 35 − 3 + 1 = 33 | `[0, 12.7]`, `[31.7, 38.1]` | 38.1 | no, 38.1 > 24 |
 5. **Each side's decision is a computed number.** When the curve decides fit:
-   - **Unreachable detail:** the `no_tool` reason gives both ends of the curve, e.g. "EM6 needs 12.7 mm of stick-out in a holder up to Ø67, which clears the flange 31.9 mm away, and 38.1 mm in a wider one". The model can then cite the trade-off without inventing a number (ADR 0003).
+   - **Unreachable detail:** the `no_tool` reason gives both ends of the curve, e.g. "EM6 needs 12.7 mm of stick-out in a holder up to Ø67, which clears the flange 31.7 mm away, and 38.1 mm in a wider one". The model can then cite the trade-off without inventing a number (ADR 0003).
    - **Shop-side edit:** `evaluate_edits` gains an `add_tool` variant for a slimmer holder on an owned tool, with params `{name, holder_diameter}` and side `shop`. It is offered only when it changes the plan, like every other option.
    - **Design-side edit:** the clearance at which the curve steps up is the distance the feature needs from the taller wall. Proposing "move it" stays with the model, in prose, citing that number. A `move_feature` edit kind would need its own amendment to ADR 0002, and nothing in the demo needs one.
 
@@ -244,7 +246,7 @@ That last one is a design choice: move the hole away from the flange. The holder
 - **Supersedes the §Trade-offs line "Reach ignores holder clearance."** That line held only because stick-out was always measured from the stock top. Under C the holder is modelled, so a wrong curve could now be optimistic. Hence the bounding-box distance, the 1 mm margin, and the worst-case `depth` kept beside the curve.
 - **Holders are cylinders.** Collet-nut steps, tapers and the spindle nose are ignored. A tapered holder clears more than its nominal diameter suggests, so this is conservative (inference).
 - **Material is cleared within the setup.** The height map is the final part. Everything above it is visible from `d` by construction, so the same setup can clear it before finishing the feature. That is an inference about operation order; the planner does not order operations.
-- **Precision:** about the 1 mm grid. A wall thinner than the grid can be missed, the same class of limit as §Trade-offs' 2 mm sampling.
+- **Precision:** about the 1 mm grid for wide faces. Thin faces are exact boxes. A tall face counts at its top along its whole plan-view line: the bracket's Z-shaped side faces put a 38.1 mm step 33.3 mm from F11, where the side is only web-high. That is pessimistic, never optimistic. Still missed: a feature that is thin in plan view, between rays, and bounded only by faces wider than 2 mm, such as the top ring of a thin-walled tube. The 1 mm margin covers most of that.
 
 **Consequences.**
 - **Easier:**

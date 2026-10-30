@@ -170,21 +170,33 @@ def _height_map(isect, lo: Vec, hi: Vec, d: str, top: float) -> list[tuple[float
     return out
 
 
-def _reach(hmap, flo: Vec, fhi: Vec, d: str, deepest: float, depth: float) -> list[list[float]]:
+def _thin_walls(boxes, d: str) -> list[tuple[float, float, float, float, float]]:
+    """Faces narrower than two grid cells in plan view (wall sides, thin tops), as (a0, a1, b0, b1, top along d).
+    The height map can miss them between rays; their bounding boxes can't."""
+    vec, axis = VECTORS[d], _AXIS_INDEX[d[1]]
+    a, b = (i for i in range(3) if i != axis)
+    return [(lo[a], hi[a], lo[b], hi[b], max(_dot(lo, vec), _dot(hi, vec))) for lo, hi in boxes
+            if min(hi[a] - lo[a], hi[b] - lo[b]) < 2 * REACH_GRID]
+
+
+def _reach(hmap, flo: Vec, fhi: Vec, d: str, deepest: float, depth: float, walls=()) -> list[list[float]]:
     """Stick-out needed vs holder clearance (ADR 0008 Amendment 1). Each step starts where taller material
-    begins, measured to the face's bounding box, so a clearance can only be understated."""
+    begins, measured between bounding boxes, so a clearance can only be understated. A rise too small to
+    start its own step joins the step before, which only asks for more stick-out sooner."""
     axis = _AXIS_INDEX[d[1]]
     a, b = (i for i in range(3) if i != axis)
-    taller = sorted((math.hypot(max(flo[a] - x, 0.0, x - fhi[a]), max(flo[b] - y, 0.0, y - fhi[b])), h - deepest)
-                    for x, y, h in hmap if h - deepest > REACH_STEP)
+    obstacles = [(x, x, y, y, h) for x, y, h in hmap] + list(walls)
+    taller = sorted((math.hypot(max(flo[a] - a1, 0.0, a0 - fhi[a]), max(flo[b] - b1, 0.0, b0 - fhi[b])), h - deepest)
+                    for a0, a1, b0, b1, h in obstacles if h - deepest > REACH_STEP)
     steps = [[0.0, 0.0]]
     for c, need in taller:
-        if need > steps[-1][1] + REACH_STEP:
-            c = 0.0 if c < REACH_GRID else math.floor(c * 10) / 10
-            if c == steps[-1][0]:
-                steps[-1][1] = round(need, 4)
-            else:
-                steps.append([c, round(need, 4)])
+        if need <= steps[-1][1]:
+            continue
+        c = 0.0 if c < REACH_GRID else math.floor(c * 10) / 10
+        if need > steps[-1][1] + REACH_STEP and c != steps[-1][0]:
+            steps.append([c, round(need, 4)])
+        else:
+            steps[-1][1] = round(need, 4)
     return steps if len(steps) > 1 else [[0.0, round(depth, 4)]]
 
 
@@ -329,11 +341,12 @@ def extract(step_path: str | Path) -> PartFacts:
     isect.Load(shape, 1e-6)
     fmap = ShapeMap()
     TopExp.MapShapes_s(shape, TopAbs_FACE, fmap)
-    faces, hmaps = [], {}
+    faces, hmaps, walls = [], {}, {}
+    boxes = [_bbox(TopoDS.Face(fmap.FindKey(fid))) for fid in range(1, fmap.Extent() + 1)]
     for fid in range(1, fmap.Extent() + 1):
         face = TopoDS.Face(fmap.FindKey(fid))
         surf = BRepAdaptor_Surface(face)
-        flo, fhi = _bbox(face)
+        flo, fhi = boxes[fid - 1]
         pts = _samples(face, max(h - l for l, h in zip(flo, fhi)))
         props = GProp_GProps()
         BRepGProp.SurfaceProperties_s(face, props)
@@ -352,8 +365,8 @@ def extract(step_path: str | Path) -> PartFacts:
             a = _access(isect, pts, vec, top[d] - deepest, axis)
             if a:
                 if d not in hmaps:
-                    hmaps[d] = _height_map(isect, lo, hi, d, top[d])
-                a.reach = _reach(hmaps[d], flo, fhi, d, deepest, a.depth)
+                    hmaps[d], walls[d] = _height_map(isect, lo, hi, d, top[d]), _thin_walls(boxes, d)
+                a.reach = _reach(hmaps[d], flo, fhi, d, deepest, a.depth, walls[d])
                 access[d] = a
         concave = _concave_cylinder(surf, pts)
         cyl = surf.Cylinder() if kind == "cylinder" else None

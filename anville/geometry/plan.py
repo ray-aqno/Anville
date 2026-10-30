@@ -112,7 +112,7 @@ def _fit(part: _Part, face: FaceFacts, d: str, tools: list[Tool], shop: ShopProf
     width = "any diameter" if math.isinf(lim.diameter) else f"Ø≤{lim.diameter:.3g} ({lim.cause})"
     why = f"{d}: needs {width} reaching {a.depth:.3g} mm"
     if a.reach and len(a.reach) > 1:  # both ends of the curve: the shop's holder and the designer's clearance
-        why += f", or {a.reach[0][1]:.3g} mm with a holder whose edge stays within {a.reach[1][0]:.3g} mm of the face"
+        why += f", or {a.reach[0][1]:.3g} mm with a holder whose edge stops short of {a.reach[1][0]:.3g} mm from the face"
     return None, why
 
 
