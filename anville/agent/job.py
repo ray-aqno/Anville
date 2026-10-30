@@ -29,7 +29,15 @@ def review_shop(ledger: list[dict]) -> tuple[ShopProfile, dict[str, dict]]:
     from anville.shop import DLL_COSTS, Shop, apply_ledger
 
     base = Shop(tools=[Tool(*t) for t in DEFAULT_TOOLS], fixture=SoftJaws(), name="Marquette DLL", costs=DLL_COSTS)
-    return apply_ledger(base, ledger)
+    # The store doesn't validate payloads: a row that can't be applied costs only itself (Codex, PR #26).
+    usable = []
+    for row in ledger:
+        try:
+            apply_ledger(base, [row])
+        except Exception:
+            continue
+        usable.append(row)
+    return apply_ledger(base, usable)
 
 
 def catalog_for(shop: ShopProfile) -> list:

@@ -137,3 +137,13 @@ def test_the_review_shop_is_priced_and_owns_what_the_ledger_says_it_bought():
     assert [t.name for t in shop.back_chamfer_tools] == [cutter.name]
     assert learned[cutter.name]["decision"] == "comment:c42"
     assert cutter not in catalog_for(shop)  # owned now: never offered as a purchase again
+
+
+def test_a_malformed_ledger_row_costs_only_that_row():
+    """Codex, PR #26 (P1): the store doesn't validate payloads, and a bad row must not stop the review."""
+    from anville.geometry import BACK_CHAMFER_CATALOG
+
+    good = _bought(BACK_CHAMFER_CATALOG[0])
+    broken = {**good, "payload": {"kind": "tool_acquired", "type": "back_chamfer", "tool": {"name": "x"}}}
+    shop, learned = review_shop([broken, good])
+    assert [t.name for t in shop.back_chamfer_tools] == [BACK_CHAMFER_CATALOG[0].name] and list(learned) == ["910480"]

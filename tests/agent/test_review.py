@@ -684,3 +684,31 @@ def test_other_proposals_and_unpriced_shops_carry_no_dollars(part_a, shop, coste
 ])
 def test_payback_wording_never_invents_an_end_of_the_range(payback, mid, line):
     assert payback_line("K", payback, mid) == line
+
+
+def test_no_payback_is_claimed_against_a_plan_that_cant_make_the_part(monkeypatch, part_a, costed, chamfer,
+                                                                       catalog_access):
+    """Codex, PR #26: a route that leaves faces unreachable has no break-even quantity."""
+    import anville.shop as shop_mod
+
+    real = shop_mod.cost_options
+
+    def incomplete_current(*a, **k):
+        result = real(*a, **k)
+        result.routes[0].complete = False
+        return result
+
+    monkeypatch.setattr(shop_mod, "cost_options", incomplete_current)
+    buy = decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"})
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), buy), back_chamfer=catalog_access)
+    assert r.decisions[0].option_key == BUY and "pays off" not in r.comment
+
+
+def test_the_cost_comparison_and_its_inputs_reach_the_trace(part_a, costed, chamfer, catalog_access):
+    """Codex, PR #26: the panel must show that the verdict depends, and which inputs are placeholders."""
+    events = []
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())),
+               back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+    (compared,) = [d for t, d in events if t == "Costs compared"]
+    assert {v["quantity"] for v in compared["verdicts"]} == {4, 10, 20}
+    assert any(i["status"] == "placeholder" for i in compared["inputs"].values())

@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 from anville.agent.model import ChatModel, ModelUnavailable
@@ -670,9 +670,17 @@ def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[s
     except Exception as e:
         emit("error", "Costing failed; the review goes out without dollars", stage="plan", error=repr(e)[:300])
         return {}
+    # The verdict per quantity ("depends" when recommended is None) and each input's status and source,
+    # so the panel shows which dollars rest on placeholders (Codex, PR #26).
+    emit("decision", "Costs compared", stage="plan", verdicts=[asdict(v) for v in result.verdicts],
+         inputs=result.inputs, scenarios=result.scenarios)
+    current = next((r for r in result.routes if r.key == "current"), None)
+    whole = current is not None and current.complete
+    # A route that can't make the whole part has no break-even quantity: no payback is claimed (Codex, PR #26).
     return {r.key: {"one_time": list(r.one_time), "costs": {str(q): list(v) for q, v in r.costs.items()},
-                    "payback": list(r.payback) if r.payback is not None else None, "payback_mid": r.payback_mid,
-                    "unpriced": r.unpriced}
+                    "payback": list(r.payback) if r.payback is not None and whole and r.complete else None,
+                    "payback_mid": r.payback_mid if whole and r.complete else None,
+                    "complete": r.complete, "unpriced": r.unpriced}
             for r in result.routes if r.key in options}
 
 
