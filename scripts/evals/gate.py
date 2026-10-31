@@ -50,7 +50,9 @@ UNKNOWN = ["raised", "any_intent_leads", "removal_conditional_only", "intent_ask
 BARS["ranked_lead"] = 1.0  # ADR 0010: Decide rejects any other shop-side lead, so a miss is a bug
 BARS["intent_asked"] = 1.0  # ruling (a): code attaches the question, so a miss is a bug
 STATED = "Weld clearance chamfer"
-REPLIES = {"keep": "Weld clearance for the frame tube", "may_change": "Edge break only, not needed"}
+REPLIES = {"keep": "Weld clearance for the frame tube", "may_change": "Edge break only, not needed",
+           "may_change_buy": "Edge break only, not needed"}
+PREFER = {"may_change_buy": ("shop_fix", "we'd rather buy the 910480 cutter")}  # read_reply's prefer, quoted
 
 # name: (part, the shop owns the 910480, turns). A turn is (stated?, reply rule or None, gated checks).
 SCENARIOS = {
@@ -58,6 +60,10 @@ SCENARIOS = {
     "a_reply_keep": ("demo_bracket", False, [(False, None, UNKNOWN), (False, "keep", ["raised", "shop_fix"])]),
     "a_reply_not_needed": ("demo_bracket", False,
                            [(False, None, UNKNOWN), (False, "may_change", ["raised", "plan_changing_fix"])]),
+    # Freed, and the designer explicitly asks for the cutter (Rayyan, 2026-10-31: "Ranking is good, unless the
+    # designer is clearly explicit"). The constraint is what read_reply records from such a reply.
+    "a_reply_buy": ("demo_bracket", False,
+                    [(False, None, UNKNOWN), (False, "may_change_buy", ["raised", "shop_fix"])]),
     "b_cutter_owned": ("demo_bracket_b", True, [(False, None, ["nothing_raised"])]),
     "two_pockets": ("two_pockets", False, [(False, None, [])]),  # several issues: repeats are tracked
     # No shop fix exists, only removal (Rayyan's ruling, 2026-10-30): flag and ask (lane 1), state the
@@ -139,7 +145,11 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
 
     events: list[dict] = []
     g = case.group
-    constraints = [{"id": "reply-1", "face_group": g, "rule": reply, "reason": REPLIES[reply]}] if reply else None
+    constraints = None
+    if reply:
+        constraints = [{"id": "reply-1", "face_group": g, "rule": reply.removesuffix("_buy"), "reason": REPLIES[reply]}]
+        if reply in PREFER:
+            constraints[0].update(prefer=PREFER[reply][0], prefer_reason=PREFER[reply][1])
     start = time.monotonic()
     _slots.values = {}
     r = run_review(case.facts, case.shop, models[0], verifier=models[1], stated={g: STATED} if stated else None,
@@ -153,7 +163,8 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
     results = {}
     for name in ([*COMMON, *checks] if r.issues else checks):
         ranked = {e["issue_id"]: e["lead"] for e in events if e["title"] == "Fixes ranked" and e.get("lead")}
-        args = {"ranked_lead": (r, g, ranked), "numbers_from_code": (r, values), "estimate_shown": (r, values),
+        freed = {e["issue_id"] for e in events if e["title"] == "Fixes ranked" and e.get("freed")}
+        args = {"ranked_lead": (r, g, ranked, freed), "numbers_from_code": (r, values), "estimate_shown": (r, values),
                 "survived": (r,),
                 "no_bare_question": (r,), "nothing_raised": (r,), "asks_without_removal": (r,),
                 "flags_and_asks": (r,)}.get(name, (r, g))

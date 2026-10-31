@@ -105,12 +105,14 @@ def shop_fix(result, group: str) -> bool:
     return side_of(result, group) == "shop" and result.options[d.option_key].changes_plan
 
 
-def ranked_lead(result, group: str, ranked: dict[str, str]) -> bool | None:
-    """ADR 0010: a shop-side proposal is the cost-ranked fix code chose (`ranked`: issue id -> lead, from
-    the "Fixes ranked" trace event). None when the code under test doesn't rank this issue, or the lead is
-    a part edit (the ranking orders shop fixes; after "not needed", removal may lead)."""
+def ranked_lead(result, group: str, ranked: dict[str, str], freed: set[str] = frozenset()) -> bool | None:
+    """ADR 0010: the proposal is the cost-ranked fix code chose (`ranked`: issue id -> lead, from the
+    "Fixes ranked" trace event). Amendment 1: on a freed face (`freed`, from the same event) part edits are
+    ranked too, so either side is scored; elsewhere only a shop-side lead is. None when unranked."""
     d = decision_for(result, group)
-    if d is None or d.issue_id not in ranked or side_of(result, group) != "shop":  # dropped: `raised` fails
+    if d is None or d.issue_id not in ranked:  # a dropped issue fails `raised`, not this
+        return None
+    if side_of(result, group) != "shop" and d.issue_id not in freed:
         return None
     return d.option_key == ranked[d.issue_id]
 
