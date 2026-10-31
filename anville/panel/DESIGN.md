@@ -62,7 +62,7 @@ Rayyan's framing: a good frontend for a very robust product that's doing a lot o
    - The machinist's phone page is rendered from `anville.setup_sheet/1`, labelled **predicted** until the shop runs it.
    - Two big buttons: "✓ Ran it as planned" and "Something was different…". The second opens a short note with quick tags: tool arrived, workholding changed, extra setup, outsourced op.
    - Either one POSTs a shop note into the event store. Main turns it into a ledger entry, and the ring's "learned" node lights up.
-   - **Note shape (agreed with the shop lane, 2026-10-30; draft until Amendment 3):**
+   - **Note shape (agreed with the shop lane, 2026-10-30; ADR 0007 Amendment 3, accepted):**
      - The fields: `{event: "shop.note", note_id (= client UUID request_id, key shop:<id>), sheet_id, outcome: as_planned|different, tools_arrived: [name], tags: [tool_arrived|workholding_changed|extra_setup|outsourced_op], setups_run: int|null, note_text (≤1000, verbatim), received_at}`.
      - The server copies `part` from the stored sheet; it never trusts the client for it.
      - The "arrived" checkbox appears only on tool rows the sheet marks `"owned": false` (shop lane: `setup_sheet(..., buying=(...))`).
@@ -134,13 +134,15 @@ Rayyan's framing: a good frontend for a very robust product that's doing a lot o
 
 ```
 anville/panel/
-  __init__.py        make_router(reader, writer, *, panel_secret, allowed_docs, sheets=None) -> APIRouter
-  router.py          /panel, /api/runs, /api/stream, /api/ask; P2: /sheet/{id}, /api/shop-note
+  __init__.py        make_router(...), make_sheet_router(...), sheet_sig(secret, sheet_id)
+  router.py          /panel, /api/runs, /api/stream, /api/ask
+  sheet.py           P2: /sheet/{id}?s= (server-rendered HTML) and /api/shop-note?s= (ADR 0007 Amendment 3)
   auth.py            constant-time t check; HMAC sheet capability; 404 on any mismatch or non-allowlisted doc
   static/panel.html  shell; reads documentId/workspaceId/elementId/server/t from the URL
   static/panel.js    applicationInit + origin check; EventSource; reduce(); render(); pacing queue
   static/panel.css
-  static/sheet.html  traveler (P2)
+  static/sheet.js    P2: the note's buttons (notePayload is pure, node-tested)
+  static/sheet.css   P2: phone-first styles
 tests/panel/
   test_router.py     auth, allowlist, cursor replay, SSE framing, ask idempotency (FastAPI TestClient)
   fixtures/*.json    trace dumps (real ones from main when they arrive; synthetic ones labelled synthetic)
