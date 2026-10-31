@@ -528,7 +528,7 @@ def _on_reply(store, ev, deadline: float) -> None:
 
 def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, vid: str,
             deadline: float) -> None:
-    from anville.agent.job import agent_comment, flushing_at_stage_changes, read_reply_turn, review_shop
+    from anville.agent.job import agent_comment, flushing_at_stage_changes, read_reply_turn, review_shop, with_credits
     from anville.agent.reply import constraint_entry, constraints_from_ledger, nothing_read, unrecorded
 
     cid, did, review_key = ev.payload["commentId"], ev.document_id, review.key
@@ -538,8 +538,9 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
     # The issues the designer is answering are the review's: the shop as it was then (Codex, PR #38).
     then, _ = review_shop([r for r in ledger if r.get("created_at", 0) <= review.received_at])
     emit = flushing_at_stage_changes(trace.add, trace.flush)
-    found, groups, setups = read_reply_turn(result["facts"], shop, os.environ, emit, reply.get("message") or "",
-                                            deadline=deadline, back_chamfer=result["back_chamfer"], issue_shop=then)
+    found, groups, setups, read_calls = read_reply_turn(result["facts"], shop, os.environ, emit,
+                                                        reply.get("message") or "", deadline=deadline,
+                                                        back_chamfer=result["back_chamfer"], issue_shop=then)
     scope = f"doc:{did}"
     entries = [constraint_entry(rule, reply_id=cid, review_key=review_key, version_id=vid) for rule in found or []]
     for entry in unrecorded(entries, store.call.remote("read_ledger", "constraint", scope)):  # a retry adds nothing
@@ -549,11 +550,12 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
                   quote=rule["quote"])
     if found:
         constraints = constraints_from_ledger(store.call.remote("read_ledger", "constraint", scope), version_id=vid)
-        comment, _ = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
-                                   back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
-        message = comment or _review_message(vid, result["plan"])
+        comment, stats = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
+                                       back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
+        message = (with_credits(comment, read_calls + stats.get("agent_usage", []), stats.get("agent_fallbacks", ()))
+                   if comment else _review_message(vid, result["plan"]))
     else:
-        message = nothing_read(groups, setups) if groups else None
+        message = with_credits(nothing_read(groups, setups), read_calls) if groups else None
     trace.flush()
     if message and store.call.remote("reserve_post", ev.key, "replan"):
         from anville.connectors.onshape.oauth import post_as_anville
@@ -603,8 +605,9 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
               directions=[s["directions"] for s in plan["setups"]],
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
-    message = (_agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing, deadline)
-               or _review_message(vid, plan))
+    comment, calls, fallbacks = _agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing,
+                                               deadline)
+    message = comment or _review_message(vid, plan)
     timing["sheet_id"] = _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"], ledger,
                                       timing.get("buying") or [], trace)
     from anville.deploy import sheet_link
@@ -612,6 +615,10 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     link = sheet_link(os.environ, timing["sheet_id"])
     if link:  # the setup sheet goes to the shop with the review (demo spine, beat 2)
         message += f"\nSetup sheet for the shop: {link}"
+    if comment:  # the models that wrote this review, named under it (rubric: visible Meta tooling)
+        from anville.agent.job import with_credits
+
+        message = with_credits(message, calls, fallbacks)
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
@@ -653,8 +660,9 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
 
 
 def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], trace: "_Trace", timing: dict,
-                   deadline: float) -> str | None:
-    """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
+                   deadline: float) -> tuple[str | None, list[dict], list[str]]:
+    """The agent's review (ADR 0009), or None so the job posts the plain setup-count line; with its call records
+    and fallbacks, for the credits line."""
     from anville.agent.job import agent_comment, flushing_at_stage_changes, review_shop
 
     shop, learned = review_shop(ledger)
@@ -668,7 +676,7 @@ def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], tr
     timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))
     if "agent_error" in stats:
         _log("agent_failed", error=stats["agent_error"])
-    return comment
+    return comment, usage, stats.get("agent_fallbacks", [])
 
 
 def _review_message(vid: str, plan: dict) -> str:
