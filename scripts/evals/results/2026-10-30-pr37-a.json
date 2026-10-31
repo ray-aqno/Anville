@@ -1,0 +1,488 @@
+{
+ "what": "Eval gate on PR #37 at 53efaa0 (ruling (a): the intent question is always attached) merged with origin/main",
+ "repo_sha": "53efaa0",
+ "n_per_scenario": 10,
+ "spent_usd": 1.6389,
+ "models": {
+  "plan, decide": "meta-models/muse-spark-open-1026 (inference.baseten.co)",
+  "verify": "muse-spark-1.3 (api.meta.ai)"
+ },
+ "prices_per_1m": {
+  "muse-spark-open": [
+   1.25,
+   0.15,
+   4.25
+  ],
+  "muse-spark-1.3": [
+   1.25,
+   1.25,
+   4.25
+  ]
+ },
+ "bars": {
+  "no_bare_question": 1.0,
+  "numbers_from_code": 1.0,
+  "removal_conditional_only": 1.0,
+  "any_intent_leads": 1.0,
+  "nothing_raised": 1.0,
+  "survived": 0.9,
+  "raised": 0.95,
+  "shop_fix": 0.95,
+  "plan_changing_fix": 0.95,
+  "ranked_lead": 1.0,
+  "intent_asked": 1.0,
+  "flags_and_asks": 0.95,
+  "asks_without_removal": 0.95,
+  "estimate_shown": 1.0
+ },
+ "summary": {
+  "a_stated": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2305,
+   "latency_p50_s": 22.200000000000003,
+   "latency_max_s": 35.5,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1810.0,
+     "max": 4136
+    },
+    "decide": {
+     "p50": 809.5,
+     "max": 1053
+    },
+    "verify": {
+     "p50": 1867,
+     "max": 2580
+    }
+   },
+   "rejections": {
+    "invalid_answer": 1,
+    "no_tool_call": 1
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 14,
+   "sentences_checked": 30,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 6
+   },
+   "retries": {
+    "plan": 2
+   },
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "a_reply_keep": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.416,
+   "latency_p50_s": 19.3,
+   "latency_max_s": 35.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1735,
+     "max": 3882
+    },
+    "decide": {
+     "p50": 620,
+     "max": 883
+    },
+    "verify": {
+     "p50": 1839,
+     "max": 2590
+    }
+   },
+   "rejections": {
+    "no_tool_call": 2
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 20
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 27,
+   "sentences_checked": 66,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 15
+   },
+   "retries": {
+    "plan": 1,
+    "decide": 1
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "10/10"
+  },
+  "a_reply_not_needed": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "plan_changing_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4357,
+   "latency_p50_s": 21.200000000000003,
+   "latency_max_s": 31.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1904.5,
+     "max": 4079
+    },
+    "decide": {
+     "p50": 619,
+     "max": 1232
+    },
+    "verify": {
+     "p50": 1691.0,
+     "max": 2697
+    }
+   },
+   "rejections": {
+    "no_tool_call": 1
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 20
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 24,
+   "sentences_checked": 60,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 16
+   },
+   "retries": {
+    "decide": 1
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "10/10"
+  },
+  "b_cutter_owned": {
+   "trials": 10,
+   "gated": {
+    "nothing_raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.0,
+   "latency_p50_s": 0.0,
+   "latency_max_s": 0.0,
+   "completion_tokens": {},
+   "rejections": {},
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {},
+   "model_sentences": 0,
+   "sentences_checked": 0,
+   "repeated_fixes": 0,
+   "sentence_rejections": {},
+   "retries": {},
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "two_pockets": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 8,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": false
+    }
+   },
+   "ok": false,
+   "cost": 0.3461,
+   "latency_p50_s": 31.3,
+   "latency_max_s": 47.7,
+   "completion_tokens": {
+    "plan": {
+     "p50": 2963,
+     "max": 6144
+    },
+    "decide": {
+     "p50": 686,
+     "max": 1037
+    },
+    "verify": {
+     "p50": 1905.5,
+     "max": 2495
+    }
+   },
+   "rejections": {
+    "invalid_answer": 4,
+    "no_tool_call": 5,
+    "out_of_tokens": 1
+   },
+   "fallbacks": {
+    "plan": 2
+   },
+   "leads": {},
+   "proposals": {
+    "shop:route_machine/5 +question": 10,
+    "shop:route_machine/5": 2
+   },
+   "model_sentences": 14,
+   "sentences_checked": 31,
+   "repeated_fixes": 2,
+   "sentence_rejections": {
+    "other": 8
+   },
+   "retries": {
+    "plan": 5,
+    "decide": 3
+   },
+   "questions": 11,
+   "questions_naming_a_fix": 0
+  },
+  "undercut": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    },
+    "flags_and_asks": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "asks_without_removal": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "estimate_shown": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2106,
+   "latency_p50_s": 20.4,
+   "latency_max_s": 26.6,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1668.0,
+     "max": 2804
+    },
+    "decide": {
+     "p50": 893.0,
+     "max": 1185
+    },
+    "verify": {
+     "p50": 1737.5,
+     "max": 2564
+    }
+   },
+   "rejections": {},
+   "fallbacks": {},
+   "leads": {},
+   "proposals": {},
+   "model_sentences": 16,
+   "sentences_checked": 34,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 13
+   },
+   "retries": {},
+   "questions": 10,
+   "questions_naming_a_fix": 1
+  }
+ },
+ "note": "FAIL on two_pockets survival alone (8/10; Plan fell back twice, before Decide, so not caused by 53efaa0; two_pockets Plan fallbacks over three runs: 0, 1, 2 of 10). intent_asked 20/20."
+}

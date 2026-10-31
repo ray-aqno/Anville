@@ -124,6 +124,16 @@ def any_intent_leads(result, group: str) -> bool | None:
     return shop_fix(result, group)
 
 
+def intent_asked(result, group: str) -> bool | None:
+    """Rayyan's ruling (a), 2026-10-30: intent unknown and the ask gate open, so the comment asks what the
+    face is for (the designer's reply drives the re-plan). None when intent is known or asking isn't allowed."""
+    d = decision_for(result, group)
+    intent = getattr(result, "intents", {}).get(group)
+    if d is None or intent is None or intent.status != "unknown" or not result.ask_allowed.get(d.issue_id):
+        return None
+    return bool(d.question)
+
+
 def removal_conditional_only(result, group: str) -> bool:
     """Unknown intent: a part edit never leads, and code's conditional line ("If G3 isn't needed, ...")
     appears at most once, only next to the question. Judged from the decision: rendered lines name

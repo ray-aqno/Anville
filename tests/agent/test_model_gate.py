@@ -154,3 +154,17 @@ def test_the_question_check_flags_one_that_names_a_fix():
     assert score.question_names_no_fix("Is G3 required as modelled?", catalog, "G3")
     assert not score.question_names_no_fix("Could we remove feature G3?", catalog, "G3")
     assert score.question_names_no_fix(None, catalog, "G3") is None
+
+
+def test_unknown_intent_with_the_gate_open_always_asks():
+    """Rayyan's ruling (a), 2026-10-30: code attaches the intent question, so a miss is a bug."""
+    def unknown(*decisions, allowed=True):
+        r = result(*decisions)
+        r.intents, r.ask_allowed = {"G3": NS(status="unknown")}, {"I1": allowed}
+        return r
+    assert score.intent_asked(unknown(propose(BUY, "Is G3 required as modelled?")), "G3")
+    assert not score.intent_asked(unknown(propose(BUY)), "G3")
+    assert score.intent_asked(unknown(propose(BUY), allowed=False), "G3") is None  # gate closed
+    stated = unknown(propose(BUY))
+    stated.intents = {"G3": NS(status="stated")}
+    assert score.intent_asked(stated, "G3") is None

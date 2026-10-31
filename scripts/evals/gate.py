@@ -46,8 +46,9 @@ BARS = {
     "raised": 0.95, "shop_fix": 0.95, "plan_changing_fix": 0.95,  # the ruling's 19/20
 }
 COMMON = ["survived", "no_bare_question", "numbers_from_code", "ranked_lead"]  # ranked_lead: None if unranked
-UNKNOWN = ["raised", "any_intent_leads", "removal_conditional_only"]
+UNKNOWN = ["raised", "any_intent_leads", "removal_conditional_only", "intent_asked"]
 BARS["ranked_lead"] = 1.0  # ADR 0010: Decide rejects any other shop-side lead, so a miss is a bug
+BARS["intent_asked"] = 1.0  # ruling (a): code attaches the question, so a miss is a bug
 STATED = "Weld clearance chamfer"
 REPLIES = {"keep": "Weld clearance for the frame tube", "may_change": "Edge break only, not needed"}
 
