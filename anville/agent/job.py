@@ -213,6 +213,17 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
     return found, groups, plan.count, (run.usage, run.fallbacks)
 
 
+
+def flagged_groups(facts: dict, shop: ShopProfile, back_chamfer: list[dict] = ()) -> list[str]:
+    """The face groups the review flags, in its order: the same issues read_reply_turn lets a reply decide. SAM
+    outlines the first (ADR 0007 Amendment 4)."""
+    from anville.agent.review import find_issues
+    from anville.geometry import min_setups
+
+    part = PartFacts.from_dict(facts)
+    plan = min_setups(part, shop, back_chamfer=[BackChamferAccess.from_dict(a) for a in back_chamfer])
+    return list(dict.fromkeys(i.face_group for i in find_issues(part, plan)))
+
 def removal_alternative(facts: dict, shop: ShopProfile, back_chamfer: list[dict] = ()):
     """The part edit ADR 0002 Amendment 2 lets Anville build as the declined alternative: removing the issue
     group that cuts the most setups without leaving anything unreachable. None when no removal lowers setups.

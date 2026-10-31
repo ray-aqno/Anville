@@ -337,3 +337,20 @@ def test_each_take_starts_a_fresh_shop_ledger():
 
     assert shop_scope(None) == shop_scope("") == SHOP_SCOPE
     assert shop_scope("take-2") == f"{SHOP_SCOPE}:take-2" != shop_scope("take-3")
+
+
+def test_flagged_groups_are_the_groups_the_review_flags(part_a, shop, chamfer):
+    """SAM outlines the face the review is about (ADR 0007 Amendment 4): the same issues the review raises."""
+    from anville.agent.job import flagged_groups
+
+    assert flagged_groups(part_a.to_dict(), shop, []) == [chamfer]
+
+
+def test_a_shop_that_owns_the_cutter_flags_nothing(part_a, shop, catalog_access):
+    """Part B's learning beat: once the cutter has arrived the review flags nothing, so SAM outlines nothing."""
+    from dataclasses import replace
+    from anville.agent.job import flagged_groups
+    from anville.geometry import BACK_CHAMFER_CATALOG
+
+    owned = replace(shop, back_chamfer_tools=list(BACK_CHAMFER_CATALOG))
+    assert flagged_groups(part_a.to_dict(), owned, [a.to_dict() for a in catalog_access]) == []

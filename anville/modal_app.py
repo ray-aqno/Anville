@@ -16,6 +16,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -47,7 +48,7 @@ image = _base.pip_install("fastapi[standard]").add_local_python_source("anville"
 # so only analyze() uses this image; the webhook stays small and starts fast.
 geo_image = (
     _base.apt_install("libgl1", "libx11-6")
-    .pip_install("cadquery-ocp-novtk==8.0.1.1.0")
+    .pip_install("cadquery-ocp-novtk==8.0.1.1.0", "meta-sam-parser==0.1.0")  # SAM's mask format (ADR 0007 Am. 4)
     .add_local_python_source("anville")
 )
 # .env is read only on the deploying machine; containers receive the values via the Secret.
@@ -258,7 +259,7 @@ class _Trace:
             self.buf = []
 
 
-@app.function(image=image, secrets=secrets)
+@app.function(image=image, secrets=secrets, volumes={"/data": data})
 @modal.asgi_app()
 def web():
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -270,9 +271,16 @@ def web():
         from anville.panel import make_router
 
         # No writer yet: asks get 501 until panel.ask is handled (ADR 0012's loop; Codex, PR #34).
+        def read_render(version_id: str) -> bytes | None:  # SAM's picture of the flagged face (ADR 0007 Am. 4)
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", version_id or ""):
+                return None
+            data.reload()  # written by anchor_task's container
+            path = Path(f"/data/render/{version_id}.png")
+            return path.read_bytes() if path.exists() else None
+
         api.include_router(make_router(
             lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n), None,
-            panel_secret=secret, allowed_docs=_allowed))
+            panel_secret=secret, allowed_docs=_allowed, read_render=read_render))
 
         # The shop's traveler (ADR 0007 Amendment 3, PR #42): the sheet the review stored, and the machinist's note.
         from anville.panel import make_sheet_router
@@ -290,7 +298,7 @@ def web():
                     _log("spawn_failed", key=key, error=repr(e)[:300])
             return inserted
 
-        api.include_router(make_sheet_router(read_sheet, write_note, panel_secret=secret))
+        api.include_router(make_sheet_router(read_sheet, write_note, panel_secret=secret, read_render=read_render))
     else:
         _log("panel_unmounted", reason="ANVILLE_PANEL_TOKEN is unset or equals the webhook secret")
 
@@ -647,6 +655,14 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
         store.call.remote("complete_post", ev.key, "review", comment["id"])
         timing["comment_posted_at"] = time.time()
         trace.add("comment_posted", "Posted the review", comment_id=comment["id"], posted_as=identity)
+        try:  # SAM outlines the flagged face for the panel and the sheet, after the comment is up (ADR 0007 Am. 4)
+            from anville.agent.job import flagged_groups, review_shop
+
+            groups = flagged_groups(result["facts"], review_shop(ledger)[0], result["back_chamfer"])
+            if groups:
+                anchor_task.spawn(did, vid, eid, groups[0])
+        except Exception as e:  # a picture must never cost the review
+            _log("anchor_spawn_failed", error=repr(e)[:300])
         if os.environ.get("ANVILLE_FIX_BRANCH", "off") == "on":
             # A branch export takes ~51 s (RFC 0005, live), so the branch runs on its own once the review is up
             # and answers in its thread. It holds no document claim: a designer's reply isn't kept waiting.
@@ -666,6 +682,36 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
         timing["receive_to_comment_s"] = round(timing["comment_posted_at"] - received_at, 2)
     state[f"timing:{vid}"] = timing
     _log("timing", **timing)
+
+
+@app.function(image=geo_image, secrets=secrets, volumes={"/data": data}, timeout=120)
+def anchor_task(did: str, vid: str, eid: str, group: str) -> None:
+    """SAM 3.1 outlines the face the review flagged; the PNG goes to the panel and the setup sheet (ADR 0007
+    Amendment 4). Code picks and renders the group; SAM confirms the outline or is shown to disagree."""
+    from anville.geometry import PartFacts
+    from anville.geometry.sam_anchor import SamClient, anchor
+
+    data.reload()
+    store = StoreSvc()
+    trace = _Trace(store, did, f"{vid[:8]}-a", vid)
+    trace.element_id = eid
+    trace.add("run_started", "Pointing at the flagged face")
+    sam = SamClient.from_env(os.environ)
+    if sam is not None:
+        trace.add("tool_call", "Model called", stage="anchor", model=sam.model, host=sam.host)
+    trace.flush()
+    facts = PartFacts.from_dict(json.loads(Path(f"/data/facts/{vid}.json").read_text()))
+    a = anchor(f"/data/step/{vid}.step", facts, group, sam=sam)
+    if a is None:
+        trace.add("run_finished", "The flagged face isn't visible from any view")
+    else:
+        Path("/data/render").mkdir(parents=True, exist_ok=True)
+        Path(f"/data/render/{vid}.png").write_bytes(a.png)
+        data.commit()
+        trace.add("tool_result", "Face anchored", **a.record, version_id=vid)
+        trace.add("run_finished", "Face anchored")
+    trace.flush()
+    _log("anchor", **(a.record if a else {"group": group, "visible": False}))
 
 
 @app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=300)
