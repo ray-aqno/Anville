@@ -203,3 +203,54 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
     emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None,
          host=calls[-1].get("host") if calls else None, calls=calls)
     return found, groups, plan.count
+
+
+def removal_alternative(facts: dict, shop: ShopProfile, back_chamfer: list[dict] = ()):
+    """The part edit ADR 0002 Amendment 2 lets Anville build as the declined alternative: removing the issue
+    group that cuts the most setups without leaving anything unreachable. None when no removal lowers setups.
+    Code picks it, from the same evaluate_edits the review scores."""
+    from anville.agent.review import find_issues
+    from anville.geometry import evaluate_edits, min_setups
+
+    part = PartFacts.from_dict(facts)
+    access = [BackChamferAccess.from_dict(a) for a in back_chamfer]
+    groups = list(dict.fromkeys(i.face_group for i in find_issues(part, min_setups(part, shop, back_chamfer=access))))
+    if not groups:
+        return None
+    r = evaluate_edits(part, shop, [{"kind": "remove_feature", "face_group": g} for g in groups], back_chamfer=access)
+    fewer = [o for o in r.options if o.kind == "remove_feature" and o.after.setups < o.before.setups
+             and o.after.unreachable <= o.before.unreachable]
+    return min(fewer, key=lambda o: (o.after.setups, o.after.unreachable, int(o.face_group[1:])), default=None)
+
+
+def fix_branch(client, facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, *, did: str, vid: str,
+               eid: str, run: str, measure, back_chamfer: list[dict] = (), model: ChatModel | None = None,
+               deadline: float | None = None, wait=None, kept_for: str | None = None) -> tuple[str | None, dict]:
+    """Demo beat (c): build the removal on an `anville/alt-<run>` branch and measure it (RFC 0005; ADR 0002
+    Amendment 2). Returns (the thread reply's line, stats for the trace); (None, stats) when it's off or
+    nothing applies. `ANVILLE_FIX_BRANCH=on` turns it on. Muse Wonder writes the patch when MODEL_API_KEY is
+    set; code's patch otherwise. `measure(step_bytes) -> setups` re-extracts with the review's shop. `kept_for`:
+    the group's stated intent, which the line gives as the alternative's cost (ADR 0002 Amendment 2).
+
+    It costs about 8 Onshape calls and a workspace export (51 s, live), so run it after the review is posted.
+    """
+    if env.get("ANVILLE_FIX_BRANCH", "off") != "on":
+        return None, {"fix_branch": "off"}
+    from anville.connectors.onshape.fixbranch import build_branch
+
+    try:
+        option = removal_alternative(facts, shop, back_chamfer)
+        if option is None:
+            emit("decision", "No removal lowers setups; no branch", stage="fix_branch")
+            return None, {"fix_branch": "nothing to build"}
+        if model is None and env.get("MODEL_API_KEY"):
+            model = OpenAICompatModel.from_env(env, "wonder")
+        branch = build_branch(client, PartFacts.from_dict(facts), did=did, vid=vid, eid=eid, run=run,
+                              group=option.face_group, faces=option.removed_faces, predicted=option.after.setups,
+                              measure=measure, emit=emit, model=model, deadline=deadline, wait=wait,
+                              base_url=env.get("ONSHAPE_BASE_URL") or "https://cad.onshape.com", kept_for=kept_for)
+    except Exception as e:  # a branch bug must not cost the designer anything already posted
+        error = repr(e)[:300]
+        emit("error", "Fix branch failed", stage="fix_branch", error=error)
+        return None, {"fix_branch_error": error}
+    return branch.line(), {"fix_branch": branch.to_dict()}
