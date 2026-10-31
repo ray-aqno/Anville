@@ -178,9 +178,9 @@ def sheet_id_for(event_key: str) -> str:
 def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, reply: str, *,
                     model: ChatModel | None = None, deadline: float | None = None,
                     back_chamfer: list[dict] = (),
-                    issue_shop: ShopProfile | None = None) -> tuple[list[dict] | None, list[str], int, list[dict]]:
-    """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now, the
-    reader's call records for the credits line).
+                    issue_shop: ShopProfile | None = None) -> tuple[list[dict] | None, list[str], int, tuple]:
+    """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now, and the
+    reader's (call records, fallbacks) for the credits line).
 
     The groups are the issues code finds on this version, so a rule can only be about a face the review could
     have raised. `rules` is None when the agent is off or the read fell back; the job then answers with
@@ -199,12 +199,12 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
     raised = {i.face_group: i.kind for i in issues}
     groups = list(dict.fromkeys(i.face_group for i in issues))
     if env.get("ANVILLE_AGENT", "on") != "on":
-        return None, groups, plan.count, []
+        return None, groups, plan.count, ([], [])
     try:
         model = model or OpenAICompatModel.from_env(env, "open")
         found, run = read_reply(model, reply, raised, emit=emit, deadline=deadline)
     except Exception as e:  # a reader bug must not cost the designer an answer
         emit("error", "Reading the reply failed", stage="read_reply", error=repr(e)[:300])
-        return None, groups, plan.count, []
+        return None, groups, plan.count, ([], [])
     emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None)
-    return found, groups, plan.count, run.usage
+    return found, groups, plan.count, (run.usage, run.fallbacks)

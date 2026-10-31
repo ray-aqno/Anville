@@ -57,7 +57,7 @@ def test_the_reply_turn_hands_back_the_readers_call_records(part_a, shop):
     from tests.agent.test_reply import REPLY, keep, rules
     from tests.agent.test_review import Scripted
 
-    found, groups, _, calls = read_reply_turn(part_a.to_dict(), shop, {}, lambda *a, **k: None, REPLY,
+    found, groups, _, (calls, _) = read_reply_turn(part_a.to_dict(), shop, {}, lambda *a, **k: None, REPLY,
                                               model=Scripted(rules(keep())))
     assert found and groups == ["G3"]
     assert [c["stage"] for c in calls] == ["read_reply"]
@@ -69,3 +69,16 @@ def test_the_line_goes_last_and_only_under_model_work():
     assert with_credits("Review.\nSetup sheet for the shop: link", REVIEW).splitlines()[-1].startswith("Reviewed by")
     plain = "Anville reviewed version 1234: 2 setup(s)."
     assert with_credits(plain, []) == plain
+
+
+def test_a_reply_read_that_fell_back_says_so(part_a, shop):
+    """Codex, P2: both reader attempts rejected, so its calls are credited but marked as a fallback."""
+    from anville.agent.job import read_reply_turn
+    from tests.agent.test_reply import REPLY, keep, rules
+    from tests.agent.test_review import Scripted
+
+    bad = rules(keep("words the designer never wrote"))
+    found, _, _, (calls, fallbacks) = read_reply_turn(part_a.to_dict(), shop, {}, lambda *a, **k: None, REPLY,
+                                                      model=Scripted(bad, bad))
+    assert found is None and len(calls) == 2
+    assert credits_line(calls, fallbacks).endswith("· read_reply fell back to code")

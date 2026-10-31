@@ -538,9 +538,11 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
     # The issues the designer is answering are the review's: the shop as it was then (Codex, PR #38).
     then, _ = review_shop([r for r in ledger if r.get("created_at", 0) <= review.received_at])
     emit = flushing_at_stage_changes(trace.add, trace.flush)
-    found, groups, setups, read_calls = read_reply_turn(result["facts"], shop, os.environ, emit,
-                                                        reply.get("message") or "", deadline=deadline,
-                                                        back_chamfer=result["back_chamfer"], issue_shop=then)
+    found, groups, setups, (read_calls, read_fallbacks) = read_reply_turn(result["facts"], shop, os.environ, emit,
+                                                                          reply.get("message") or "",
+                                                                          deadline=deadline,
+                                                                          back_chamfer=result["back_chamfer"],
+                                                                          issue_shop=then)
     scope = f"doc:{did}"
     entries = [constraint_entry(rule, reply_id=cid, review_key=review_key, version_id=vid) for rule in found or []]
     for entry in unrecorded(entries, store.call.remote("read_ledger", "constraint", scope)):  # a retry adds nothing
@@ -552,10 +554,12 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
         constraints = constraints_from_ledger(store.call.remote("read_ledger", "constraint", scope), version_id=vid)
         comment, stats = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
                                        back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
-        message = (with_credits(comment, read_calls + stats.get("agent_usage", []), stats.get("agent_fallbacks", ()))
-                   if comment else _review_message(vid, result["plan"]))
+        # The reader worked even when the review falls back to the setup count (Codex, P2): credit what ran.
+        message = with_credits(comment or _review_message(vid, result["plan"]),
+                               read_calls + stats.get("agent_usage", []),
+                               [*read_fallbacks, *stats.get("agent_fallbacks", [])])
     else:
-        message = with_credits(nothing_read(groups, setups), read_calls) if groups else None
+        message = with_credits(nothing_read(groups, setups), read_calls, read_fallbacks) if groups else None
     trace.flush()
     if message and store.call.remote("reserve_post", ev.key, "replan"):
         from anville.connectors.onshape.oauth import post_as_anville
