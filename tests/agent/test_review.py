@@ -265,7 +265,8 @@ def test_a_question_where_the_gate_forbids_it_is_rejected(part_a, shop, chamfer)
 
 
 def test_an_unknown_intent_is_flagged_and_a_fix_proposed_in_one_comment(part_a, shop, chamfer):
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with(f"Is the chamfer on {chamfer} needed?")))
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with(f"Is the chamfer on {chamfer} needed?")),
+                   verifier=Scripted(verdicts(True), name="verifier"))
     assert r.fallbacks == [] and [(d.action, d.option_key) for d in r.decisions] == [("propose", ROUTE)]
     lines = r.comment.splitlines()
     assert any(line.startswith(f"{chamfer}: Sending it to an outside 5-axis shop takes it from 2 to 1 setup(s).") for line in lines)
@@ -276,7 +277,7 @@ def test_an_unknown_intent_is_flagged_and_a_fix_proposed_in_one_comment(part_a, 
 def test_ask_only_is_rejected_and_the_retry_must_propose(part_a, shop, chamfer):
     ask_only = decide({"issue_id": "I1", "action": "ask", "question": "Is it needed?", "reason": "x"})
     events = []
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_only, ask_with("Is it needed?")),
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_only, ask_with("Is it needed?")), verifier=Scripted(verdicts(True), name="verifier"),
                    emit=lambda kind, title, **d: events.append((kind, d)))
     assert r.fallbacks == [] and r.decisions[0].action == "propose" and r.decisions[0].question == "Is it needed?"
     assert any("propose" in d.get("reason", "") for kind, d in events if kind == "error" and d.get("stage") == "decide")
@@ -299,7 +300,7 @@ def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, 
     model = Scripted(plan(*requests_for(chamfer)), decide(
         {"issue_id": "I1", "action": "propose", "option_key": ROUTE, "reason": "x", "question": "Is it needed?"},
         comment=said))
-    r = run_review(part_a, shop, model, verifier=Scripted(verdicts(True), name="verifier"))
+    r = run_review(part_a, shop, model, verifier=Scripted(verdicts(True, True), name="verifier"))  # sentence, question
     assert "Routing to a five-axis takes the part to 1 setup." in r.comment
     assert r.comment.splitlines()[-1].endswith("Is it needed? The answer could change the best plan.")
     assert "Sending it to an outside 5-axis shop takes it from" not in r.comment  # the verified sentence replaces the rendered line
@@ -307,7 +308,8 @@ def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, 
 
 def test_an_accepted_question_with_a_slot_is_filled_when_rendered(part_a, shop, chamfer):
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)),
-                                          ask_with(f"Is {chamfer} worth {{{{plan.setups}}}} setups?")))
+                                          ask_with(f"Is {chamfer} worth {{{{plan.setups}}}} setups?")),
+                   verifier=Scripted(verdicts(True), name="verifier"))
     assert f"Is {chamfer} worth 2 setups?" in r.comment
 
 
@@ -579,7 +581,7 @@ def test_with_unknown_intent_a_lead_with_removal_is_rejected_for_a_shop_side_fix
 
 
 def test_removal_appears_only_as_codes_conditional_line_next_to_the_question(part_a, shop, chamfer):
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with("Is it needed?")))
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with("Is it needed?")), verifier=Scripted(verdicts(True), name="verifier"))
     lines = r.comment.splitlines()
     assert lines[-2:] == [f"If {chamfer} isn't needed, removing {chamfer} also takes it to 1 setup(s).",
                           f"{chamfer}'s purpose isn't on record. Is it needed? The answer could change the best plan."]
@@ -594,7 +596,7 @@ def test_model_prose_cannot_offer_the_removal_when_intent_is_unknown(part_a, sho
         comment=sneaky))
     verifier = Scripted(verdicts(True), name="verifier")
     r = run_review(part_a, shop, model, verifier=verifier)
-    assert "Removing it would also work." not in r.comment and verifier.sent == []  # rejected before the verifier
+    assert "Removing it would also work." not in r.comment and "Removing it" not in str(verifier.sent)  # rejected first
 
 
 def test_a_free_face_may_still_lead_with_removal(part_a, shop, chamfer):
@@ -923,11 +925,17 @@ def test_code_attaches_the_intent_question_when_the_model_leaves_it_out(part_a, 
     assert lines[-1].endswith("The answer could change the best plan.")
 
 
-def test_a_valid_model_question_is_kept(part_a, costed, chamfer, catalog_access):
+def test_a_model_question_is_kept_only_if_the_verifier_supports_it(part_a, costed, chamfer, catalog_access):
+    """Shop lane, 2026-10-31: the model's question went out after only a slot check, so "no model prose without
+    a verifier" was false for the ask line. Now it is verified like a sentence; otherwise code's question goes."""
     mine = f"Does the weld fixture need {chamfer}?"
-    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine))),
-                   back_chamfer=catalog_access)
-    assert r.decisions[0].question == mine
+    for verifier, expected in ((Scripted(verdicts(True), name="verifier"), mine),
+                               (Scripted(verdicts(False), name="verifier"), f"Is {chamfer} required as modelled?"),
+                               (None, f"Is {chamfer} required as modelled?")):
+        r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine))),
+                       verifier=verifier, back_chamfer=catalog_access)
+        assert r.decisions[0].question == expected
+        assert sum("modelled?" in line or mine in line for line in r.comment.splitlines()) == 1
 
 
 def test_no_question_is_attached_when_intent_is_stated(part_a, costed, chamfer, catalog_access):
@@ -1024,3 +1032,82 @@ def test_an_explicit_side_with_no_fix_falls_back_to_the_other_side():
     assert (d.action, d.option_key) == ("propose", "route_machine/5")
     helps = NS(key="remove_feature/G3", side="part", face_group="G3", changes_plan=True)
     assert _fallback_decision(issue, False, [shop_fix, helps], prefer="part_edit").option_key == "remove_feature/G3"
+
+
+# --- Models lane, 2026-10-31: cost claims had no node to cite, so the verifier dropped all of them -------------
+
+
+def test_the_ranking_and_each_options_price_are_citable(part_a, costed, chamfer, catalog_access):
+    """Decide saw cost_ranking and paybacks, but a sentence about them could cite only option nodes with setup
+    counts, so the verifier found 'no cited node supports' every cost claim (21 of 26 drops)."""
+    cost_line = {"text": "Of the fixes that work whatever G3 is for, buying the cutter leads at mid-range shop "
+                         "rates.", "role": "context", "cites": ["cost:I1"]}
+    buy = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    model = Scripted(plan(*requests_for(chamfer)), decide(buy, comment=[cost_line]))
+    verifier = Scripted(verdicts(True), name="verifier")
+    run_review(part_a, costed, model, verifier=verifier, back_chamfer=catalog_access)
+    extra = lambda m, i: json.loads(m.sent[i][0][1]["content"].split("\n", 3)[-1].split("\n\nYour previous")[0])  # noqa: E731
+    cites = extra(verifier, 0)["sentences"][0]["cites"]
+    assert cites["cost:I1"]["lead"] == BUY and cites["cost:I1"]["basis"] == "mid_range"
+    assert "midpoint" in cites["cost:I1"]["means"]
+    assert "cost:I1" in extra(model, 1)["nodes"]
+
+
+def test_a_replaced_question_reaches_the_panel_and_no_prose_rests_on_it(part_a, costed, chamfer, catalog_access):
+    """Codex, PR #45: the panel's card kept showing the rejected question, and a sentence could be verified
+    against a decision node that carried it."""
+    mine = f"Does the weld fixture need {chamfer}?"
+    line = {"text": f"Buying the cutter takes it to {{{{option.{BUY}.setups_after}}}} setup(s).", "role": "action",
+            "cites": ["decision:I1", f"option:{BUY}"]}
+    events = []
+    verifier = Scripted(verdicts(True, False), name="verifier")  # the sentence is fine; the question isn't
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine), comment=[line])),
+               verifier=verifier, back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+    made = [d for t, d in events if t == "Decision made"]
+    assert made[-1]["question"] == f"Is {chamfer} required as modelled?" and made[-1]["question_replaced"]
+    sent = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"]
+    assert sent[0]["cites"]["decision:I1"] == {"action": "propose", "option_key": BUY}  # no question to lean on
+    assert sent[1]["role"] == "question" and sent[1]["text"] == mine
+
+
+def test_a_sentence_brings_the_source_of_every_number_it_uses():
+    """Models lane, 2026-10-31: 32 of 54 verifier drops disputed a number code had filled, because the sentence
+    cited decision:I1 and not the option the slot came from."""
+    from anville.agent.review import slot_source
+
+    nodes = {"plan": {}, "issue:I1": {}, f"option:{BUY}": {}, "option:route_machine/5": {}}
+    assert slot_source(f"option.{BUY}.setups_after", nodes) == f"option:{BUY}"
+    assert slot_source("option.route_machine/5.payback_lo", nodes) == "option:route_machine/5"
+    assert slot_source("issue.I1.directions", nodes) == "issue:I1"
+    assert slot_source("plan.setups", nodes) == "plan"
+    assert slot_source("option.nope.setups_after", nodes) is None
+
+
+def test_the_verifier_sees_the_option_behind_a_filled_number(part_a, costed, chamfer, catalog_access):
+    line = {"text": f"Buying the cutter takes it to {{{{option.{BUY}.setups_after}}}} setup(s).", "role": "action",
+            "cites": ["decision:I1"]}
+    verifier = Scripted(verdicts(True), name="verifier")
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(), comment=[line])),
+               verifier=verifier, back_chamfer=catalog_access)
+    sent = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"]
+    assert sent[0]["cites"][f"option:{BUY}"]["setups_after"] == 1
+    assert sent[0]["cites"][f"option:{BUY}"]["works_from"] == "+Z"  # the cutter works from the top
+
+
+
+def test_lowest_cost_is_a_cost_claim_and_the_quantity_and_direction_are_citable(part_a, costed, chamfer,
+                                                                               catalog_access):
+    """Models lane, 2026-10-31 (#45 re-run): 21 drops said "lowest cost" unconditionally (the check missed the
+    phrase), 15 used {{costs.quantity}} with no node behind it, 7 put the cutter on -Z."""
+    from anville.agent.review import _COST_CLAIM, slot_source
+
+    assert _COST_CLAIM.search("the lowest-cost fix") and _COST_CLAIM.search("buying it costs the least")
+    assert not _COST_CLAIM.search("it leads at mid-range shop rates")
+    assert slot_source("costs.quantity", {"costs": {}}) == "costs"
+    line = {"text": f"At {{{{costs.quantity}}}} parts, buying the cutter leads at mid-range shop rates.",
+            "role": "context", "cites": ["cost:I1"]}
+    verifier = Scripted(verdicts(True), name="verifier")
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(), comment=[line])),
+               verifier=verifier, back_chamfer=catalog_access)
+    cites = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"][0]["cites"]
+    assert cites["costs"]["quantity"] == 20

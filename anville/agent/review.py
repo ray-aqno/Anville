@@ -195,7 +195,8 @@ def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Inten
 # --- slots ---------------------------------------------------------------------
 
 _SLOT = re.compile(r"\{\{([^{}]+)\}\}")
-_COST_CLAIM = re.compile(r"\bcheap(?:est|er)\b|\bleast expensive\b|\bcosts? less\b|\bless expensive\b", re.I)
+_COST_CLAIM = re.compile(r"\bcheap(?:est|er)\b|\bleast expensive\b|\bcosts? less\b|\bless expensive\b"
+                         r"|\blowest[- ]cost\b|\bcosts? the least\b", re.I)
 _INTERNAL = re.compile(r"\b(?:issue|intent|option|decision):|\b(?:intent|option|issue|plan)\.\w|\bI\d+\b")
 _ALLOWED_DIGITS = re.compile(r"\b[GI]\d+\b|\b[35]-axis\b|[+-][XYZ]\b")
 
@@ -216,6 +217,16 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
         values[f"option.{key}.unreachable_before"] = str(o.before.unreachable)
         values[f"option.{key}.unreachable_after"] = str(o.after.unreachable)
     return values
+
+
+def slot_source(slot: str, nodes: dict) -> str | None:
+    """The node a slot's value comes from: option.<key>.<field> -> option:<key>, issue.<id>.<field> -> issue:<id>,
+    plan.<field> -> plan. Option keys contain dots and slashes, so the field is the last segment."""
+    head, _, rest = slot.partition(".")
+    if head in ("plan", "costs"):
+        return head if head in nodes else None
+    node = f"{head}:{rest.rsplit('.', 1)[0]}" if "." in rest else None
+    return node if node in nodes else None
 
 
 def fill_slots(text: str, values: dict[str, str], option_keys: list[str]) -> tuple[str | None, str]:
@@ -497,7 +508,9 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 if v is not None:
                     values[f"option.{key}.{name}"] = str(v)
     keys = list(options)
-    nodes = comment_nodes(plan, chosen, intents, options)
+    nodes = comment_nodes(plan, chosen, intents, options, priced=priced, ranked=ranked)
+    if "costs.quantity" in values:  # the quantity code prices at, so a sentence using it can be verified
+        nodes["costs"] = {"quantity": int(values["costs.quantity"]), "note": "the part count the costs are given at"}
 
     def v_decide(a):
         out = []
@@ -552,13 +565,15 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 return None, f"comment entry {i} needs text (string), role (context|action|reason) and cites (strings)"
             if rivals and _COST_CLAIM.search(sent["text"]):
                 return None, (f"comment entry {i} ranks the fixes by cost, but the lead wins only at mid-range inputs: "
-                              "don't call a fix cheapest or cheaper; code states the costs")
+                              "don't call a fix cheapest, cheaper or lowest-cost; say it leads at mid-range shop "
+                              "rates, or leave the costs to code")
         return (out, list(a["comment"])), ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
                 "changes_plan": o.changes_plan} for k, o in options.items()]
     decided = run.ask("decide", "Decide each selected issue, then write the comment for the designer. Put node "
-                      "ids only in `cites` (cite decision:<issue_id> for your own decisions), never in the text. "
+                      "ids only in `cites` (cite decision:<issue_id> for your own decisions, and cost:<issue_id> "
+                      "for a claim about cost), never in the text. "
                       "Use only these slots for numbers. A sentence proposing a fix states its result with "
                       "that option's setups_after slot, e.g. \"Removing G3 takes it to "
                       "{{option.remove_feature/G3.setups_after}} setup(s).\"",
@@ -589,7 +604,21 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
              reason=err or "", text=fill_slots(sent["text"], values, keys)[0] or sent["text"])  # the panel shows it
         if not err:
             checked.append(sent)
-    verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
+    # A question the model wrote is prose too: verified like a sentence, or code's own question goes instead
+    # (shop lane, 2026-10-31: it was published after only a slot check).
+    asked = [{"text": d.question, "role": "question", "issue_id": d.issue_id,
+              "cites": [f"issue:{d.issue_id}", f"intent:{by_id[d.issue_id].face_group}"]}
+             for d in decisions if d.question and d.question != _intent_question(by_id[d.issue_id].face_group)]
+    verified = verify_sentences(run, verifier, checked + asked, decided_by, nodes, values, keys, base, emit)
+    supported = {s["issue_id"] for s in verified if s.get("role") == "question"}
+    verified = [s for s in verified if s.get("role") != "question"]
+    for i, d in enumerate(decisions):
+        if d.question and any(a["issue_id"] == d.issue_id for a in asked) and d.issue_id not in supported:
+            decisions[i] = replace(d, question=_intent_question(by_id[d.issue_id].face_group))
+            d = decisions[i]  # re-sent as "Decision made", the event the panel's card reads (Codex, PR #45)
+            emit("decision", "Decision made", stage="verify", issue_id=d.issue_id, action=d.action,
+                 option_key=d.option_key, question=d.question, reason=d.reason, question_replaced=True)
+    decided_by = {d.issue_id: d for d in decisions}
     comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
                                              estimates, rivals), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
@@ -602,9 +631,21 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 # --- the comment as grounded nodes ---------------------------------------------------
 
 
+BASIS_MEANS = {  # what a ranking basis lets a sentence claim (ADR 0010); the verifier judges cost prose by it
+    "dominates": "the lead costs less than every other ranked fix at every input in the shop's ranges",
+    "mid_range": "the lead costs least with every ranged shop input at its midpoint, but it is not shown to cost "
+                 "less than every other ranked fix at every input",
+    "tie": "no ranked fix costs less than the others at every input or at the midpoints",
+    "sole": "it is the only ranked fix that makes the whole part",
+    "none": "no ranked fix makes the whole part",
+}
+
+
 def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Intent],
-                  options: dict[str, Option]) -> dict[str, dict]:
-    """What a sentence may cite: id -> the fact it stands for (decision nodes are added per decision)."""
+                  options: dict[str, Option], *, priced: dict | None = None,
+                  ranked: dict | None = None) -> dict[str, dict]:
+    """What a sentence may cite: id -> the fact it stands for (decision nodes are added per decision). Prices
+    and the cost ranking are citable too, so a cost claim can be verified (models lane, 2026-10-31)."""
     nodes = {"plan": {"setups": plan.count, "unreachable": len(plan.unreachable)}}
     for i in chosen:
         nodes[f"issue:{i.id}"] = {"kind": i.kind, "face_group": i.face_group, **i.detail}
@@ -614,6 +655,15 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
     for k, o in options.items():
         nodes[f"option:{k}"] = {"side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable}
+        if o.params.get("direction"):  # where the fix works from (models lane: prose put the cutter on -Z)
+            nodes[f"option:{k}"]["works_from"] = o.params["direction"]
+        price = (priced or {}).get(k)
+        if price:
+            nodes[f"option:{k}"].update({f: price.get(f) for f in ("one_time", "payback", "payback_mid", "unpriced",
+                                                                   "placeholder")})
+    for issue_id, r in (ranked or {}).items():
+        nodes[f"cost:{issue_id}"] = {"top": list(r.top), "lead": r.lead, "basis": r.basis,
+                                     "means": BASIS_MEANS.get(r.basis, "")}
     return nodes
 
 
@@ -673,10 +723,16 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
     items = []
     for i, sent in enumerate(checked):
         cited = {c: nodes[c] for c in sent["cites"]}
+        for slot in _SLOT.findall(sent["text"]):  # a filled number brings its source, so it can't be disputed for
+            src = slot_source(slot.strip(), nodes)  # lack of a citation (models lane, 2026-10-31: 32 of 54 drops)
+            if src and src not in cited:
+                cited[src] = nodes[src]
         for c in sent["cites"]:
             if c.startswith("decision:"):
                 d = decided_by[c.split(":", 1)[1]]
-                cited[c] = {"action": d.action, "option_key": d.option_key, "question": d.question}
+                # No question here: it is verified on its own and may be replaced, so prose can't rest on it
+                # (Codex, PR #45).
+                cited[c] = {"action": d.action, "option_key": d.option_key}
         items.append({"index": i, "text": fill_slots(sent["text"], values, keys)[0], "role": sent["role"],
                       "cites": cited})
 
@@ -830,6 +886,10 @@ def payback_line(key: str, payback: tuple, mid: int | None) -> str:
 
 
 # --- fixed-script steps ------------------------------------------------------------
+
+
+def _intent_question(group: str) -> str:
+    return f"Is {group} required as modelled?"
 
 
 def _with_intent_questions(decisions: list[Decision], by_id: dict[str, Issue], intents: dict[str, Intent],
