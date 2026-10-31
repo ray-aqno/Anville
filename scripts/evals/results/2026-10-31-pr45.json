@@ -1,0 +1,217 @@
+{
+ "what": "a_reply_not_needed and a_reply_keep on #45 (feat/citable-costs) merged with main",
+ "repo_sha": "018ee6c",
+ "n": 10,
+ "spent_usd": 0.8501,
+ "summary": {
+  "a_reply_not_needed": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "plan_changing_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4117,
+   "latency_p50_s": 19.15,
+   "latency_max_s": 26.6,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1629,
+     "max": 2807
+    },
+    "decide": {
+     "p50": 573,
+     "max": 961
+    },
+    "verify": {
+     "p50": 1441.5,
+     "max": 2228
+    }
+   },
+   "rejections": {
+    "no_tool_call": 4
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 10,
+    "part:remove_feature/G3": 10
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "part:remove_feature/G3": 10
+   },
+   "model_sentences": 31,
+   "sentences_checked": 61,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 4
+   },
+   "question_source": {
+    "code": 10
+   },
+   "retries": {
+    "decide": 3,
+    "plan": 1
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "0/10"
+  },
+  "a_reply_keep": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4384,
+   "latency_p50_s": 17.2,
+   "latency_max_s": 32.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1710,
+     "max": 3473
+    },
+    "decide": {
+     "p50": 649.5,
+     "max": 909
+    },
+    "verify": {
+     "p50": 1718.5,
+     "max": 2458
+    }
+   },
+   "rejections": {
+    "no_tool_call": 1,
+    "invalid_answer": 2
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 20
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 34,
+   "sentences_checked": 62,
+   "repeated_fixes": 0,
+   "sentence_rejections": {},
+   "question_source": {
+    "code": 10
+   },
+   "retries": {
+    "decide": 2,
+    "plan": 1
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "10/10"
+  }
+ },
+ "note": "Prose 65/123 published (not_needed 31/61, was 38/64 on #41). 54 of 58 drops are the verifier's; 32 of those dispute a number code already filled from a slot (the cites miss the node behind it). Intent question 20/20, all code's: the model wrote none, so no question was verified or replaced."
+}

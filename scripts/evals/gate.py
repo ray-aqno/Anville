@@ -193,6 +193,11 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
                                "reason": e.get("reason", ""), "text": e.get("text", "")}
                               for e in events if (e["title"] == "Sentence checked" and not e.get("ok"))
                               or e["title"] == "Sentence not supported"],
+        # Who wrote each question: the model (kept or replaced after verification, #45) or code's own.
+        "question_source": [("code" if "required as modelled" in e["question"] else
+                             "model_replaced" if any(x["title"] == "Question replaced" and x["issue_id"] == e["issue_id"]
+                                                     for x in events) else "model_kept")
+                            for e in events if e["title"] == "Decision made" and e.get("question")],
         "retries": [u["stage"] for i, u in enumerate(r.usage) if any(v["stage"] == u["stage"] for v in r.usage[:i])],
     }
 
@@ -229,6 +234,7 @@ def summarize(name: str, trials: list[list[dict]]) -> dict:
         "sentences_checked": sum(t["sentences_checked"] for t in turns),
         "repeated_fixes": sum(t["repeated_fixes"] for t in turns),
         "sentence_rejections": dict(Counter(k for t in turns for k in t.get("sentence_rejections", []))),
+        "question_source": dict(Counter(k for t in turns for k in t.get("question_source", []))),
         "retries": dict(Counter(s for t in turns for s in t.get("retries", []))),
         "questions": sum(len(t["questions"]) for t in turns),
         "questions_naming_a_fix": sum(t["questions_naming_a_fix"] for t in turns),
@@ -248,7 +254,7 @@ def print_table(summary: dict, spent: float) -> None:
     print(f"\ntotal spend ${spent:.3f}")
     for name, s in summary.items():
         extra = {k: s[k] for k in ("leads" if s.get("leads") else "proposals", "fallbacks", "rejections", "retries",
-                                   "sentence_rejections", "repeated_fixes", "questions",
+                                   "sentence_rejections", "question_source", "repeated_fixes", "questions",
                                    "questions_naming_a_fix", "turn2_keeps_turn1_fix") if s.get(k)}
         extra["model_sentences"] = f"{s['model_sentences']}/{s['sentences_checked']} published/written"
         print(f"  {name}: {json.dumps(extra)}")
