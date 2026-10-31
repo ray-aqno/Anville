@@ -1,0 +1,777 @@
+{
+ "repo_sha": "69f1a8e",
+ "n": 5,
+ "budget": 0.25,
+ "stopped_by_budget": false,
+ "prices_per_1m": {
+  "muse-spark-open": [
+   1.25,
+   0.15,
+   4.25
+  ],
+  "muse-spark-1.3": [
+   1.25,
+   1.25,
+   4.25
+  ]
+ },
+ "bars": {
+  "no_bare_question": 1.0,
+  "numbers_from_code": 1.0,
+  "removal_conditional_only": 1.0,
+  "any_intent_leads": 1.0,
+  "nothing_raised": 1.0,
+  "survived": 0.9,
+  "raised": 0.95,
+  "shop_fix": 0.95,
+  "plan_changing_fix": 0.95,
+  "ranked_lead": 1.0,
+  "intent_asked": 1.0,
+  "flags_and_asks": 0.95,
+  "asks_without_removal": 0.95,
+  "estimate_shown": 1.0
+ },
+ "spent": 0.1035,
+ "summary": {
+  "a_unknown": {
+   "trials": 5,
+   "gated": {
+    "no_bare_question": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 5,
+     "runs": 5,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.1035,
+   "latency_p50_s": 18.1,
+   "latency_max_s": 22.6,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1517.5,
+     "max": 2082
+    },
+    "decide": {
+     "p50": 688.5,
+     "max": 830
+    },
+    "verify": {
+     "p50": 1434,
+     "max": 1882
+    }
+   },
+   "rejections": {
+    "no_tool_call": 2
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 5
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 5
+   },
+   "model_sentences": 10,
+   "line_share": [
+    14,
+    32
+   ],
+   "sentences_checked": 16,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 2
+   },
+   "question_source": {
+    "model": 4,
+    "code": 1
+   },
+   "retries": {
+    "plan": 1,
+    "decide": 1
+   },
+   "questions": 5,
+   "questions_naming_a_fix": 0
+  }
+ },
+ "trials": {
+  "a_unknown": [
+   [
+    {
+     "checks": {
+      "survived": true,
+      "no_bare_question": true,
+      "numbers_from_code": true,
+      "ranked_lead": true,
+      "raised": true,
+      "any_intent_leads": true,
+      "removal_conditional_only": true,
+      "intent_asked": true
+     },
+     "latency_s": 13.7,
+     "cost": 0.01822545,
+     "model_calls": 3,
+     "fallbacks": [],
+     "usage": [
+      {
+       "stage": "plan",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 6.039,
+       "prompt_tokens": 1191,
+       "completion_tokens": 1570,
+       "total_tokens": 2761,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1152
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 1068,
+        "audio_tokens": 0,
+        "reasoning_tokens": 1373,
+        "rejected_prediction_tokens": 2446
+       }
+      },
+      {
+       "stage": "decide",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 3.457,
+       "prompt_tokens": 3154,
+       "completion_tokens": 681,
+       "total_tokens": 3835,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1536
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 472,
+        "audio_tokens": 0,
+        "reasoning_tokens": 246,
+        "rejected_prediction_tokens": 991
+       }
+      },
+      {
+       "stage": "verify",
+       "model": "muse-spark-1.3",
+       "host": "api.meta.ai",
+       "latency_s": 4.074,
+       "completion_tokens": 1021,
+       "prompt_tokens": 1476,
+       "total_tokens": 2497,
+       "completion_tokens_details": {
+        "reasoning_tokens": 840
+       },
+       "prompt_tokens_details": {
+        "cached_tokens": 881
+       }
+      }
+     ],
+     "comment": "G3 is currently machined from -Z in its own setup, keeping the plan at 2 setups.\nAdding 910480 on the shop side consolidates G3 with the +Z work and takes the plan to 1 setup(s).\nBuying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); below that, keep the flip.\nSending it to an outside 5-axis shop costs less at some inputs.\nIf G3 isn't needed, removing G3 also takes it to 1 setup(s).\nG3's purpose isn't on record. What is the purpose of the face(s) in G3 and are they needed as currently modeled? The answer could change the best plan.",
+     "decisions": [
+      {
+       "issue_id": "I1",
+       "action": "propose",
+       "option_key": "add_tool/G3/+Z/BC45-910480",
+       "question": "What is the purpose of the face(s) in G3 and are they needed as currently modeled?",
+       "reason": "G3 alone forces -Z setup; shop-side tool can consolidate to one setup"
+      }
+     ],
+     "lead": "add_tool/G3/+Z/BC45-910480",
+     "lead_side": "shop",
+     "proposals": [
+      "shop:add_tool/G3/+Z/BC45-910480 +question"
+     ],
+     "questions": [
+      "What is the purpose of the face(s) in G3 and are they needed as currently modeled?"
+     ],
+     "questions_naming_a_fix": 0,
+     "repeated_fixes": 0,
+     "rejections": [],
+     "rejection_reasons": [],
+     "model_sentences": 2,
+     "line_share": [
+      3,
+      6
+     ],
+     "sentences_checked": 3,
+     "sentence_rejections": [
+      "other"
+     ],
+     "dropped_sentences": [
+      {
+       "by": "check",
+       "reason": "numbers must come from slots; the text contains a number written by the model",
+       "text": "Payback for this tool is {{option.add_tool/G3/+Z/BC45-910480.payback_lo}} to {{option.add_tool/G3/+Z/BC45-910480.payback_hi}} parts (mid {{option.add_tool/G3/+Z/BC45-910480.payback_mid}}) and it leads at mid-range shop rates over routing to machine 5."
+      }
+     ],
+     "question_source": [
+      "model"
+     ],
+     "retries": []
+    }
+   ],
+   [
+    {
+     "checks": {
+      "survived": true,
+      "no_bare_question": true,
+      "numbers_from_code": true,
+      "ranked_lead": true,
+      "raised": true,
+      "any_intent_leads": true,
+      "removal_conditional_only": true,
+      "intent_asked": true
+     },
+     "latency_s": 13.9,
+     "cost": 0.016681599999999998,
+     "model_calls": 3,
+     "fallbacks": [],
+     "usage": [
+      {
+       "stage": "plan",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 5.245,
+       "prompt_tokens": 1191,
+       "completion_tokens": 1116,
+       "total_tokens": 2307,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1152
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 795,
+        "audio_tokens": 0,
+        "reasoning_tokens": 931,
+        "rejected_prediction_tokens": 1452
+       }
+      },
+      {
+       "stage": "decide",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 3.024,
+       "prompt_tokens": 3154,
+       "completion_tokens": 696,
+       "total_tokens": 3850,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 3072
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 463,
+        "audio_tokens": 0,
+        "reasoning_tokens": 336,
+        "rejected_prediction_tokens": 1168
+       }
+      },
+      {
+       "stage": "verify",
+       "model": "muse-spark-1.3",
+       "host": "api.meta.ai",
+       "latency_s": 5.475,
+       "completion_tokens": 1434,
+       "prompt_tokens": 1681,
+       "total_tokens": 3115,
+       "completion_tokens_details": {
+        "reasoning_tokens": 1210
+       },
+       "prompt_tokens_details": {
+        "cached_tokens": 0
+       }
+      }
+     ],
+     "comment": "Anville reviewed this version: it machines in 2 setup(s).\nProposing to add 910480 for G3 in +Z takes the plan to 1 setup(s).\nG3's purpose is unknown, so please confirm its function as modeled (see question).\nBuying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); below that, keep the flip.\nSending it to an outside 5-axis shop costs less at some inputs.\nIf G3 isn't needed, removing G3 also takes it to 1 setup(s).\nG3's purpose isn't on record. What is the functional purpose of the faces in G3, and is it needed as currently modeled? The answer could change the best plan.",
+     "decisions": [
+      {
+       "issue_id": "I1",
+       "action": "propose",
+       "option_key": "add_tool/G3/+Z/BC45-910480",
+       "question": "What is the functional purpose of the faces in G3, and is it needed as currently modeled?",
+       "reason": "Single-direction group G3 forces extra setup; shop-side tool add avoids part change and leads at mid-range."
+      }
+     ],
+     "lead": "add_tool/G3/+Z/BC45-910480",
+     "lead_side": "shop",
+     "proposals": [
+      "shop:add_tool/G3/+Z/BC45-910480 +question"
+     ],
+     "questions": [
+      "What is the functional purpose of the faces in G3, and is it needed as currently modeled?"
+     ],
+     "questions_naming_a_fix": 0,
+     "repeated_fixes": 0,
+     "rejections": [],
+     "rejection_reasons": [],
+     "model_sentences": 2,
+     "line_share": [
+      3,
+      7
+     ],
+     "sentences_checked": 3,
+     "sentence_rejections": [],
+     "dropped_sentences": [
+      {
+       "by": "verifier",
+       "reason": "Claims rest runs +Z but cites only issue I1 and plan counts; no cited node gives +Z for rest.",
+       "text": "G3 is currently isolated to a -Z setup while the rest of the part runs +Z, so the plan needs 2 setups."
+      }
+     ],
+     "question_source": [
+      "model"
+     ],
+     "retries": []
+    }
+   ],
+   [
+    {
+     "checks": {
+      "survived": true,
+      "no_bare_question": true,
+      "numbers_from_code": true,
+      "ranked_lead": true,
+      "raised": true,
+      "any_intent_leads": true,
+      "removal_conditional_only": true,
+      "intent_asked": true
+     },
+     "latency_s": 18.1,
+     "cost": 0.02029885,
+     "model_calls": 3,
+     "fallbacks": [],
+     "usage": [
+      {
+       "stage": "plan",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 9.929,
+       "prompt_tokens": 1191,
+       "completion_tokens": 2082,
+       "total_tokens": 3273,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1152
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 1429,
+        "audio_tokens": 0,
+        "reasoning_tokens": 1878,
+        "rejected_prediction_tokens": 3142
+       }
+      },
+      {
+       "stage": "decide",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 3.722,
+       "prompt_tokens": 3154,
+       "completion_tokens": 717,
+       "total_tokens": 3871,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 3072
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 500,
+        "audio_tokens": 0,
+        "reasoning_tokens": 335,
+        "rejected_prediction_tokens": 1019
+       }
+      },
+      {
+       "stage": "verify",
+       "model": "muse-spark-1.3",
+       "host": "api.meta.ai",
+       "latency_s": 4.275,
+       "completion_tokens": 1354,
+       "prompt_tokens": 1491,
+       "total_tokens": 2845,
+       "completion_tokens_details": {
+        "reasoning_tokens": 1168
+       },
+       "prompt_tokens_details": {
+        "cached_tokens": 881
+       }
+      }
+     ],
+     "comment": "Plan currently needs 2 setup(s) because G3 requires machining from -Z isolated from other groups.\nG3 purpose is unknown, so propose adding 910480 to machine it from +Z, taking plan to 1 setup(s) from 2.\nBuying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); below that, keep the flip.\nSending it to an outside 5-axis shop costs less at some inputs.\nIf G3 isn't needed, removing G3 also takes it to 1 setup(s).\nG3's purpose isn't on record. What is the purpose of the face group G3 and is it needed as modelled? The answer could change the best plan.",
+     "decisions": [
+      {
+       "issue_id": "I1",
+       "action": "propose",
+       "option_key": "add_tool/G3/+Z/BC45-910480",
+       "question": "What is the purpose of the face group G3 and is it needed as modelled?",
+       "reason": "G3 alone forces -Z setup; shop-side tool addition consolidates to single setup"
+      }
+     ],
+     "lead": "add_tool/G3/+Z/BC45-910480",
+     "lead_side": "shop",
+     "proposals": [
+      "shop:add_tool/G3/+Z/BC45-910480 +question"
+     ],
+     "questions": [
+      "What is the purpose of the face group G3 and is it needed as modelled?"
+     ],
+     "questions_naming_a_fix": 0,
+     "repeated_fixes": 0,
+     "rejections": [],
+     "rejection_reasons": [],
+     "model_sentences": 2,
+     "line_share": [
+      3,
+      6
+     ],
+     "sentences_checked": 3,
+     "sentence_rejections": [
+      "other"
+     ],
+     "dropped_sentences": [
+      {
+       "by": "check",
+       "reason": "remove_feature/G3 is offered only in code's conditional line while the face's purpose is unknown",
+       "text": "At mid-range shop rates this leads, while {{option.route_machine/5.tool}} is rival; removing G3 would also reach {{option.remove_feature/G3.setups_after}} setup(s) if the face is not functional."
+      }
+     ],
+     "question_source": [
+      "model"
+     ],
+     "retries": []
+    }
+   ],
+   [
+    {
+     "checks": {
+      "survived": true,
+      "no_bare_question": true,
+      "numbers_from_code": true,
+      "ranked_lead": true,
+      "raised": true,
+      "any_intent_leads": true,
+      "removal_conditional_only": true,
+      "intent_asked": true
+     },
+     "latency_s": 20.3,
+     "cost": 0.025471650000000002,
+     "model_calls": 4,
+     "fallbacks": [],
+     "usage": [
+      {
+       "stage": "plan",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 5.335,
+       "prompt_tokens": 1191,
+       "completion_tokens": 1465,
+       "total_tokens": 2656,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1152
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 1028,
+        "audio_tokens": 0,
+        "reasoning_tokens": 1452,
+        "rejected_prediction_tokens": 2024
+       }
+      },
+      {
+       "stage": "plan",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 5.054,
+       "prompt_tokens": 1211,
+       "completion_tokens": 1181,
+       "total_tokens": 2392,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1152
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 848,
+        "audio_tokens": 0,
+        "reasoning_tokens": 1016,
+        "rejected_prediction_tokens": 1483
+       }
+      },
+      {
+       "stage": "decide",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 3.264,
+       "prompt_tokens": 3154,
+       "completion_tokens": 655,
+       "total_tokens": 3809,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 3072
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 461,
+        "audio_tokens": 0,
+        "reasoning_tokens": 218,
+        "rejected_prediction_tokens": 897
+       }
+      },
+      {
+       "stage": "verify",
+       "model": "muse-spark-1.3",
+       "host": "api.meta.ai",
+       "latency_s": 6.424,
+       "completion_tokens": 1882,
+       "prompt_tokens": 1930,
+       "total_tokens": 3812,
+       "completion_tokens_details": {
+        "reasoning_tokens": 1623
+       },
+       "prompt_tokens_details": {
+        "cached_tokens": 881
+       }
+      }
+     ],
+     "comment": "G3 alone currently forces a dedicated -Z setup, keeping the plan at 2 setups.\nThis option leads at mid-range shop rates versus the rival routing change.\nG3: Buying the 910480 back-chamfer cutter takes it from 2 to 1 setup(s). It changes the shop, not the part.\nBuying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); below that, keep the flip.\nSending it to an outside 5-axis shop costs less at some inputs.\nIf G3 isn't needed, removing G3 also takes it to 1 setup(s).\nG3's purpose isn't on record. Is G3 required as modelled? The answer could change the best plan.",
+     "decisions": [
+      {
+       "issue_id": "I1",
+       "action": "propose",
+       "option_key": "add_tool/G3/+Z/BC45-910480",
+       "question": "Is G3 required as modelled?",
+       "reason": "G3 alone forces second setup in -Z; shop-side +Z tool consolidates to one setup and is lowest mid-range cost."
+      }
+     ],
+     "lead": "add_tool/G3/+Z/BC45-910480",
+     "lead_side": "shop",
+     "proposals": [
+      "shop:add_tool/G3/+Z/BC45-910480 +question"
+     ],
+     "questions": [
+      "Is G3 required as modelled?"
+     ],
+     "questions_naming_a_fix": 0,
+     "repeated_fixes": 0,
+     "rejections": [
+      "no_tool_call"
+     ],
+     "rejection_reasons": [
+      [
+       "plan",
+       "expected exactly one tool call, got 0"
+      ]
+     ],
+     "model_sentences": 2,
+     "line_share": [
+      2,
+      7
+     ],
+     "sentences_checked": 4,
+     "sentence_rejections": [],
+     "dropped_sentences": [
+      {
+       "by": "verifier",
+       "reason": "'reversible' appears in no cited node; option only says side shop, no reversibility stated.",
+       "text": "G3's purpose is unknown, so asking what it is for while proposing a reversible shop fix."
+      },
+      {
+       "by": "verifier",
+       "reason": "Range 3-331 is overall range, mid is 21; saying range is 'at mid-range rates' misstates option and lacks cost basis.",
+       "text": "Proposing adding 910480 from +Z takes the plan to 1 setup(s) and pays back in 3 to 331 parts at mid-range rates."
+      },
+      {
+       "by": "verifier",
+       "reason": "Adds second ask 'can they be modified' implying geometry edit beyond shop-side propose; allowed question is purpose only.",
+       "text": "What is the purpose of the faces in G3 and can they be modified if needed?"
+      }
+     ],
+     "question_source": [
+      "code"
+     ],
+     "retries": [
+      "plan"
+     ]
+    }
+   ],
+   [
+    {
+     "checks": {
+      "survived": true,
+      "no_bare_question": true,
+      "numbers_from_code": true,
+      "ranked_lead": true,
+      "raised": true,
+      "any_intent_leads": true,
+      "removal_conditional_only": true,
+      "intent_asked": true
+     },
+     "latency_s": 22.6,
+     "cost": 0.02285815,
+     "model_calls": 4,
+     "fallbacks": [],
+     "usage": [
+      {
+       "stage": "plan",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 9.558,
+       "prompt_tokens": 1191,
+       "completion_tokens": 1585,
+       "total_tokens": 2776,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 1152
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 1045,
+        "audio_tokens": 0,
+        "reasoning_tokens": 1396,
+        "rejected_prediction_tokens": 2735
+       }
+      },
+      {
+       "stage": "decide",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 4.285,
+       "prompt_tokens": 3154,
+       "completion_tokens": 830,
+       "total_tokens": 3984,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 3072
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 579,
+        "audio_tokens": 0,
+        "reasoning_tokens": 438,
+        "rejected_prediction_tokens": 1178
+       }
+      },
+      {
+       "stage": "decide",
+       "model": "meta-models/muse-spark-open-1026",
+       "host": "inference.baseten.co",
+       "latency_s": 3.352,
+       "prompt_tokens": 3175,
+       "completion_tokens": 580,
+       "total_tokens": 3755,
+       "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 3072
+       },
+       "completion_tokens_details": {
+        "accepted_prediction_tokens": 408,
+        "audio_tokens": 0,
+        "reasoning_tokens": 265,
+        "rejected_prediction_tokens": 796
+       }
+      },
+      {
+       "stage": "verify",
+       "model": "muse-spark-1.3",
+       "host": "api.meta.ai",
+       "latency_s": 5.241,
+       "completion_tokens": 1585,
+       "prompt_tokens": 1615,
+       "total_tokens": 3200,
+       "completion_tokens_details": {
+        "reasoning_tokens": 1360
+       },
+       "prompt_tokens_details": {
+        "cached_tokens": 881
+       }
+      }
+     ],
+     "comment": "Plan requires 2 setups with G3 isolated in -Z direction -Z.\nPropose adding 910480 to machine G3 from +Z, taking it to 1 setup(s).\nBuying the 910480 pays off past ~21 parts at mid-range inputs (anywhere from 3 to 331); below that, keep the flip.\nSending it to an outside 5-axis shop costs less at some inputs.\nIf G3 isn't needed, removing G3 also takes it to 1 setup(s).\nG3's purpose isn't on record. What is the purpose of G3 faces and are they needed as modelled? The answer could change the best plan.",
+     "decisions": [
+      {
+       "issue_id": "I1",
+       "action": "propose",
+       "option_key": "add_tool/G3/+Z/BC45-910480",
+       "question": "What is the purpose of G3 faces and are they needed as modelled?",
+       "reason": "G3 forces extra setup; shop tool can consolidate"
+      }
+     ],
+     "lead": "add_tool/G3/+Z/BC45-910480",
+     "lead_side": "shop",
+     "proposals": [
+      "shop:add_tool/G3/+Z/BC45-910480 +question"
+     ],
+     "questions": [
+      "What is the purpose of G3 faces and are they needed as modelled?"
+     ],
+     "questions_naming_a_fix": 0,
+     "repeated_fixes": 0,
+     "rejections": [
+      "no_tool_call"
+     ],
+     "rejection_reasons": [
+      [
+       "decide",
+       "expected exactly one tool call, got 0"
+      ]
+     ],
+     "model_sentences": 2,
+     "line_share": [
+      3,
+      6
+     ],
+     "sentences_checked": 3,
+     "sentence_rejections": [],
+     "dropped_sentences": [
+      {
+       "by": "verifier",
+       "reason": "Cited cost nodes support 20-part mid-range lead, but do not mention consolidating dedicated -Z setup.",
+       "text": "This consolidates the dedicated -Z setup and at 20 parts it leads at mid-range shop rates per cost ranking."
+      }
+     ],
+     "question_source": [
+      "model"
+     ],
+     "retries": [
+      "decide"
+     ]
+    }
+   ]
+  ]
+ }
+}
