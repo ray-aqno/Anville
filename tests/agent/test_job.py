@@ -165,3 +165,62 @@ def test_part_b_says_it_plans_with_the_cutter_the_shop_bought(shop):
                                back_chamfer=[a.to_dict() for a in access], learned=learned)
     assert "1 setup" in comment
     assert comment.splitlines()[-1] == "It plans with the 910480 the shop bought on 2026-10-26."
+
+
+# --- The setup sheet goes to the shop, and the shop's note comes back (demo gaps 2 and 3) ---------------------
+
+def _decide_buy(part_a, shop, chamfer, catalog_access):
+    from tests.agent.test_review import BUY
+
+    model = Scripted(plan(*requests_for(chamfer)),
+                     decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}))
+    return agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
+                         back_chamfer=[a.to_dict() for a in catalog_access])
+
+
+def test_the_review_says_which_catalog_cutter_it_decided_to_buy(part_a, shop, chamfer, catalog_access):
+    _, stats = _decide_buy(part_a, shop, chamfer, catalog_access)
+    assert stats["buying"] == ["910480"]
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route()))
+    _, stats = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
+                             back_chamfer=[a.to_dict() for a in catalog_access])
+    assert stats["buying"] == []
+
+
+def test_the_sheet_plans_with_the_cutter_being_bought_and_marks_it_unowned(part_a, shop, catalog_access):
+    """The traveler's 'arrived' box is what turns the purchase into a tool_acquired row."""
+    from anville.agent.job import sheet_for
+
+    access = [a.to_dict() for a in catalog_access]
+    bought = sheet_for(part_a.to_dict(), shop, access, buying=["910480"])
+    rows = [t for s in bought["setups"] for t in s["tools"]]
+    assert len(bought["setups"]) == 1
+    assert [t["owned"] for t in rows if t["name"] == "910480"] == [False]
+    assert len(sheet_for(part_a.to_dict(), shop, access, buying=[])["setups"]) == 2
+
+
+def test_a_shop_note_is_written_once_even_when_the_job_retries(part_a, shop, catalog_access):
+    from anville.agent.job import shop_note_writes, sheet_for
+
+    sheet = sheet_for(part_a.to_dict(), shop, [a.to_dict() for a in catalog_access], buying=["910480"])
+    note = {"event": "shop.note", "note_id": "n1", "sheet_id": "s1", "outcome": "as_planned",
+            "tools_arrived": ["910480"], "tags": [], "setups_run": 1, "note_text": ""}
+    first = shop_note_writes(note, sheet, stored=[])
+    assert [e["payload"]["kind"] for e in first] == ["shop_note", "tool_acquired"]
+    stored = [{"id": i, **e} for i, e in enumerate(first, 1)]
+    assert shop_note_writes(note, sheet, stored=stored) == []
+    # and what it wrote is what the next review learns from
+    owns, learned = review_shop(stored)
+    assert "910480" in {t.name for t in owns.back_chamfer_tools} and "910480" in learned
+
+
+def test_a_cutter_the_shop_already_owns_is_not_being_bought():
+    from types import SimpleNamespace as NS
+
+    from anville.agent.job import buying_from
+
+    opt = lambda owned: NS(kind="add_tool", params={"type": "back_chamfer", "name": "910480", "owned": owned})  # noqa: E731
+    pick = [NS(action="propose", option_key="k")]
+    assert buying_from(NS(decisions=pick, options={"k": opt(False)})) == ["910480"]
+    assert buying_from(NS(decisions=pick, options={"k": opt(True)})) == []
+    assert buying_from(NS(decisions=[NS(action="quiet", option_key="k")], options={"k": opt(False)})) == []

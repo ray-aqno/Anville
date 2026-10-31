@@ -98,4 +98,41 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
             on = f" on {source['on']}" if source.get("on") else ""
             comment += f"\nIt plans with the {name} the shop bought{on}."
     return comment or None, {"agent_calls": r.model_calls, "agent_fallbacks": r.fallbacks,
-                               "agent_usage": r.usage}
+                               "agent_usage": r.usage, "buying": buying_from(r)}
+
+
+def buying_from(r) -> list[str]:
+    """The catalog back-chamfer cutters the review proposed buying: the setup sheet plans with them, unowned, so
+    the traveler can tick them as arrived (demo gap 2)."""
+    names = []
+    for d in r.decisions:
+        o = r.options.get(d.option_key) if d.action == "propose" else None
+        if o and o.kind == "add_tool" and o.params.get("type") == "back_chamfer" and o.params.get("owned") is False:
+            names.append(o.params["name"])
+    return sorted(set(names))
+
+
+def sheet_for(facts: dict, shop: ShopProfile, back_chamfer: list[dict], *, buying: list[str] = (),
+              provenance: dict[str, dict] | None = None) -> dict:
+    """The setup sheet the shop runs: the plan with the cutters the review decided to buy (demo gap 3)."""
+    from dataclasses import replace
+
+    from anville.geometry import BACK_CHAMFER_CATALOG, min_setups
+    from anville.shop.sheet import setup_sheet
+
+    part = PartFacts.from_dict(facts)
+    access = [BackChamferAccess.from_dict(a) for a in back_chamfer]
+    catalog = {c.name: c for c in BACK_CHAMFER_CATALOG}
+    with_bought = replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, *(catalog[n] for n in buying)])
+    plan = min_setups(part, with_bought, back_chamfer=access)
+    return setup_sheet(part, shop, plan, back_chamfer=access, provenance=provenance, buying=tuple(buying))
+
+
+def shop_note_writes(note: dict, sheet: dict, *, stored: list[dict]) -> list[dict]:
+    """A shop note's ledger entries not already written: by the note they came from and their kind, so a retried
+    job writes nothing twice."""
+    from anville.shop.ledger import shop_note_entries
+
+    seen = {(r["provenance"].get("decision"), r["payload"].get("kind")) for r in stored}
+    return [e for e in shop_note_entries(note, sheet=sheet)
+            if (e["provenance"]["decision"], e["payload"]["kind"]) not in seen]

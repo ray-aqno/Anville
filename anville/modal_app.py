@@ -34,6 +34,8 @@ from anville.connectors.onshape.events import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# What the panel's traveler records as shop:<request_id> (ADR 0007 Amendment 3).
+SHOP_NOTE_EVENT = "shop.note"
 
 app = modal.App("anville")
 _base = modal.Image.debian_slim(python_version="3.12")
@@ -358,6 +360,8 @@ def handle_event(key: str) -> None:
         name = ev.payload.get("event")
         if name == CREATE_VERSION:
             _on_create_version(store, ev, deadline)
+        elif name == SHOP_NOTE_EVENT:
+            _on_shop_note(store, ev)
         elif name == COMMENT_CREATE:
             time.sleep(SELF_COMMENT_RECHECK_S)
             cid = ev.payload["commentId"]
@@ -375,6 +379,47 @@ def handle_event(key: str) -> None:
             nxt = None
         if nxt:
             handle_event.spawn(nxt)
+
+
+def _on_shop_note(store, ev) -> None:
+    """A machinist's note from the traveler (ADR 0007 Amendment 3) goes to the shop ledger, so the next review
+    starts from it: a cutter ticked as arrived becomes one the shop owns (demo gaps 2 and 3)."""
+    from anville.agent.job import SHOP_SCOPE, shop_note_writes
+
+    note = ev.payload
+    sheet = store.call.remote("event", f"sheet:{note.get('sheet_id')}")
+    if sheet is None:
+        _log("ignored", reason="shop note for an unknown sheet", key=ev.key, sheet_id=note.get("sheet_id"))
+        return
+    try:
+        entries = shop_note_writes(note, sheet.payload, stored=store.call.remote("read_ledger", "shop_outcome",
+                                                                                 SHOP_SCOPE))
+    except ValueError as e:  # the panel validates first; a note that still fails costs only itself
+        _log("shop_note_rejected", key=ev.key, error=str(e)[:300])
+        return
+    for entry in entries:
+        store.call.remote("append_ledger", "shop_outcome", SHOP_SCOPE, entry["payload"], entry["provenance"])
+    _log("shop_note_recorded", key=ev.key, kinds=[e["payload"]["kind"] for e in entries])
+
+
+def _store_sheet(store, did: str, vid: str, facts: dict, back_chamfer: list[dict], ledger: list[dict],
+                 buying: list[str], trace: "_Trace") -> str | None:
+    """The setup sheet the shop runs, stored for the traveler as event sheet:<id>. A sheet failure costs only the
+    sheet, never the review."""
+    import uuid
+
+    from anville.agent.job import review_shop, sheet_for
+
+    try:
+        shop, learned = review_shop(ledger)
+        sheet = sheet_for(facts, shop, back_chamfer, buying=buying, provenance=learned)
+        sid = uuid.uuid4().hex  # the link's HMAC is the capability, so the id needn't mean anything
+        store.call.remote("record", f"sheet:{sid}", did, {**sheet, "version_id": vid}, settled=True)
+    except Exception as e:
+        _log("sheet_failed", error=repr(e)[:300])
+        return None
+    trace.add("tool_result", "Setup sheet ready", sheet_id=sid, setups=len(sheet["setups"]), buying=buying)
+    return sid
 
 
 def _on_create_version(store, ev, deadline: float) -> None:
@@ -433,6 +478,8 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
     message = (_agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing, deadline)
                or _review_message(vid, plan))
+    timing["sheet_id"] = _store_sheet(store, did, vid, result["facts"], result["back_chamfer"], ledger,
+                                      timing.get("buying") or [], trace)
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
