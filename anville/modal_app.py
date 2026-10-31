@@ -283,7 +283,10 @@ def web():
         def write_note(key: str, document_id: str, payload: dict) -> bool:
             inserted = StoreSvc().call.remote("record", key, document_id, payload)
             if inserted:  # handled now, not at the reaper's next pass: the "arrived" tap shows up in Part B's review
-                handle_event.spawn(key)
+                try:
+                    handle_event.spawn(key)
+                except Exception as e:  # the note is durable; the reaper runs it (Codex, PR #44)
+                    _log("spawn_failed", key=key, error=repr(e)[:300])
             return inserted
 
         api.include_router(make_sheet_router(read_sheet, write_note, panel_secret=secret))
