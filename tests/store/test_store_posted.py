@@ -53,3 +53,13 @@ def test_a_settled_record_is_stored_done_and_never_reaped(store, clock):
     assert store.event("sheet:abc").payload["schema"] == "anville.setup_sheet/1"
     assert [e.key for e in store.reapable(60)] == []
     assert store.claim("sheet:abc") is None
+
+
+def test_a_posted_comment_leads_back_to_the_event_that_posted_it(store):
+    """ADR 0012: a reply's parentId is how Anville finds the review it answers."""
+    store.reserve_post("version:v1", "review")
+    store.complete_post("version:v1", "review", "c-root")
+    assert store.post_for_comment("c-root") == ("version:v1", "review")
+    assert store.post_for_comment("c-unknown") is None
+    store.reserve_post("version:v2", "review")  # reserved, never confirmed: no comment id to match
+    assert store.post_for_comment("") is None

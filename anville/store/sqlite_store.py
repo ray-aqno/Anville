@@ -333,6 +333,16 @@ class Store:
             if cur.rowcount != 1:
                 raise KeyError(f"no reserved post for {event_key} / {kind}")
 
+    def post_for_comment(self, comment_id: str) -> tuple[str, str] | None:
+        """(event_key, kind) of the post that created `comment_id`, or None: how a reply's parentId leads back to
+        the review it answers (ADR 0012)."""
+        if not comment_id:
+            return None
+        row = self._conn().execute(
+            "SELECT event_key, kind FROM posted WHERE comment_id = ?", (comment_id,)
+        ).fetchone()
+        return (row[0], row[1]) if row else None
+
     def already_posted(self, event_key: str, kind: str) -> bool:
         """True once reserved, confirmed or not."""
         row = self._conn().execute(
