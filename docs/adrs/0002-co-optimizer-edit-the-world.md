@@ -69,7 +69,7 @@ Constraints on the design: setup count is computed from geometry, never guessed 
   - the connector needs a map from a face group to the Onshape feature that made it (one `features` read; the spike found deterministic IDs).
 - **Revisit:** if a demo needs partial removal (one edge of a multi-edge chamfer feature), since suppression is all-or-nothing per CAD feature.
 
-## Amendment 2 (Proposed, 2026-10-30): a protected face's removal may be shown as the declined alternative
+## Amendment 2 (Accepted by Rayyan Aquino, 2026-10-30): a protected face's removal may be shown as the declined alternative
 
 **Context.** Rayyan chose demo beat (c) on 2026-10-30. As Amendment 1 already found (PR #8, `evaluate_edits`), and RFC 0005 restates, the only part edit on Parts A and B that lowers setups is removing the bottom chamfer, and that chamfer's intent is stated (weld clearance). Amendment 1 says such an edit is "rejected before scoring", so it can never be built or shown. Beat (c) needs it to be shown, honestly, as the alternative the designer declines: "or remove the chamfer: 1 setup, but it loses weld clearance".
 
