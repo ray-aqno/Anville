@@ -67,3 +67,50 @@ def test_a_rule_becomes_a_ledger_entry_and_back_into_a_constraint(part_a, shop, 
 def test_nothing_read_names_what_stays_open():
     assert nothing_read(["G3"], 2) == "Anville read this reply, but not as a decision on G3; the plan stands at 2 setup(s)."
     assert nothing_read(["G3", "G6"], 1).startswith("Anville read this reply, but not as a decision on G3 or G6;")
+
+
+# --- Codex, PR #38 ------------------------------------------------------------------------------------------
+
+def test_own_comments_are_recognised_without_ephemeral_state():
+    """P1: if the in-memory self: entry is lost, Anville's re-plan would read as a designer reply and loop."""
+    from anville.agent.reply import is_own_comment
+    from anville.connectors.onshape.oauth import KEYS_HEADER
+
+    posted = {"c-replan": ("comment:c-reply", "replan")}.get
+    assert is_own_comment({"id": "c-replan", "message": "x"}, posted)
+    assert is_own_comment({"id": "c-new", "message": KEYS_HEADER + "posted on the owner's keys"}, posted)
+    assert not is_own_comment({"id": "c-designer", "message": "keep it"}, posted)
+
+
+def test_a_reply_under_a_replan_finds_its_review_through_durable_records():
+    """P1: the thread map lived only in ephemeral state."""
+    from anville.agent.reply import resolve_review
+
+    posts = {"c-root": ("version:v1", "review"), "c-replan": ("comment:c-reply1", "replan")}.get
+    parents = {"c-reply1": "c-root"}
+    get_parent = parents.get
+    assert resolve_review("c-root", posts, get_parent) == "version:v1"
+    assert resolve_review("c-replan", posts, get_parent) == "version:v1"
+    assert resolve_review("c-elsewhere", posts, get_parent) is None
+    loop = {"c-a": ("comment:c-b", "replan"), "c-b": ("comment:c-a", "replan")}.get
+    assert resolve_review("c-a", loop, {"c-b": "c-a", "c-a": "c-b"}.get) is None  # bounded, never spins
+
+
+def test_only_constraints_from_the_reviewed_version_apply():
+    """P1: face labels are stable only within one STEP, so another version's G3 must not protect this one's."""
+    rows = [{"id": 1, "payload": {"face_group": "G3", "rule": "keep", "reason": "a", "version_id": "v1"},
+             "provenance": {}},
+            {"id": 2, "payload": {"face_group": "G3", "rule": "may_change", "reason": "b", "version_id": "v2"},
+             "provenance": {}}]
+    assert [c["id"] for c in constraints_from_ledger(rows, version_id="v1")] == [1]
+
+
+def test_a_retried_reply_appends_nothing_twice():
+    """P1: a job retried after append_ledger would re-append, and the old rule would become the newest."""
+    from anville.agent.reply import unrecorded
+
+    entry = constraint_entry(keep(), reply_id="c-reply", review_key="version:v1", version_id="v1")
+    stored = [{"id": 5, **entry}]
+    assert unrecorded([entry], stored) == []
+    other = constraint_entry(keep(group="G6"), reply_id="c-reply", review_key="version:v1", version_id="v1")
+    assert unrecorded([entry, other], stored) == [other]

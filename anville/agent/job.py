@@ -105,12 +105,14 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
 
 def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, reply: str, *,
                     model: ChatModel | None = None, deadline: float | None = None,
-                    back_chamfer: list[dict] = ()) -> tuple[list[dict] | None, list[str], int]:
+                    back_chamfer: list[dict] = (),
+                    issue_shop: ShopProfile | None = None) -> tuple[list[dict] | None, list[str], int]:
     """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now).
 
     The groups are the issues code finds on this version, so a rule can only be about a face the review could
     have raised. `rules` is None when the agent is off or the read fell back; the job then answers with
-    `nothing_read`, never a guessed rule.
+    `nothing_read`, never a guessed rule. `issue_shop`: the shop as it was when the review ran, so a cutter
+    bought since doesn't hide the issue the designer is answering (Codex, PR #38). `setups` is today's.
     """
     from anville.agent.reply import read_reply
     from anville.agent.review import find_issues
@@ -119,7 +121,8 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
     part = PartFacts.from_dict(facts)
     access = [BackChamferAccess.from_dict(a) for a in back_chamfer]
     plan = min_setups(part, shop, back_chamfer=access)
-    issues = find_issues(part, plan)
+    then = plan if issue_shop is None else min_setups(part, issue_shop, back_chamfer=access)
+    issues = find_issues(part, then)
     raised = {i.face_group: i.kind for i in issues}
     groups = list(dict.fromkeys(i.face_group for i in issues))
     if env.get("ANVILLE_AGENT", "on") != "on":

@@ -60,9 +60,40 @@ def constraint_entry(rule: dict, *, reply_id: str, review_key: str, version_id: 
             "provenance": {"comment": reply_id, "review": review_key}}
 
 
-def constraints_from_ledger(rows: list[dict]) -> list[dict]:
-    """read_ledger rows -> tag_intents constraints, oldest first (the newest per group wins there)."""
-    return [{"id": row["id"], **row["payload"]} for row in rows]
+def constraints_from_ledger(rows: list[dict], *, version_id: str | None = None) -> list[dict]:
+    """read_ledger rows -> tag_intents constraints, oldest first (the newest per group wins there). With
+    `version_id`, only that version's: face labels are stable within one STEP only (Codex, PR #38)."""
+    return [{"id": row["id"], **row["payload"]} for row in rows
+            if version_id is None or row["payload"].get("version_id") == version_id]
+
+
+def unrecorded(entries: list[dict], stored: list[dict]) -> list[dict]:
+    """The entries not already in the ledger, by reply and face group: a retried job appends nothing twice, so
+    an old reply can't become the newest rule (Codex, PR #38)."""
+    seen = {(r["provenance"].get("comment"), r["payload"].get("face_group")) for r in stored}
+    return [e for e in entries if (e["provenance"]["comment"], e["payload"]["face_group"]) not in seen]
+
+
+def is_own_comment(info: dict, post_for_comment) -> bool:
+    """Anville's own comment, from durable records: the posted table, or the header a comment carries when it
+    went out on the owner's keys. The in-memory self: entry can be lost (Codex, PR #38, P1: a self-loop)."""
+    from anville.connectors.onshape.oauth import KEYS_HEADER
+
+    return post_for_comment(info.get("id", "")) is not None or (info.get("message") or "").startswith(KEYS_HEADER)
+
+
+def resolve_review(parent_id: str, post_for_comment, parent_of, hops: int = 4) -> str | None:
+    """The review event a thread answers. A parent that's Anville's re-plan leads back through the designer reply
+    it answered, by durable records only, and in at most `hops` steps (Codex, PR #38)."""
+    for _ in range(hops):
+        post = post_for_comment(parent_id) if parent_id else None
+        if post is None:
+            return None
+        key, kind = post
+        if kind == "review":
+            return key
+        parent_id = parent_of(key.split(":", 1)[1])  # replan posts are keyed comment:<the reply they answered>
+    return None
 
 
 def nothing_read(groups: list[str], setups: int) -> str:

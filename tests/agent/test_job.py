@@ -193,3 +193,19 @@ def test_agent_comment_passes_the_constraints_to_the_review(part_a, shop, chamfe
     comment, _ = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None,
                                model=Scripted(wrong, wrong, wrong, wrong), constraints=[keep])
     assert "weld clearance" in comment  # the kept chamfer's reason reaches the rendered line
+
+
+def test_a_reply_turn_reads_the_groups_the_review_raised_not_todays(part_a, shop, chamfer):
+    """Codex, PR #38 (P1): after the shop buys the cutter, today's plan has no G3 issue, but the designer is
+    answering the review that raised it."""
+    from dataclasses import replace
+
+    from anville.agent.job import read_reply_turn
+    from anville.geometry import BACK_CHAMFER_CATALOG
+    from tests.agent.test_reply import rules
+
+    owns = replace(shop, back_chamfer_tools=list(BACK_CHAMFER_CATALOG))
+    keep = {"face_group": chamfer, "rule": "keep", "quote": "weld clearance"}
+    found, groups, _ = read_reply_turn(part_a.to_dict(), owns, {}, lambda *a, **k: None, "weld clearance, keep it",
+                                       model=Scripted(rules(keep)), issue_shop=shop)
+    assert groups == [chamfer] and found == [keep]
