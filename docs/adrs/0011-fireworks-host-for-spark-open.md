@@ -153,3 +153,5 @@ Labels: **verified** means checked today against main (`f1b5496`) or the live Fi
 - **Baseten baseline,** same reader, the no-rules case only: **9/10**, with 1 identical miss.
 - **Reading:** the over-read happens on both hosts. At n=10, 3/10 and 1/10 can't be told apart, so this is a weakness in the reader (a generic approval quoted as a decision), not a host difference. The bar of at least 9/10 per case is **not met** on Fireworks.
 - **Next:** tighten the reader so a reply that only approves or thanks decides nothing (the prompt, the validator, or both; agent lane). Then re-run the no-rules case on both hosts: about $0.04 per 10 on Fireworks. Until the bar is met, the reader stays on Baseten (§3).
+
+Re-run on 7c23e8a (ACKNOWLEDGEMENT rule): no rules 10/10; keep 3/3 and may_change 3/3 as a regression check. Gate passed; Fireworks is the reader's primary host.
