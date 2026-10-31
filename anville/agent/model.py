@@ -178,3 +178,39 @@ class FailoverModel:
             except ModelUnavailable as e:
                 error = e
         raise error
+
+
+# The credits line under every comment (rubric: visible Meta tooling). It is rendered by code from the job's call
+# records (stage, model, host, latency_s), so it names only what ran. A new stage needs only a role here.
+ROLES = {"read_reply": "reply read by", "plan": "reviewed by", "decide": "reviewed by", "verify": "checked by",
+         "fix_branch": "fix drafted by", "fix_patch": "fix drafted by", "anchor": "flags anchored by"}
+_MODELS = (("muse-spark-open", "Muse Spark Open"), ("muse-wonder", "Muse Wonder"), ("sam-3", "SAM 3.1"),
+           ("muse-code", "Muse Code"))
+_HOSTS = (("baseten", "Baseten"), ("api.meta.ai", "Meta API"), ("fireworks", "Fireworks"), ("modal", "Modal"))
+
+
+def _known(name: str, table) -> str:
+    """A display name for a model id or host; an id nobody listed is shown as itself."""
+    low = (name or "").lower()
+    if low.startswith("muse-spark-") and "open" not in low:
+        return f"Muse Spark {name[len('muse-spark-'):]}"  # muse-spark-1.3 -> Muse Spark 1.3
+    return next((shown for part, shown in table if part in low), name or "unknown")
+
+
+def credits_line(calls: list[dict], fallbacks=()) -> str:
+    """'Reviewed by Muse Spark Open (Baseten) · checked by Muse Spark 1.3 (Meta API) · 3 model calls · 20 s'.
+    Every call counts, retries and failures included; the time is the calls' own, which run one after another."""
+    if not calls:
+        return ""
+    by_role: dict[str, dict[str, list[str]]] = {}
+    for c in sorted(calls, key=lambda c: list(ROLES).index(c["stage"]) if c["stage"] in ROLES else len(ROLES)):
+        hosts = by_role.setdefault(ROLES.get(c["stage"], f"{c['stage']} by"), {}).setdefault(
+            _known(c.get("model"), _MODELS), [])
+        if _known(c.get("host"), _HOSTS) not in hosts:
+            hosts.append(_known(c.get("host"), _HOSTS))
+    parts = [f"{role} " + ", ".join(f"{m} ({', '.join(h)})" for m, h in models.items())
+             for role, models in by_role.items()]
+    seconds = max(1, round(sum(c.get("latency_s") or 0 for c in calls)))
+    parts += [f"{len(calls)} model calls", f"{seconds} s"] + [f"{s} fell back to code" for s in fallbacks]
+    line = " · ".join(parts)
+    return line[0].upper() + line[1:]

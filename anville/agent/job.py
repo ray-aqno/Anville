@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from anville.agent.model import ChatModel, OpenAICompatModel
+from anville.agent.model import ChatModel, OpenAICompatModel, credits_line
 from anville.agent.review import Emit, run_review
 from anville.geometry import PartFacts, ShopProfile
 from anville.geometry.access import BackChamferAccess
@@ -109,6 +109,13 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
                                "agent_usage": r.usage, "buying": buying_from(r)}
 
 
+def with_credits(message: str, calls: list[dict], fallbacks=()) -> str:
+    """The message with the credits line last (rubric: visible Meta tooling): which models did this comment's
+    work, on which hosts, from the call records. A message no model worked on gets no line."""
+    line = credits_line(calls, fallbacks)
+    return f"{message}\n{line}" if line else message
+
+
 def buying_from(r) -> list[str]:
     """The catalog back-chamfer cutters the review proposed buying: the setup sheet plans with them, unowned, so
     the traveler can tick them as arrived (demo gap 2)."""
@@ -171,8 +178,9 @@ def sheet_id_for(event_key: str) -> str:
 def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, reply: str, *,
                     model: ChatModel | None = None, deadline: float | None = None,
                     back_chamfer: list[dict] = (),
-                    issue_shop: ShopProfile | None = None) -> tuple[list[dict] | None, list[str], int]:
-    """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now).
+                    issue_shop: ShopProfile | None = None) -> tuple[list[dict] | None, list[str], int, tuple]:
+    """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now, and the
+    reader's (call records, fallbacks) for the credits line).
 
     The groups are the issues code finds on this version, so a rule can only be about a face the review could
     have raised. `rules` is None when the agent is off or the read fell back; the job then answers with
@@ -191,18 +199,18 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
     raised = {i.face_group: i.kind for i in issues}
     groups = list(dict.fromkeys(i.face_group for i in issues))
     if env.get("ANVILLE_AGENT", "on") != "on":
-        return None, groups, plan.count
+        return None, groups, plan.count, ([], [])
     try:
         model = model or OpenAICompatModel.from_env(env, "reply")  # Fireworks first (ADR 0011 Amendment 1)
         found, run = read_reply(model, reply, raised, emit=emit, deadline=deadline)
     except Exception as e:  # a reader bug must not cost the designer an answer
         emit("error", "Reading the reply failed", stage="read_reply", error=repr(e)[:300])
-        return None, groups, plan.count
+        return None, groups, plan.count, ([], [])
     # The host that actually read the reply, after any failover (ADR 0011 Amendment 1; Codex, PR #47).
     calls = list(run.usage)
     emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None,
          host=calls[-1].get("host") if calls else None, calls=calls)
-    return found, groups, plan.count
+    return found, groups, plan.count, (run.usage, run.fallbacks)
 
 
 def removal_alternative(facts: dict, shop: ShopProfile, back_chamfer: list[dict] = ()):
