@@ -36,3 +36,16 @@ def test_the_panel_token_is_never_the_oauth_admin_token():
     env = {"ANVILLE_WEBHOOK_SECRET": "w", "ANVILLE_OAUTH_ADMIN_TOKEN": "a"}
     assert panel_secret({**env, "ANVILLE_PANEL_TOKEN": "a"}) is None
     assert panel_secret({**env, "ANVILLE_PANEL_TOKEN": "p"}) == "p"
+
+
+def test_the_sheet_link_is_signed_and_needs_a_panel_token():
+    """The comment's link to the traveler (demo gap 3): /sheet/<id>?s=<sig>, on the deployed web app."""
+    from anville.deploy import sheet_link
+    from anville.panel import sheet_sig
+
+    env = {"ANVILLE_PANEL_TOKEN": "p" * 32, "ANVILLE_WEBHOOK_SECRET": "w" * 32,
+           "ANVILLE_PUBLIC_URL": "https://example--anville-web.modal.run/"}
+    link = sheet_link(env, "ab12")
+    assert link == f"https://example--anville-web.modal.run/sheet/ab12?s={sheet_sig('p' * 32, 'ab12')}"
+    assert sheet_link({**env, "ANVILLE_PANEL_TOKEN": ""}, "ab12") is None  # no traveler mounted: no link
+    assert sheet_link(env, None) is None
