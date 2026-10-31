@@ -193,7 +193,7 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
     if env.get("ANVILLE_AGENT", "on") != "on":
         return None, groups, plan.count
     try:
-        model = model or OpenAICompatModel.from_env(env, "open")
+        model = model or OpenAICompatModel.from_env(env, "reply")  # Fireworks first (ADR 0011 Amendment 1)
         found, _ = read_reply(model, reply, raised, emit=emit, deadline=deadline)
     except Exception as e:  # a reader bug must not cost the designer an answer
         emit("error", "Reading the reply failed", stage="read_reply", error=repr(e)[:300])
