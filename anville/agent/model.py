@@ -86,12 +86,15 @@ class OpenAICompatModel:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str], which: str = "open") -> "OpenAICompatModel":
-        """`open`: Muse Spark Open on Baseten. `spark`: muse-spark-1.3 on the Meta Model API, at low effort."""
+        """`open`: Muse Spark Open on Baseten. `spark`: muse-spark-1.3 on the Meta Model API, at low effort.
+        `wonder`: muse-wonder-1.0 on the Meta Model API."""
         if which == "open":
             return cls(env["MUSE_SPARK_OPEN_BASE_URL"], env["MUSE_SPARK_OPEN_API_KEY"],
                        env["MUSE_SPARK_OPEN_MODEL_ID"])
         if which == "spark":
             return cls(META_API, env["MODEL_API_KEY"], env["MUSE_SPARK_MODEL_ID"], reasoning_effort="low")
+        if which == "wonder":  # Muse Wonder, Muse Code's model, writes the fix branch's patch (ADR 0004 Am.)
+            return cls(META_API, env["MODEL_API_KEY"], env.get("MUSE_WONDER_MODEL_ID") or "muse-wonder-1.0")
         raise ValueError(f"unknown model {which!r}")
 
     def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None,
