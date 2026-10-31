@@ -444,8 +444,11 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
              edit_kind=r["kind"], face_group=r.get("face_group"), reason=r["reason"])
     priced, costed = _price(facts, shop, plan, options, emit)
     for o in options.values():
-        emit("option", "Option scored", stage="plan", key=o.key, side=o.side, setups_before=o.before.setups,
-             setups_after=o.after.setups, changes_plan=o.changes_plan, **priced.get(o.key, {}))
+        # The comment's own wording, slots filled, so the panel never re-derives names from keys (panel lane).
+        name = _name(o).replace(f"{{{{option.{o.key}.tool}}}}", str(o.params.get("name", o.key)))
+        emit("option", "Option scored", stage="plan", key=o.key, name=name, edit_kind=o.kind, params=dict(o.params),
+             side=o.side, setups_before=o.before.setups, setups_after=o.after.setups,
+             changes_plan=o.changes_plan, **priced.get(o.key, {}))
     ranked = _rank(costed, shop, chosen, options, emit)
     # A lead that wins only on the tie-break must not read as the cheapest (ADR 0010 §5): code names its rivals.
     rivals = {r.lead: [k for k in r.top if k != r.lead] for r in ranked.values() if r.lead and r.basis == "mid_range"}

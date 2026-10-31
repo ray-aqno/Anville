@@ -134,3 +134,61 @@ The agent emits trace events. The panel only reads them, plus one write endpoint
 **Revisit:**
 - if the free plan's API limits turn out too small for comment volume;
 - if the panel needs per-designer OAuth (ADR 0007's "Later").
+
+## Amendment 2 (Accepted, Rayyan Aquino, 2026-10-30): panel contract details
+
+Drafted by the panel lane against `anville/panel/DESIGN.md`. Main agreed the panel lane drafts it (2026-10-29). Only Rayyan accepts it. Each claim is labelled **verified**, **prior** or **inference**.
+
+**1. Onshape client messages** (verified: onshape-public.github.io/docs/app-dev/messages/element-right-panel/, read 2026-10-29).
+- The panel sends `applicationInit` first, with `documentId`, `workspaceId` and `elementId`.
+- It accepts an incoming message only when `event.origin` equals the `server` query parameter Onshape passed in the extension URL.
+- After a valid `applicationInit`, Onshape sends `SELECTION` messages on user selection.
+- Right panels also support:
+  - `requestSelection` (the user picks entities, with a count and a type filter);
+  - `requestSelectionHighlight` (highlights entities in the viewport);
+  - `requestViewerImage`, `showMessageBubble` and `keepAlive`.
+- **Not documented:** the fields of `SELECTION`, and the `selections` format for `requestSelectionHighlight`. They get probed live once the extension is registered.
+- **Supersedes:** the forum note in Context says apps can't read a selection made before the panel opened. That doesn't matter now: the panel asks for a fresh pick with `requestSelection`.
+
+**2. Trace additions (agent side).** Every field is optional, so the panel renders "—" when one is missing and never estimates. Main's PR #24 adds the first three rows below, and per-stage flushing. Main's PR #26 (stacked on #24) adds the cost, "Costs compared" and "Used what the shop learned" rows, and brings back `ask`.
+
+| Event | Field | Shape |
+|---|---|---|
+| `tool_call` "Model called" (new; main's PR #24) | `stage`, `model`, `host`, `attempt` | emitted **before** each model call, and the trace flushes right after it, so it arrives live. It is the panel's stage-start signal: the chip shows the model and host while the call runs |
+| `verify` "Agent finished" | `calls[].latency_s`; `calls[].error` | float, seconds, per model call (main's PR #24). A failed call (`ModelUnavailable`, timeouts included) has `latency_s` and `error` and no token counts |
+| "Sentence checked", "Sentence verified", "Sentence not supported" | `text` | the sentence after slot filling, exactly as the designer would read it |
+| `decision` "Decision made" | `action`, `question` | a proposal may carry one question (PR #23). Action `ask` (no `option_key`) comes only where no shop-side fix exists (PR #26); the panel shows it as a flag card with its question |
+| `option` "Option scored" (plan-changing options only) | `one_time`, `costs`, `payback`, `payback_mid`, `complete`, `unpriced` | flat in `detail`, the shop lane's `Route` field names: `one_time` [lo, hi]; `costs` {quantity: [lo, hi]}; `payback` [lo or null, hi or null], or null when the route can't make the whole part; `payback_mid` int or null. The panel never fills in an end of the payback range that never pays off |
+| `option` "Option scored" | `name`, `edit_kind`, `params` | `name` is the comment's own wording for the fix (review `_name()`, slots filled, lower case); `params` holds the option's numbers (`radius`, `depth`, `angle`, `owned`, ...). The panel capitalizes `name` and adds the numbers, so the panel and the comment can't drift. A trace without `name` falls back to plain words from the key (main's PR #26) |
+| `decision` "Costs compared" (stage plan) | `verdicts`, `inputs`, `scenarios` | `verdicts` [{quantity, recommended, leader, flip}]; `inputs` {name: {lo, hi, unit, status, source}}. The panel shows `recommended`, or "depends" when it is null, and names every input whose status is `placeholder`. It never headlines `leader`: that can win only because an input is unpriced. Ranking waits on ADR 0010 |
+| `run_started` | `detail.trigger` | `version`, `reply` or `ask` |
+| any event that names a face group | `face_ids` + `element_id` | per the original contract; lets the panel highlight the face |
+| `tool_result` "Used what the shop learned" (PR #26) | `tools` | {name: {review, decision, option, on}}. Replaces the `ledger_used` field proposed here earlier. The panel lights its "learned" node and names the tools |
+
+**Verify indexes** count the sentences that passed the check, not the model's original sentence indexes (verified, `review.py`, `verify_sentences`). The panel maps them back; the agent side doesn't need to change.
+
+**3. Endpoints.**
+- `GET /panel/assets/{name}` serves the panel's static code from a fixed allowlist of file names, with no token. It holds no data, and the repo is public.
+- `GET /api/runs?documentId=&t=` returns `{"runs": [{"run_id", "events": [...]}], "cursor": int}`:
+  - at most the latest 5 runs, oldest first;
+  - `cursor` is the highest cursor returned, or 0.
+  - The server pages through `trace_after` to reach the latest runs. *Inference:* a `trace_tail` store op would save that paging on long documents, but it isn't needed at hackathon volumes.
+- `GET /api/stream?documentId=&after=&t=` uses this framing:
+  - `retry: 1000` first;
+  - per event: `id: <cursor>`, `event: trace`, `data: <event JSON>`;
+  - the comment `: hb` as a heartbeat;
+  - the server closes after about 55 s, and the browser reconnects.
+  - The resume point is the greater of `after` and the `Last-Event-ID` header, because `EventSource` reconnects with its original URL.
+- `POST /api/ask` stores `microversion_id` as sent, or null.
+  - **Change from the original contract:** recording the workspace's current microversion moves from insert time to the job that answers the ask, because the panel lane makes no Onshape REST calls.
+  - The stored payload is the request body plus `"event": "panel.ask"` and `received_at`.
+  - It returns 202 `{"event_id": "ask:<request_id>"}` when inserted, or 200 with the same body on a duplicate.
+
+**4. Auth.**
+- The panel token is env `ANVILLE_PANEL_TOKEN`. It's checked in constant time on `/panel` and every `/api/*`, and a mismatch or a document off the allowlist returns 404.
+- The setup sheet page (P2) never uses `t`, because a link in an Onshape comment is visible to every collaborator on the document. It will use a per-sheet capability, `HMAC(ANVILLE_PANEL_TOKEN, "sheet:" + sheet_id)`, valid for that sheet and its shop note only.
+- The P2 endpoints are specified in a later amendment, when P2 is built.
+
+**Consequences.**
+- **Easier:** both lanes build against named fields, and the panel degrades to "—" while main adds them one at a time.
+- **Harder:** a seven-field extension that the panel's synthetic fixtures must track until a real trace dump replaces them.

@@ -944,3 +944,15 @@ def test_one_fix_covering_two_issues_asks_once(shop, tmp_path):
     r = run_review(facts, shop, None)
     assert sum(d.question is not None for d in r.decisions) == 1
     assert sum("required as modelled?" in line for line in r.comment.splitlines()) == 1
+
+
+def test_option_scored_carries_the_plain_name_and_params(part_a, shop, catalog_access):
+    """Panel lane: it re-derived names from keys, and an owned cutter ("use the shop's") can't be told
+    from the key. The trace now carries review's own name, slots filled, plus kind and params."""
+    events = []
+    run_review(part_a, shop, None, back_chamfer=catalog_access,
+               emit=lambda kind, title, **d: events.append((title, d)))
+    scored = {d["key"]: d for t, d in events if t == "Option scored"}
+    buy = next(d for k, d in scored.items() if k.startswith("add_tool/"))
+    assert buy["name"] == "buying the 910480 back-chamfer cutter" and buy["edit_kind"] == "add_tool"
+    assert buy["params"]["owned"] is False and "{{" not in "".join(d["name"] for d in scored.values())
