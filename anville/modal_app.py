@@ -272,6 +272,24 @@ def web():
         api.include_router(make_router(
             lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n), None,
             panel_secret=secret, allowed_docs=_allowed))
+
+        # The shop's traveler (ADR 0007 Amendment 3, PR #42): the sheet the review stored, and the machinist's note.
+        from anville.panel import make_sheet_router
+
+        def read_sheet(sheet_id: str):
+            ev = StoreSvc().call.remote("event", f"sheet:{sheet_id}")
+            return (ev.document_id, ev.payload) if ev else None
+
+        def write_note(key: str, document_id: str, payload: dict) -> bool:
+            inserted = StoreSvc().call.remote("record", key, document_id, payload)
+            if inserted:  # handled now, not at the reaper's next pass: the "arrived" tap shows up in Part B's review
+                try:
+                    handle_event.spawn(key)
+                except Exception as e:  # the note is durable; the reaper runs it (Codex, PR #44)
+                    _log("spawn_failed", key=key, error=repr(e)[:300])
+            return inserted
+
+        api.include_router(make_sheet_router(read_sheet, write_note, panel_secret=secret))
     else:
         _log("panel_unmounted", reason="ANVILLE_PANEL_TOKEN is unset or equals the webhook secret")
 
@@ -589,6 +607,11 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
                or _review_message(vid, plan))
     timing["sheet_id"] = _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"], ledger,
                                       timing.get("buying") or [], trace)
+    from anville.deploy import sheet_link
+
+    link = sheet_link(os.environ, timing["sheet_id"])
+    if link:  # the setup sheet goes to the shop with the review (demo spine, beat 2)
+        message += f"\nSetup sheet for the shop: {link}"
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.

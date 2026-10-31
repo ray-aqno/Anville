@@ -23,3 +23,20 @@ def panel_secret(env: Mapping[str, str]) -> str | None:
     token = env.get("ANVILLE_PANEL_TOKEN", "")
     taken = {env.get("ANVILLE_WEBHOOK_SECRET"), env.get("ANVILLE_OAUTH_ADMIN_TOKEN")}
     return token if token and token not in taken else None
+
+
+PUBLIC_URL = "https://ray-aqno--anville-web.modal.run"
+
+
+def sheet_link(env: Mapping[str, str], sheet_id: str | None) -> str | None:
+    """The comment's link to the shop's traveler, signed as `anville.panel.sheet_sig` signs it (a test holds the
+    two equal; that module needs FastAPI, which the deploying machine lacks). None without a panel token: the
+    traveler isn't mounted then, so a link would 404."""
+    import hashlib
+    import hmac
+
+    secret = panel_secret(env)
+    if not secret or not sheet_id:
+        return None
+    sig = hmac.new(secret.encode(), f"sheet:{sheet_id}".encode(), hashlib.sha256).hexdigest()
+    return f"{env.get('ANVILLE_PUBLIC_URL', PUBLIC_URL).rstrip('/')}/sheet/{sheet_id}?s={sig}"
