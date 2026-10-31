@@ -188,6 +188,11 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
         # Why code rejected the model's sentences, so a new rule's cost shows (e.g. #37's cost claims).
         "sentence_rejections": [("cost_claim" if "cheapest" in e.get("reason", "") else "other")
                                 for e in events if e["title"] == "Sentence checked" and not e.get("ok")],
+        # The full reasons, to break rejections down by rule: code's check, then the verifier.
+        "dropped_sentences": [{"by": "check" if e["title"] == "Sentence checked" else "verifier",
+                               "reason": e.get("reason", ""), "text": e.get("text", "")}
+                              for e in events if (e["title"] == "Sentence checked" and not e.get("ok"))
+                              or e["title"] == "Sentence not supported"],
         "retries": [u["stage"] for i, u in enumerate(r.usage) if any(v["stage"] == u["stage"] for v in r.usage[:i])],
     }
 

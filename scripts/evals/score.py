@@ -183,3 +183,12 @@ def model_line_share(comment: str, model_lines: int) -> tuple[int, int]:
     review lines). `model_lines` comes from the trace ("Comment assembled" carries model_sentences)."""
     lines = [ln for ln in comment.splitlines() if ln.strip() and not ln.startswith(_NOT_REVIEW)]
     return model_lines, len(lines)
+
+
+def reply_read_right(found: list[dict] | None, expected: list[tuple[str, str, str | None]]) -> bool:
+    """#38's read_reply: the rules read match the label exactly, preference included. Code already checks
+    each quote is the designer's own words; it can't check the words support the rule, so this does, by label.
+    A fallback (None) is a miss."""
+    if found is None:
+        return False
+    return sorted((r["face_group"], r["rule"], r.get("prefer")) for r in found) == sorted(expected)
