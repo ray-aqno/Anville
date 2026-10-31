@@ -998,3 +998,29 @@ def test_a_designer_who_explicitly_wants_the_shop_fix_gets_it(part_a, costed, ch
     (ranked,) = [d for t, d in events if t == "Fixes ranked"]
     assert ranked["lead"] == BUY and not any(k.startswith("remove_feature/") for k in ranked["top"])
     assert r.decisions[0].option_key == BUY
+
+
+def test_a_freed_faces_part_edits_are_scored_even_if_plan_asks_only_for_shop_fixes(part_a, costed, chamfer,
+                                                                                    catalog_access):
+    """Codex, PR #41 (P1): the removal was offered only when Plan asked for it."""
+    removal = f"remove_feature/{chamfer}"
+    rm = {"issue_id": "I1", "action": "propose", "option_key": removal, "reason": "x"}
+    shop_only = plan({"kind": "route_machine"}, {"kind": "add_tool", "face_group": chamfer})
+    r = run_review(part_a, costed, Scripted(shop_only, decide(rm)), back_chamfer=catalog_access,
+                   constraints=_freed(chamfer))
+    assert removal in r.options and r.decisions[0].option_key == removal
+
+
+def test_an_explicit_side_with_no_fix_falls_back_to_the_other_side():
+    """Codex, PR #41: asking for a part edit when none changes the plan must not leave the review quiet."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _fallback_decision
+
+    shop_fix = NS(key="route_machine/5", side="shop", face_group=None, changes_plan=True)
+    no_help = NS(key="set_depth/G3", side="part", face_group="G3", changes_plan=False)
+    issue = NS(id="I1", face_group="G3")
+    d = _fallback_decision(issue, False, [no_help, shop_fix], prefer="part_edit")
+    assert (d.action, d.option_key) == ("propose", "route_machine/5")
+    helps = NS(key="remove_feature/G3", side="part", face_group="G3", changes_plan=True)
+    assert _fallback_decision(issue, False, [shop_fix, helps], prefer="part_edit").option_key == "remove_feature/G3"

@@ -431,6 +431,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         # them `ask_only` and the conditional line never exist (gate on #26: undercut went quiet 3 of 10).
         requests = requests + [r for i in selected if gates[i] for r in all_requests(by_id[i].face_group)
                                if r not in requests]
+        # And on a face the designer freed: its part edits are ranked with the shop fixes, so they must be scored
+        # whatever Plan asked for (ADR 0010 Amendment 1; Codex, PR #41).
+        requests = requests + [r for i in selected if intents[by_id[i].face_group].status == "free"
+                               for r in all_requests(by_id[i].face_group) if r not in requests]
     emit("decision", "Issues chosen", stage="plan", selected=selected)
     if not selected:
         # Nothing chosen: the later stages would have nothing to work on (live run, 2026-10-28).
@@ -523,7 +527,10 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 if rank and key in considered[issue.id] and not rank.lead and key not in rank.top:
                     return None, f"{key} costs more than {rank.top} at every input: lead with one of those (ADR 0010)"
                 prefer = intents[issue.face_group].prefer
-                if {"shop_fix": "part", "part_edit": "shop"}.get(prefer) == options[key].side:
+                unwanted = {"shop_fix": "part", "part_edit": "shop"}.get(prefer)
+                wanted_exists = any(o.changes_plan and o.side != unwanted and o.face_group in (None, issue.face_group)
+                                    for o in options.values())
+                if unwanted == options[key].side and wanted_exists:
                     return None, (f"the designer explicitly asked for a {prefer.replace('_', ' ')} on "
                                   f"{issue.face_group}: lead with one")
                 if key in barred.get(issue.id, ()):
@@ -846,7 +853,9 @@ def _with_intent_questions(decisions: list[Decision], by_id: dict[str, Issue], i
 def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option], ranking=None,
                        considered=(), prefer: str = "") -> Decision:
     unwanted = {"shop_fix": "part", "part_edit": "shop"}.get(prefer)  # the designer said which side, explicitly
-    mine = [o for o in options if o.face_group in (None, issue.face_group) and o.side != unwanted]
+    mine = [o for o in options if o.face_group in (None, issue.face_group)]
+    if any(o.changes_plan and o.side != unwanted for o in mine):
+        mine = [o for o in mine if o.side != unwanted]  # only if the side they asked for has a fix (Codex, PR #41)
     if ranking and ranking.top:  # ADR 0010: the ranked lead, else the first of the top tier, leads among the ranked
         first = ranking.lead or ranking.top[0]
         mine = sorted(mine, key=lambda o: o.key in considered and o.key != first)
