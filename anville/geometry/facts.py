@@ -53,6 +53,7 @@ class FaceFacts:
     concave_radius: float | None = None  # concave cylinders (fillets, holes)
     concave_axis: str | None = None      # "X" | "Y" | "Z" when that cylinder's axis is principal
     stock_neighbors: list[int] = field(default_factory=list)  # stock faces sharing an edge with this one
+    box: list[list[float]] | None = None  # tight axis-aligned [[x, y, z] low, high], mm; None in older facts
 
 
 @dataclass(frozen=True)
