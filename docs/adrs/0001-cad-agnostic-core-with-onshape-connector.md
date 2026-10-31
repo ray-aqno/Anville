@@ -1,6 +1,6 @@
 # ADR 0001: CAD-agnostic core with an Onshape connector
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
 - **Date:** 2026-10-26
 
 ## Context

@@ -1,6 +1,7 @@
 # ADR 0003: The model drives the loop, tools compute every number
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
+- **Partly superseded:** the free tool layer, by ADR 0009's stage graph. The guards, trust boundary, concurrency and provenance rules stand.
 - **Date:** 2026-10-26
 - **Depends on:** ADR 0002
 
@@ -58,7 +59,7 @@ ADR 0002 defines a deterministic planner and an edit catalog. Something has to d
 - **Harder:** prompt and tool-schema changes need regression runs against recorded fixtures with a scripted fake model.
 - **Revisit:** if the tool-calling probe fails, or if 8 calls aren't enough for parts with several constraints.
 
-## Amendment 1 (Proposed, 2026-10-27): probe result and the agent eval gate
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-30, delegated review): probe result and the agent eval gate
 
 **Probe result (measured 2026-10-27, `scripts/probe_tool_calls.py`).** Setup: 2 tools (`evaluate_edits`, `ask_designer`) with JSON schemas, 20 synthetic review situations, one request each. A call is valid when there is exactly one tool call, its name is known, and its arguments parse and pass the schema.
 
