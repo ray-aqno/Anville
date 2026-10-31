@@ -1,0 +1,325 @@
+{
+ "what": "#45 at a036c3e (lowest-cost claim, citable quantity, works_from) merged with main",
+ "repo_sha": "4541f85",
+ "spent_usd": 1.2906,
+ "runs": {
+  "not_needed_and_keep": {
+   "a_reply_not_needed": {
+    "trials": 10,
+    "gated": {
+     "no_bare_question": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "numbers_from_code": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "removal_conditional_only": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     },
+     "any_intent_leads": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     },
+     "survived": {
+      "passed": 19,
+      "runs": 20,
+      "bar": 0.9,
+      "ok": true
+     },
+     "raised": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 0.95,
+      "ok": true
+     },
+     "plan_changing_fix": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 0.95,
+      "ok": true
+     },
+     "ranked_lead": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "intent_asked": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     }
+    },
+    "ok": true,
+    "cost": 0.4099,
+    "latency_p50_s": 18.2,
+    "latency_max_s": 24.0,
+    "completion_tokens": {
+     "plan": {
+      "p50": 1761.5,
+      "max": 2537
+     },
+     "decide": {
+      "p50": 551.0,
+      "max": 910
+     },
+     "verify": {
+      "p50": 1409,
+      "max": 2340
+     }
+    },
+    "rejections": {
+     "invalid_answer": 8,
+     "no_tool_call": 1
+    },
+    "fallbacks": {
+     "decide": 1
+    },
+    "leads": {
+     "shop:add_tool/G3/+Z/BC45-910480": 10,
+     "part:remove_feature/G3": 10
+    },
+    "proposals": {
+     "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+     "part:remove_feature/G3": 10
+    },
+    "model_sentences": 49,
+    "sentences_checked": 60,
+    "repeated_fixes": 0,
+    "sentence_rejections": {},
+    "question_source": {
+     "code": 10
+    },
+    "retries": {
+     "decide": 8
+    },
+    "questions": 10,
+    "questions_naming_a_fix": 0,
+    "turn2_keeps_turn1_fix": "0/10"
+   },
+   "a_reply_keep": {
+    "trials": 10,
+    "gated": {
+     "no_bare_question": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "numbers_from_code": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "removal_conditional_only": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     },
+     "any_intent_leads": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     },
+     "survived": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 0.9,
+      "ok": true
+     },
+     "raised": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 0.95,
+      "ok": true
+     },
+     "shop_fix": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 0.95,
+      "ok": true
+     },
+     "ranked_lead": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "intent_asked": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     }
+    },
+    "ok": true,
+    "cost": 0.461,
+    "latency_p50_s": 19.4,
+    "latency_max_s": 35.7,
+    "completion_tokens": {
+     "plan": {
+      "p50": 1702.0,
+      "max": 4157
+     },
+     "decide": {
+      "p50": 603.0,
+      "max": 1005
+     },
+     "verify": {
+      "p50": 1607.5,
+      "max": 2618
+     }
+    },
+    "rejections": {
+     "invalid_answer": 5,
+     "no_tool_call": 1
+    },
+    "fallbacks": {},
+    "leads": {
+     "shop:add_tool/G3/+Z/BC45-910480": 20
+    },
+    "proposals": {
+     "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+     "shop:add_tool/G3/+Z/BC45-910480": 10
+    },
+    "model_sentences": 43,
+    "sentences_checked": 66,
+    "repeated_fixes": 0,
+    "sentence_rejections": {
+     "other": 1
+    },
+    "question_source": {
+     "code": 10
+    },
+    "retries": {
+     "decide": 4,
+     "plan": 2
+    },
+    "questions": 10,
+    "questions_naming_a_fix": 0,
+    "turn2_keeps_turn1_fix": "10/10"
+   }
+  },
+  "keep_rerun_with_rejection_reasons": {
+   "a_reply_keep": {
+    "trials": 10,
+    "gated": {
+     "no_bare_question": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "numbers_from_code": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "removal_conditional_only": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     },
+     "any_intent_leads": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     },
+     "survived": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 0.9,
+      "ok": true
+     },
+     "raised": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 0.95,
+      "ok": true
+     },
+     "shop_fix": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 0.95,
+      "ok": true
+     },
+     "ranked_lead": {
+      "passed": 20,
+      "runs": 20,
+      "bar": 1.0,
+      "ok": true
+     },
+     "intent_asked": {
+      "passed": 10,
+      "runs": 10,
+      "bar": 1.0,
+      "ok": true
+     }
+    },
+    "ok": true,
+    "cost": 0.4197,
+    "latency_p50_s": 19.4,
+    "latency_max_s": 28.4,
+    "completion_tokens": {
+     "plan": {
+      "p50": 1861.5,
+      "max": 3221
+     },
+     "decide": {
+      "p50": 596.0,
+      "max": 876
+     },
+     "verify": {
+      "p50": 1656.5,
+      "max": 2376
+     }
+    },
+    "rejections": {
+     "invalid_answer": 2
+    },
+    "fallbacks": {},
+    "leads": {
+     "shop:add_tool/G3/+Z/BC45-910480": 20
+    },
+    "proposals": {
+     "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+     "shop:add_tool/G3/+Z/BC45-910480": 10
+    },
+    "model_sentences": 43,
+    "sentences_checked": 64,
+    "repeated_fixes": 0,
+    "sentence_rejections": {
+     "other": 2
+    },
+    "question_source": {
+     "code": 10
+    },
+    "retries": {
+     "decide": 2
+    },
+    "questions": 10,
+    "questions_naming_a_fix": 0,
+    "turn2_keeps_turn1_fix": "10/10"
+   }
+  }
+ },
+ "note": "Prose: not_needed 49/60 (82%), keep 43/66 then 43/64 (about 66%); overall 73%. Decide retries 12/40 in the first run, 2/20 in the keep re-run (both the new cost-wording rule): variance, not a trend."
+}

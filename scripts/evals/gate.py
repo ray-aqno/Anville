@@ -183,6 +183,8 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
             x.question, CATALOG, next(i.face_group for i in r.issues if i.id == x.issue_id)) is False),
         "repeated_fixes": score.repeated_fixes(r),
         "rejections": [rejection_kind(e.get("reason", "")) for e in events if e["title"] == "Model answer rejected"],
+        "rejection_reasons": [(e.get("stage"), e.get("reason", "")[:200]) for e in events
+                              if e["title"] == "Model answer rejected"],
         "model_sentences": next((e["model_sentences"] for e in events if e["title"] == "Comment assembled"), 0),
         "sentences_checked": sum(1 for e in events if e["title"] == "Sentence checked"),
         # Why code rejected the model's sentences, so a new rule's cost shows (e.g. #37's cost claims).
