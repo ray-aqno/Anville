@@ -1,0 +1,564 @@
+{
+ "note": "SYNTHETIC: built by hand from the event shapes in anville/agent/review.py, job.py and modal_app.py (main at bb535a2), the Model-called event from main's PR #24, and ADR 0007 Amendment 2 fields. Replace with a real trace_after dump when main sends one.",
+ "document_id": "dSYN",
+ "events": [
+  {
+   "cursor": 1,
+   "run_id": "v6bbbbbb-1",
+   "seq": 1,
+   "ts": 1793299000.0,
+   "document_id": "dSYN",
+   "version_id": "v6bbbbbb0001",
+   "element_id": "eSYN",
+   "kind": "run_started",
+   "title": "Reviewing a new version",
+   "detail": {
+    "trigger": "version"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 2,
+   "run_id": "v6bbbbbb-1",
+   "seq": 2,
+   "ts": 1793299000.3,
+   "document_id": "dSYN",
+   "version_id": "v6bbbbbb0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Exporting STEP",
+   "detail": {
+    "translation_id": "tSYN"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 3,
+   "run_id": "v6bbbbbb-1",
+   "seq": 3,
+   "ts": 1793299008.3,
+   "document_id": "dSYN",
+   "version_id": "v6bbbbbb0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Setup count computed from geometry",
+   "detail": {
+    "setups": 2,
+    "faces": 42
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 4,
+   "run_id": "v6bbbbbb-1",
+   "seq": 4,
+   "ts": 1793299008.5,
+   "document_id": "dSYN",
+   "version_id": "v6bbbbbb0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Setup plan and issues computed",
+   "detail": {
+    "stage": "facts",
+    "setups": 2,
+    "issues": [
+     {
+      "id": "I1",
+      "kind": "forces_setup",
+      "face_group": "G5"
+     }
+    ]
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 5,
+   "run_id": "v6bbbbbb-1",
+   "seq": 5,
+   "ts": 1793299008.7,
+   "document_id": "dSYN",
+   "version_id": "v6bbbbbb0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Intent tagged and ask gate computed",
+   "detail": {
+    "stage": "intent",
+    "intents": {
+     "G5": {
+      "status": "protected",
+      "reason": "weld prep"
+     }
+    },
+    "ask_allowed": {
+     "I1": false
+    }
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 6,
+   "run_id": "v6bbbbbb-1",
+   "seq": 6,
+   "ts": 1793299009.2,
+   "document_id": "dSYN",
+   "version_id": "v6bbbbbb0001",
+   "element_id": "eSYN",
+   "kind": "run_finished",
+   "title": "Superseded by a newer version; nothing posted",
+   "detail": {},
+   "face_ids": []
+  },
+  {
+   "cursor": 7,
+   "run_id": "v7aaaaaa-1",
+   "seq": 1,
+   "ts": 1793300000.0,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "run_started",
+   "title": "Reviewing a new version",
+   "detail": {
+    "trigger": "version"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 8,
+   "run_id": "v7aaaaaa-1",
+   "seq": 2,
+   "ts": 1793300000.3,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Exporting STEP",
+   "detail": {
+    "translation_id": "tSYN"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 9,
+   "run_id": "v7aaaaaa-1",
+   "seq": 3,
+   "ts": 1793300008.3,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Setup count computed from geometry",
+   "detail": {
+    "setups": 2,
+    "faces": 42
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 10,
+   "run_id": "v7aaaaaa-1",
+   "seq": 4,
+   "ts": 1793300008.5,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Setup plan and issues computed",
+   "detail": {
+    "stage": "facts",
+    "setups": 2,
+    "issues": [
+     {
+      "id": "I1",
+      "kind": "forces_setup",
+      "face_group": "G5"
+     }
+    ]
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 11,
+   "run_id": "v7aaaaaa-1",
+   "seq": 5,
+   "ts": 1793300008.7,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Intent tagged and ask gate computed",
+   "detail": {
+    "stage": "intent",
+    "intents": {
+     "G5": {
+      "status": "protected",
+      "reason": "weld prep"
+     }
+    },
+    "ask_allowed": {
+     "I1": false
+    }
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 12,
+   "run_id": "v7aaaaaa-1",
+   "seq": 6,
+   "ts": 1793300008.75,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Model called",
+   "detail": {
+    "stage": "plan",
+    "model": "meta-models/muse-spark-open-1026",
+    "host": "model-x.api.baseten.co",
+    "attempt": 1
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 13,
+   "run_id": "v7aaaaaa-1",
+   "seq": 7,
+   "ts": 1793300013.75,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "error",
+   "title": "Model answer rejected",
+   "detail": {
+    "stage": "plan",
+    "tool": "plan_review",
+    "attempt": 1,
+    "reason": "every issue must be selected or dropped exactly once"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 14,
+   "run_id": "v7aaaaaa-1",
+   "seq": 8,
+   "ts": 1793300013.8,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Model called",
+   "detail": {
+    "stage": "plan",
+    "model": "meta-models/muse-spark-open-1026",
+    "host": "model-x.api.baseten.co",
+    "attempt": 2
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 15,
+   "run_id": "v7aaaaaa-1",
+   "seq": 9,
+   "ts": 1793300019.3,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Model answered",
+   "detail": {
+    "stage": "plan",
+    "tool": "plan_review",
+    "attempt": 2
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 16,
+   "run_id": "v7aaaaaa-1",
+   "seq": 10,
+   "ts": 1793300019.5,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "decision",
+   "title": "Issues chosen",
+   "detail": {
+    "stage": "plan",
+    "selected": [
+     "I1"
+    ]
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 17,
+   "run_id": "v7aaaaaa-1",
+   "seq": 11,
+   "ts": 1793300019.7,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_result",
+   "title": "Edit rejected: the face's intent is stated",
+   "detail": {
+    "stage": "plan",
+    "edit_kind": "remove_feature",
+    "face_group": "G5",
+    "reason": "stated intent: weld prep"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 18,
+   "run_id": "v7aaaaaa-1",
+   "seq": 12,
+   "ts": 1793300019.9,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "option",
+   "title": "Option scored",
+   "detail": {
+    "stage": "plan",
+    "key": "add_tool/G5/+Z/BC45-910480",
+    "side": "shop",
+    "setups_before": 2,
+    "setups_after": 1,
+    "changes_plan": true
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 19,
+   "run_id": "v7aaaaaa-1",
+   "seq": 13,
+   "ts": 1793300020.1,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "option",
+   "title": "Option scored",
+   "detail": {
+    "stage": "plan",
+    "key": "route_machine/5",
+    "side": "shop",
+    "setups_before": 2,
+    "setups_after": 1,
+    "changes_plan": true
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 20,
+   "run_id": "v7aaaaaa-1",
+   "seq": 14,
+   "ts": 1793300020.15,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Model called",
+   "detail": {
+    "stage": "decide",
+    "model": "meta-models/muse-spark-open-1026",
+    "host": "model-x.api.baseten.co",
+    "attempt": 1
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 21,
+   "run_id": "v7aaaaaa-1",
+   "seq": 15,
+   "ts": 1793300026.15,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "error",
+   "title": "Model answer rejected",
+   "detail": {
+    "stage": "decide",
+    "tool": "decide_and_write",
+    "attempt": 1,
+    "reason": "'add_tool/G9' was not offered"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 22,
+   "run_id": "v7aaaaaa-1",
+   "seq": 16,
+   "ts": 1793300026.2,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "tool_call",
+   "title": "Model called",
+   "detail": {
+    "stage": "decide",
+    "model": "meta-models/muse-spark-open-1026",
+    "host": "model-x.api.baseten.co",
+    "attempt": 2
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 23,
+   "run_id": "v7aaaaaa-1",
+   "seq": 17,
+   "ts": 1793300032.2,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "error",
+   "title": "Model answer rejected",
+   "detail": {
+    "stage": "decide",
+    "tool": "decide_and_write",
+    "attempt": 2,
+    "reason": "make exactly one decision per selected issue"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 24,
+   "run_id": "v7aaaaaa-1",
+   "seq": 18,
+   "ts": 1793300032.4,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "error",
+   "title": "Stage fell back to the fixed script",
+   "detail": {
+    "stage": "decide",
+    "reason": "make exactly one decision per selected issue"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 25,
+   "run_id": "v7aaaaaa-1",
+   "seq": 19,
+   "ts": 1793300032.6,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "decision",
+   "title": "Decision made",
+   "detail": {
+    "stage": "decide",
+    "issue_id": "I1",
+    "action": "propose",
+    "option_key": "add_tool/G5/+Z/BC45-910480",
+    "reason": "fixed script: best plan-changing option",
+    "question": null
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 26,
+   "run_id": "v7aaaaaa-1",
+   "seq": 20,
+   "ts": 1793300032.8,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Comment assembled",
+   "detail": {
+    "stage": "publish",
+    "model_sentences": 0
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 27,
+   "run_id": "v7aaaaaa-1",
+   "seq": 21,
+   "ts": 1793300033.0,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "verify",
+   "title": "Agent finished",
+   "detail": {
+    "stage": "publish",
+    "calls": [
+     {
+      "stage": "plan",
+      "model": "meta-models/muse-spark-open-1026",
+      "host": "model-x.api.baseten.co",
+      "prompt_tokens": 1166,
+      "completion_tokens": 842,
+      "prompt_tokens_details": {
+       "cached_tokens": 1152
+      }
+     },
+     {
+      "stage": "plan",
+      "model": "meta-models/muse-spark-open-1026",
+      "host": "model-x.api.baseten.co",
+      "prompt_tokens": 1166,
+      "completion_tokens": 842,
+      "prompt_tokens_details": {
+       "cached_tokens": 1152
+      }
+     },
+     {
+      "stage": "decide",
+      "model": "meta-models/muse-spark-open-1026",
+      "host": "model-x.api.baseten.co",
+      "prompt_tokens": 1166,
+      "completion_tokens": 611,
+      "prompt_tokens_details": {
+       "cached_tokens": 1152
+      }
+     },
+     {
+      "stage": "decide",
+      "model": "meta-models/muse-spark-open-1026",
+      "host": "model-x.api.baseten.co",
+      "prompt_tokens": 1166,
+      "completion_tokens": 611,
+      "prompt_tokens_details": {
+       "cached_tokens": 1152
+      }
+     }
+    ],
+    "fallbacks": [
+     "decide"
+    ]
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 28,
+   "run_id": "v7aaaaaa-1",
+   "seq": 22,
+   "ts": 1793300034.2,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "comment_posted",
+   "title": "Posted the review",
+   "detail": {
+    "comment_id": "cSYN2"
+   },
+   "face_ids": []
+  },
+  {
+   "cursor": 29,
+   "run_id": "v7aaaaaa-1",
+   "seq": 23,
+   "ts": 1793300034.3,
+   "document_id": "dSYN",
+   "version_id": "v7aaaaaa0001",
+   "element_id": "eSYN",
+   "kind": "run_finished",
+   "title": "Review finished",
+   "detail": {},
+   "face_ids": []
+  }
+ ]
+}
