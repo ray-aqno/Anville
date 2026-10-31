@@ -68,3 +68,18 @@ Constraints on the design: setup count is computed from geometry, never guessed 
   - the agent's `evaluate_edits` schema enum gains `remove_feature`, so ADR 0003's eval gate re-runs on that schema change;
   - the connector needs a map from a face group to the Onshape feature that made it (one `features` read; the spike found deterministic IDs).
 - **Revisit:** if a demo needs partial removal (one edge of a multi-edge chamfer feature), since suppression is all-or-nothing per CAD feature.
+
+## Amendment 2 (Proposed, 2026-10-30): a protected face's removal may be shown as the declined alternative
+
+**Context.** Rayyan chose demo beat (c) on 2026-10-30. Geometry's RFC 0005 found that on Parts A and B the only part edit that lowers setups is removing the bottom chamfer, and that chamfer's intent is stated (weld clearance). Amendment 1 says such an edit is "rejected before scoring", so it can never be built or shown. Beat (c) needs it to be shown, honestly, as the alternative the designer declines: "or remove the chamfer: 1 setup, but it loses weld clearance".
+
+**Decision.**
+1. **Never recommended, never merged.** An edit on a protected group still can't lead, can't be proposed, and is never applied to the designer's workspace. Decide's protected-face filter (ADR 0009 §4) is unchanged.
+2. **It may be scored and built as the declined alternative.** Code (not the model) may score it and build it on an `anville/alt-<run>` branch through the connector, labelled *measured* once the branch's STEP is re-counted.
+3. **It's always stated with its intent cost,** in a code-rendered line next to the recommended shop-side fix: "Or remove G3 on a branch: N setup(s), but it loses <stated reason>."
+4. **Only after the recommended fix,** never instead of it (flag, then suggest).
+
+**Consequences.**
+- **Easier:** the fix-branch beat runs on the demo's own Part A, so RFC 0005's proof calls can target it, not a proof copy.
+- **Harder:** the scorer runs some edits it then refuses to recommend. The trace must label them "declined alternative", so the panel never shows them as options.
+- **To revisit:** whether a designer's "not needed" reply can lift the protection (today only a ledger `may_change` rule does, per ADR 0012).
