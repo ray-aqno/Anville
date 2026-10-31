@@ -91,7 +91,7 @@ def _shop_ledger(store) -> list[dict]:
 # The Store methods a remote caller may run.
 STORE_OPS = frozenset({
     "record", "claim", "finish", "reapable", "event", "is_current",
-    "reserve_post", "complete_post", "already_posted", "unconfirmed_posts",
+    "reserve_post", "complete_post", "already_posted", "unconfirmed_posts", "post_for_comment",
     "append_trace", "trace_after", "append_ledger", "read_ledger",
     "reserve_call", "release_call", "calls",
 })
@@ -365,6 +365,7 @@ def handle_event(key: str) -> None:
                 _log("ignored", reason="own comment (late recheck, F1)", commentId=cid)
             else:
                 _log("designer_comment", commentId=cid, documentId=ev.document_id)
+                _on_reply(store, ev, deadline)
         ok = True
     finally:
         # A failed job is marked failed, not retried: the reaper only retries lost or expired claims.
@@ -393,6 +394,73 @@ def _on_create_version(store, ev, deadline: float) -> None:
         trace.add("run_finished", "Review ended with an error")
         trace.flush()
         raise
+
+
+def _on_reply(store, ev, deadline: float) -> None:
+    """ADR 0012: a reply under an Anville comment becomes constraints, and the same version is re-planned and
+    answered in the thread. Any other comment stays quiet."""
+    cid, did = ev.payload["commentId"], ev.document_id
+    client = _client()
+    reply = client.get(f"/comments/{cid}")
+    root = reply.get("parentId")  # inference until the live check (ADR 0012, open question 1)
+    post = store.call.remote("post_for_comment", root) if root else None
+    if post is None:
+        _log("ignored", reason="not a reply to Anville", commentId=cid)
+        return
+    review_key = post[0] if post[1] == "review" else state.get(f"thread:{root}")
+    review = store.call.remote("event", review_key) if review_key else None
+    if review is None or "versionId" not in review.payload:
+        _log("ignored", reason="reply thread has no review on record", commentId=cid, parentId=root)
+        return
+    vid = review.payload["versionId"]
+    trace = _Trace(store, did, f"{vid[:8]}-r{ev.attempts}", vid)
+    trace.add("run_started", "Reading a designer's reply", comment_id=cid)
+    try:
+        _replan(store, ev, trace, client, reply, root, review_key, vid, deadline)
+    except Exception as e:
+        trace.add("error", "Re-plan failed", error=type(e).__name__, message=str(e)[:300])
+        trace.add("run_finished", "Re-plan ended with an error")
+        trace.flush()
+        raise
+
+
+def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review_key: str, vid: str,
+            deadline: float) -> None:
+    from anville.agent.job import agent_comment, flushing_at_stage_changes, read_reply_turn, review_shop
+    from anville.agent.reply import constraint_entry, constraints_from_ledger, nothing_read
+
+    cid, did = ev.payload["commentId"], ev.document_id
+    ledger = _shop_ledger(store)
+    result = analyze.remote(vid, ledger)  # the version's STEP is already on the volume: no second export
+    shop, learned = review_shop(ledger)
+    emit = flushing_at_stage_changes(trace.add, trace.flush)
+    found, groups, setups = read_reply_turn(result["facts"], shop, os.environ, emit, reply.get("message") or "",
+                                            deadline=deadline, back_chamfer=result["back_chamfer"])
+    scope = f"doc:{did}"
+    for rule in found or []:
+        entry = constraint_entry(rule, reply_id=cid, review_key=review_key, version_id=vid)
+        store.call.remote("append_ledger", "constraint", scope, entry["payload"], entry["provenance"])
+        trace.add("tool_result", "Constraint recorded", face_group=rule["face_group"], rule=rule["rule"],
+                  quote=rule["quote"])
+    if found:
+        constraints = constraints_from_ledger(store.call.remote("read_ledger", "constraint", scope))
+        comment, _ = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
+                                   back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
+        message = comment or _review_message(vid, result["plan"])
+    else:
+        message = nothing_read(groups, setups) if groups else None
+    trace.flush()
+    if message and store.call.remote("reserve_post", ev.key, "replan"):
+        from anville.connectors.onshape.oauth import post_as_anville
+
+        posted, identity = post_as_anville(_anville_client(), client, {
+            "documentId": did, "parentId": root, "message": message})
+        state[f"self:{posted['id']}"] = time.time()
+        state[f"thread:{posted['id']}"] = review_key  # a reply under the re-plan still finds its review
+        store.call.remote("complete_post", ev.key, "replan", posted["id"])
+        trace.add("comment_posted", "Answered in the thread", comment_id=posted["id"], posted_as=identity)
+    trace.add("run_finished", "Re-plan finished")
+    trace.flush()
 
 
 def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:

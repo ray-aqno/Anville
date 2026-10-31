@@ -68,7 +68,8 @@ def flushing_at_stage_changes(add: Emit, flush) -> Emit:
 def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, *,
                   model: ChatModel | None = None, verifier: ChatModel | None = None,
                   deadline: float | None = None, back_chamfer: list[dict] = (),
-                  learned: dict[str, dict] | None = None) -> tuple[str | None, dict]:
+                  learned: dict[str, dict] | None = None,
+                  constraints: list[dict] | None = None) -> tuple[str | None, dict]:
     """The agent's comment and its run stats for the job's timing log.
 
     `ANVILLE_AGENT=off` skips it. Models come from `env` unless passed in; the verifier
@@ -84,7 +85,8 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
         if verifier is None and env.get("MODEL_API_KEY"):
             verifier = OpenAICompatModel.from_env(env, "spark")
         r = run_review(PartFacts.from_dict(facts), shop, model, verifier=verifier, emit=emit,
-                       deadline=deadline, back_chamfer=[BackChamferAccess.from_dict(a) for a in back_chamfer])
+                       deadline=deadline, back_chamfer=[BackChamferAccess.from_dict(a) for a in back_chamfer],
+                       constraints=constraints)
     except Exception as e:  # an agent bug must not cost the designer the review
         error = repr(e)[:300]
         emit("error", "Agent failed; posting the setup count instead", error=error)
@@ -99,3 +101,34 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
             comment += f"\nIt plans with the {name} the shop bought{on}."
     return comment or None, {"agent_calls": r.model_calls, "agent_fallbacks": r.fallbacks,
                                "agent_usage": r.usage}
+
+
+def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, reply: str, *,
+                    model: ChatModel | None = None, deadline: float | None = None,
+                    back_chamfer: list[dict] = ()) -> tuple[list[dict] | None, list[str], int]:
+    """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now).
+
+    The groups are the issues code finds on this version, so a rule can only be about a face the review could
+    have raised. `rules` is None when the agent is off or the read fell back; the job then answers with
+    `nothing_read`, never a guessed rule.
+    """
+    from anville.agent.reply import read_reply
+    from anville.agent.review import find_issues
+    from anville.geometry import min_setups
+
+    part = PartFacts.from_dict(facts)
+    access = [BackChamferAccess.from_dict(a) for a in back_chamfer]
+    plan = min_setups(part, shop, back_chamfer=access)
+    issues = find_issues(part, plan)
+    raised = {i.face_group: i.kind for i in issues}
+    groups = list(dict.fromkeys(i.face_group for i in issues))
+    if env.get("ANVILLE_AGENT", "on") != "on":
+        return None, groups, plan.count
+    try:
+        model = model or OpenAICompatModel.from_env(env, "open")
+        found, _ = read_reply(model, reply, raised, emit=emit, deadline=deadline)
+    except Exception as e:  # a reader bug must not cost the designer an answer
+        emit("error", "Reading the reply failed", stage="read_reply", error=repr(e)[:300])
+        return None, groups, plan.count
+    emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None)
+    return found, groups, plan.count
