@@ -1,6 +1,6 @@
 # ADR 0005: Multimodal evidence (drawings and shop photos), never multimodal geometry
 
-- **Status:** Proposed
+- **Status:** Rejected (Rayyan Aquino, 2026-10-30, by delegated review): nothing built, and it doesn't fit the build days left. Reopen with a new ADR after the event.
 - **Date:** 2026-10-26
 - **Depends on:** ADR 0002, ADR 0003, ADR 0004
 

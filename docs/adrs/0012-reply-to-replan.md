@@ -1,6 +1,6 @@
 # ADR 0012: A designer's reply becomes a constraint, and Anville re-plans in the same thread
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30)
 - **Date:** 2026-10-30
 - **Depends on:** ADR 0003 (webhooks keyed by `commentId`, F1 self-events), ADR 0006 (event store, per-document claims), ADR 0009 and its Amendment 1 (stage graph, flag then suggest; `tag_intents` already reads ledger constraints)
 - **Numbering:** 0010 is the shop lane's cost-ranked fixes; 0011 is Fireworks.

@@ -1,6 +1,6 @@
 # RFC 0002: Shop profile, narrowed to one provable shop-side fix
 
-- **Status:** Draft (revised after two Codex review passes, 2026-10-28)
+- **Status:** Closed (2026-10-30): implemented (anville/shop), and decided further in ADR 0010
 - **Date:** 2026-10-28
 - **Answers (in part):** the brief's open question "Shop profile format: machines, tool library, stock, fixturing, setup-cost rule"
 - **Depends on:** PR #12 (Part A's chamfer 2 mm → 1.5 mm), **merged**. At 2 mm, Part A would fail check c in §2, and this RFC's one-setup route wouldn't apply to it.

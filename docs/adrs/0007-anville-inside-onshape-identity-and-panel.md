@@ -1,6 +1,6 @@
 # ADR 0007: Anville inside Onshape: its own identity, a docked panel, and live edits
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
 - **Date:** 2026-10-27
 - **Depends on:** ADR 0001, ADR 0003, ADR 0006
 - **Amends:** ADR 0005 (where shop and designer inputs can come from)

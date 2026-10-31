@@ -1,6 +1,7 @@
 # ADR 0002: Resolve constraints on either side of the chain, by editing the world and re-planning
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
+- **Partly superseded:** §1's tie rule, by ADR 0010 (cost-ranked any-intent fixes, mid-range tie-break).
 - **Date:** 2026-10-26
 
 ## Context

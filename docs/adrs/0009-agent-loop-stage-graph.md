@@ -1,6 +1,6 @@
 # ADR 0009: The agent loop is a stage graph with a gated action space
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
 - **Date:** 2026-10-28
 - **Depends on:** RFC 0001 (Part A, option A3); ADR 0002 and Amendment 1 (`evaluate_edits`, `remove_feature`); ADR 0003 and Amendment 1 (tool calling, probe results, eval gate); ADR 0008 (`PartFacts`, `SetupPlan`)
 - **Feeds:** ADR 0007 (trace events and stages in the panel)
