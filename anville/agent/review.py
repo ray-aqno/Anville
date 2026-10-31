@@ -601,7 +601,9 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
     for i, d in enumerate(decisions):
         if d.question and any(a["issue_id"] == d.issue_id for a in asked) and d.issue_id not in supported:
             decisions[i] = replace(d, question=_intent_question(by_id[d.issue_id].face_group))
-            emit("decision", "Question replaced", stage="verify", issue_id=d.issue_id, question=decisions[i].question)
+            d = decisions[i]  # re-sent as "Decision made", the event the panel's card reads (Codex, PR #45)
+            emit("decision", "Decision made", stage="verify", issue_id=d.issue_id, action=d.action,
+                 option_key=d.option_key, question=d.question, reason=d.reason, question_replaced=True)
     decided_by = {d.issue_id: d for d in decisions}
     comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
                                              estimates, rivals), values, keys)
@@ -617,8 +619,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
 BASIS_MEANS = {  # what a ranking basis lets a sentence claim (ADR 0010); the verifier judges cost prose by it
     "dominates": "the lead costs less than every other ranked fix at every input in the shop's ranges",
-    "mid_range": "the lead costs least with every ranged shop input at its midpoint; another ranked fix costs less "
-                 "at some inputs, so it is not the cheapest everywhere",
+    "mid_range": "the lead costs least with every ranged shop input at its midpoint, but it is not shown to cost "
+                 "less than every other ranked fix at every input",
     "tie": "no ranked fix costs less than the others at every input or at the midpoints",
     "sole": "it is the only ranked fix that makes the whole part",
     "none": "no ranked fix makes the whole part",
@@ -708,7 +710,9 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
         for c in sent["cites"]:
             if c.startswith("decision:"):
                 d = decided_by[c.split(":", 1)[1]]
-                cited[c] = {"action": d.action, "option_key": d.option_key, "question": d.question}
+                # No question here: it is verified on its own and may be replaced, so prose can't rest on it
+                # (Codex, PR #45).
+                cited[c] = {"action": d.action, "option_key": d.option_key}
         items.append({"index": i, "text": fill_slots(sent["text"], values, keys)[0], "role": sent["role"],
                       "cites": cited})
 

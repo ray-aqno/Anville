@@ -1051,3 +1051,20 @@ def test_the_ranking_and_each_options_price_are_citable(part_a, costed, chamfer,
     assert cites["cost:I1"]["lead"] == BUY and cites["cost:I1"]["basis"] == "mid_range"
     assert "midpoint" in cites["cost:I1"]["means"]
     assert "cost:I1" in extra(model, 1)["nodes"]
+
+
+def test_a_replaced_question_reaches_the_panel_and_no_prose_rests_on_it(part_a, costed, chamfer, catalog_access):
+    """Codex, PR #45: the panel's card kept showing the rejected question, and a sentence could be verified
+    against a decision node that carried it."""
+    mine = f"Does the weld fixture need {chamfer}?"
+    line = {"text": f"Buying the cutter takes it to {{{{option.{BUY}.setups_after}}}} setup(s).", "role": "action",
+            "cites": ["decision:I1", f"option:{BUY}"]}
+    events = []
+    verifier = Scripted(verdicts(True, False), name="verifier")  # the sentence is fine; the question isn't
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine), comment=[line])),
+               verifier=verifier, back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+    made = [d for t, d in events if t == "Decision made"]
+    assert made[-1]["question"] == f"Is {chamfer} required as modelled?" and made[-1]["question_replaced"]
+    sent = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"]
+    assert sent[0]["cites"]["decision:I1"] == {"action": "propose", "option_key": BUY}  # no question to lean on
+    assert sent[1]["role"] == "question" and sent[1]["text"] == mine
