@@ -195,7 +195,8 @@ def ask_allowed(facts: PartFacts, shop: ShopProfile, issue: Issue, intent: Inten
 # --- slots ---------------------------------------------------------------------
 
 _SLOT = re.compile(r"\{\{([^{}]+)\}\}")
-_COST_CLAIM = re.compile(r"\bcheap(?:est|er)\b|\bleast expensive\b|\bcosts? less\b|\bless expensive\b", re.I)
+_COST_CLAIM = re.compile(r"\bcheap(?:est|er)\b|\bleast expensive\b|\bcosts? less\b|\bless expensive\b"
+                         r"|\blowest[- ]cost\b|\bcosts? the least\b", re.I)
 _INTERNAL = re.compile(r"\b(?:issue|intent|option|decision):|\b(?:intent|option|issue|plan)\.\w|\bI\d+\b")
 _ALLOWED_DIGITS = re.compile(r"\b[GI]\d+\b|\b[35]-axis\b|[+-][XYZ]\b")
 
@@ -222,8 +223,8 @@ def slot_source(slot: str, nodes: dict) -> str | None:
     """The node a slot's value comes from: option.<key>.<field> -> option:<key>, issue.<id>.<field> -> issue:<id>,
     plan.<field> -> plan. Option keys contain dots and slashes, so the field is the last segment."""
     head, _, rest = slot.partition(".")
-    if head == "plan":
-        return "plan" if "plan" in nodes else None
+    if head in ("plan", "costs"):
+        return head if head in nodes else None
     node = f"{head}:{rest.rsplit('.', 1)[0]}" if "." in rest else None
     return node if node in nodes else None
 
@@ -508,6 +509,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     values[f"option.{key}.{name}"] = str(v)
     keys = list(options)
     nodes = comment_nodes(plan, chosen, intents, options, priced=priced, ranked=ranked)
+    if "costs.quantity" in values:  # the quantity code prices at, so a sentence using it can be verified
+        nodes["costs"] = {"quantity": int(values["costs.quantity"]), "note": "the part count the costs are given at"}
 
     def v_decide(a):
         out = []
@@ -562,7 +565,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 return None, f"comment entry {i} needs text (string), role (context|action|reason) and cites (strings)"
             if rivals and _COST_CLAIM.search(sent["text"]):
                 return None, (f"comment entry {i} ranks the fixes by cost, but the lead wins only at mid-range inputs: "
-                              "don't call a fix cheapest or cheaper; code states the costs")
+                              "don't call a fix cheapest, cheaper or lowest-cost; say it leads at mid-range shop "
+                              "rates, or leave the costs to code")
         return (out, list(a["comment"])), ""
     offered = [{"key": k, "side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
@@ -651,6 +655,8 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
     for k, o in options.items():
         nodes[f"option:{k}"] = {"side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable}
+        if o.params.get("direction"):  # where the fix works from (models lane: prose put the cutter on -Z)
+            nodes[f"option:{k}"]["works_from"] = o.params["direction"]
         price = (priced or {}).get(k)
         if price:
             nodes[f"option:{k}"].update({f: price.get(f) for f in ("one_time", "payback", "payback_mid", "unpriced",

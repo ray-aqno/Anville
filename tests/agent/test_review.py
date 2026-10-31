@@ -1040,8 +1040,8 @@ def test_an_explicit_side_with_no_fix_falls_back_to_the_other_side():
 def test_the_ranking_and_each_options_price_are_citable(part_a, costed, chamfer, catalog_access):
     """Decide saw cost_ranking and paybacks, but a sentence about them could cite only option nodes with setup
     counts, so the verifier found 'no cited node supports' every cost claim (21 of 26 drops)."""
-    cost_line = {"text": "Of the fixes that work whatever G3 is for, buying the cutter costs the least at "
-                         "mid-range shop rates.", "role": "context", "cites": ["cost:I1"]}
+    cost_line = {"text": "Of the fixes that work whatever G3 is for, buying the cutter leads at mid-range shop "
+                         "rates.", "role": "context", "cites": ["cost:I1"]}
     buy = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
     model = Scripted(plan(*requests_for(chamfer)), decide(buy, comment=[cost_line]))
     verifier = Scripted(verdicts(True), name="verifier")
@@ -1091,3 +1091,23 @@ def test_the_verifier_sees_the_option_behind_a_filled_number(part_a, costed, cha
                verifier=verifier, back_chamfer=catalog_access)
     sent = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"]
     assert sent[0]["cites"][f"option:{BUY}"]["setups_after"] == 1
+    assert sent[0]["cites"][f"option:{BUY}"]["works_from"] == "+Z"  # the cutter works from the top
+
+
+
+def test_lowest_cost_is_a_cost_claim_and_the_quantity_and_direction_are_citable(part_a, costed, chamfer,
+                                                                               catalog_access):
+    """Models lane, 2026-10-31 (#45 re-run): 21 drops said "lowest cost" unconditionally (the check missed the
+    phrase), 15 used {{costs.quantity}} with no node behind it, 7 put the cutter on -Z."""
+    from anville.agent.review import _COST_CLAIM, slot_source
+
+    assert _COST_CLAIM.search("the lowest-cost fix") and _COST_CLAIM.search("buying it costs the least")
+    assert not _COST_CLAIM.search("it leads at mid-range shop rates")
+    assert slot_source("costs.quantity", {"costs": {}}) == "costs"
+    line = {"text": f"At {{{{costs.quantity}}}} parts, buying the cutter leads at mid-range shop rates.",
+            "role": "context", "cites": ["cost:I1"]}
+    verifier = Scripted(verdicts(True), name="verifier")
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(), comment=[line])),
+               verifier=verifier, back_chamfer=catalog_access)
+    cites = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"][0]["cites"]
+    assert cites["costs"]["quantity"] == 20
