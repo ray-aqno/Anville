@@ -23,9 +23,11 @@ READ_TOOL = _tool(
 )
 INSTRUCTIONS = ("Read the designer's reply to the review. For each face group the reply decides, say whether it "
                 "must stay as designed (keep) or may change (may_change), and quote the reply's words that say so. "
-                "If a reply that lets the face change also explicitly asks for one kind of fix (a shop fix such as "
-                "buying a tool, or a part edit such as removing the feature), give `prefer` and quote those words "
-                "too. Decide nothing the reply doesn't say; a reply that decides nothing gets no rules.")
+                "If a reply that lets the face change also explicitly asks for one kind of fix, give `prefer` and "
+                "quote those words too: a part edit (\"delete it\", \"remove the chamfer\") or a shop fix (\"buy "
+                "the cutter\", \"don't touch the model\"). Words that only allow a change (\"not needed\", \"it "
+                "can go\", \"isn't critical\") are permission, not a request: they get no `prefer`. Decide nothing "
+                "the reply doesn't say; a reply that decides nothing gets no rules.")
 
 
 def _norm(text: str) -> str:

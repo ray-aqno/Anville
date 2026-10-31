@@ -559,7 +559,9 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 "changes_plan": o.changes_plan} for k, o in options.items()]
     decided = run.ask("decide", "Decide each selected issue, then write the comment for the designer. Put node "
                       "ids only in `cites` (cite decision:<issue_id> for your own decisions), never in the text. "
-                      "Use only these slots for numbers.",
+                      "Use only these slots for numbers. A sentence proposing a fix states its result with "
+                      "that option's setups_after slot, e.g. \"Removing G3 takes it to "
+                      "{{option.remove_feature/G3.setups_after}} setup(s).\"",
                       base, {"selected": selected, "intents": intent_view, "ask_allowed": gates,
                              "ask_only": sorted(ask_only),
                              "cost_ranking": {i: {"top": list(r.top), "lead": r.lead, "basis": r.basis}
