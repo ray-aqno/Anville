@@ -45,8 +45,9 @@ BARS = {
     "survived": 0.90,  # Rayyan's patch; 90% is the probe's bar (ADR 0003 Amendment 1)
     "raised": 0.95, "shop_fix": 0.95, "plan_changing_fix": 0.95,  # the ruling's 19/20
 }
-COMMON = ["survived", "no_bare_question", "numbers_from_code"]
+COMMON = ["survived", "no_bare_question", "numbers_from_code", "ranked_lead"]  # ranked_lead: None if unranked
 UNKNOWN = ["raised", "any_intent_leads", "removal_conditional_only"]
+BARS["ranked_lead"] = 1.0  # ADR 0010: Decide rejects any other shop-side lead, so a miss is a bug
 STATED = "Weld clearance chamfer"
 REPLIES = {"keep": "Weld clearance for the frame tube", "may_change": "Edge break only, not needed"}
 
@@ -150,7 +151,9 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
     _slots.values = None
     results = {}
     for name in ([*COMMON, *checks] if r.issues else checks):
-        args = {"numbers_from_code": (r, values), "estimate_shown": (r, values), "survived": (r,),
+        ranked = {e["issue_id"]: e["lead"] for e in events if e["title"] == "Fixes ranked" and e.get("lead")}
+        args = {"ranked_lead": (r, g, ranked), "numbers_from_code": (r, values), "estimate_shown": (r, values),
+                "survived": (r,),
                 "no_bare_question": (r,), "nothing_raised": (r,), "asks_without_removal": (r,),
                 "flags_and_asks": (r,)}.get(name, (r, g))
         results[name] = getattr(score, name)(*args)
@@ -170,6 +173,10 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
         "rejections": [rejection_kind(e.get("reason", "")) for e in events if e["title"] == "Model answer rejected"],
         "model_sentences": next((e["model_sentences"] for e in events if e["title"] == "Comment assembled"), 0),
         "sentences_checked": sum(1 for e in events if e["title"] == "Sentence checked"),
+        # Why code rejected the model's sentences, so a new rule's cost shows (e.g. #37's cost claims).
+        "sentence_rejections": [("cost_claim" if "cheapest" in e.get("reason", "") else "other")
+                                for e in events if e["title"] == "Sentence checked" and not e.get("ok")],
+        "retries": [u["stage"] for i, u in enumerate(r.usage) if any(v["stage"] == u["stage"] for v in r.usage[:i])],
     }
 
 
@@ -204,6 +211,8 @@ def summarize(name: str, trials: list[list[dict]]) -> dict:
         "model_sentences": sum(t["model_sentences"] for t in turns),
         "sentences_checked": sum(t["sentences_checked"] for t in turns),
         "repeated_fixes": sum(t["repeated_fixes"] for t in turns),
+        "sentence_rejections": dict(Counter(k for t in turns for k in t.get("sentence_rejections", []))),
+        "retries": dict(Counter(s for t in turns for s in t.get("retries", []))),
         "questions": sum(len(t["questions"]) for t in turns),
         "questions_naming_a_fix": sum(t["questions_naming_a_fix"] for t in turns),
     }
@@ -221,7 +230,8 @@ def print_table(summary: dict, spent: float) -> None:
         print(f"{name:20} {'PASS' if s['ok'] else 'FAIL':5} {checks:58} {lat:>11} {s['cost']:6.3f}")
     print(f"\ntotal spend ${spent:.3f}")
     for name, s in summary.items():
-        extra = {k: s[k] for k in ("leads" if s.get("leads") else "proposals", "fallbacks", "rejections", "repeated_fixes", "questions",
+        extra = {k: s[k] for k in ("leads" if s.get("leads") else "proposals", "fallbacks", "rejections", "retries",
+                                   "sentence_rejections", "repeated_fixes", "questions",
                                    "questions_naming_a_fix", "turn2_keeps_turn1_fix") if s.get(k)}
         extra["model_sentences"] = f"{s['model_sentences']}/{s['sentences_checked']} published/written"
         print(f"  {name}: {json.dumps(extra)}")

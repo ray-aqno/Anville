@@ -129,6 +129,15 @@ def test_the_cutter_part_number_in_a_rendered_name_is_code_not_the_model():
     assert score.numbers_from_code(result(comment=text), VALUES)
 
 
+def test_the_lead_is_scored_against_the_trace_ranking_not_a_fixed_key():
+    """ADR 0010 on #37: the cost-ranked shop fix leads; the ranking comes from the "Fixes ranked" event."""
+    assert score.ranked_lead(result(propose(BUY)), "G3", {"I1": BUY})
+    assert not score.ranked_lead(result(propose(ROUTE)), "G3", {"I1": BUY})
+    assert score.ranked_lead(result(propose(ROUTE)), "G3", {}) is None  # code under test doesn't rank
+    # The ranking orders shop-side fixes; after "not needed", a part edit may lead (dry run, #37).
+    assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": BUY}) is None
+
+
 def test_a_dropped_or_quiet_issue_is_not_raised():
     assert score.raised(result(propose(ROUTE)), "G3")
     assert not score.raised(result(NS(issue_id="I1", action="quiet", option_key=None, question=None)), "G3")
