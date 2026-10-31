@@ -7,6 +7,8 @@ out of the free text by code.
 
 from __future__ import annotations
 
+import re
+
 from anville.agent.review import Emit, _obj, _Runner, _tool
 
 READ_TOOL = _tool(
@@ -26,8 +28,14 @@ INSTRUCTIONS = ("Read the designer's reply to the review. For each face group th
                 "If a reply that lets the face change also explicitly asks for one kind of fix, give `prefer` and "
                 "quote those words too: a part edit (\"delete it\", \"remove the chamfer\") or a shop fix (\"buy "
                 "the cutter\", \"don't touch the model\"). Words that only allow a change (\"not needed\", \"it "
-                "can go\", \"isn't critical\") are permission, not a request: they get no `prefer`. Decide nothing "
-                "the reply doesn't say; a reply that decides nothing gets no rules.")
+                "can go\", \"isn't critical\") are permission, not a request: they get no `prefer`. Thanks or "
+                "approval of the review in general (\"looks good\", \"thanks\", \"sounds good\") decides nothing "
+                "about a face. Decide nothing the reply doesn't say; a reply that decides nothing gets no rules.")
+
+# Words that only acknowledge the review. A quote made of nothing else can't say what a face needs (Fireworks
+# probe, ADR 0011 Amendment 1: "Thanks, looks good." was read as keep).
+ACKNOWLEDGEMENT = frozenset("thanks thank you ty looks look good great sounds ok okay lgtm nice cool perfect "
+                            "fine got it will do all the this that".split())
 
 
 def _norm(text: str) -> str:
@@ -49,6 +57,9 @@ def read_reply(model, reply: str, raised: dict[str, str], *, emit: Emit, deadlin
                 return None, f"rule is keep or may_change, not {rule!r}"
             if not quote.strip() or _norm(quote) not in _norm(reply):
                 return None, f"the quote for {g} must be the designer's own words, copied from the reply"
+            if set(re.findall(r"[a-z]+", quote.casefold())) <= ACKNOWLEDGEMENT:
+                return None, (f"{quote!r} only acknowledges the review: thanks or approval decides nothing about a "
+                              f"face. Give {g} a rule only if the reply says what {g} needs")
             if g in seen:
                 return None, f"one rule per face group: {g} has two"
             seen.add(g)

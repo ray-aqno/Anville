@@ -1,6 +1,6 @@
 """Run the panel locally against a trace fixture, dripped out at its recorded pace (no store, no Onshape).
 
-    uv run --with uvicorn python -m anville.panel.dev [fixture.json] [--speed 1.0]
+    uv run --with uvicorn python -m anville.panel.dev [fixture.json] [--speed 1.0] [--render face.png]
 
 Each event becomes visible once its recorded offset has passed (gaps longer than MAX_GAP_S are shortened,
 so a fixture's older runs don't hold up the newest). Serves on 127.0.0.1:8765 with token "dev". It also serves
@@ -43,11 +43,15 @@ def main() -> None:
     ap.add_argument("fixture", nargs="?", default=str(DEFAULT))
     ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--render", help="a PNG to serve as every version's flagged-face picture")
     args = ap.parse_args()
     data = json.loads(Path(args.fixture).read_text())
+    png = Path(args.render).read_bytes() if args.render else None
+    read_render = (lambda _version_id: png) if png else None
     app = FastAPI()
     app.include_router(make_router(dripping_reader(data["events"], args.speed), lambda *a, **k: True,
-                                   panel_secret=TOKEN, allowed_docs=lambda: {data["document_id"]}))
+                                   panel_secret=TOKEN, allowed_docs=lambda: {data["document_id"]},
+                                   read_render=read_render))
     sheets = {d["sheet_id"]: (d["document_id"], d["sheet"])
               for d in (json.loads(p.read_text()) for p in sorted(FIXTURES.glob("sheet_*.synthetic.json")))}
 
@@ -55,7 +59,9 @@ def main() -> None:
         print("shop note:", key, json.dumps(payload), flush=True)
         return True
 
-    app.include_router(make_sheet_router(sheets.get, note, panel_secret=TOKEN))
+    # The fixtures predate version_id on stored sheets: give them one, so --render shows on the sheet too.
+    sheets = {sid: (doc, {"version_id": "v-dev", **sheet}) for sid, (doc, sheet) in sheets.items()}
+    app.include_router(make_sheet_router(sheets.get, note, panel_secret=TOKEN, read_render=read_render))
     print(f"http://127.0.0.1:{args.port}/panel?documentId={data['document_id']}&t={TOKEN}", flush=True)
     for sid in sheets:
         print(f"http://127.0.0.1:{args.port}/sheet/{sid}?s={sheet_sig(TOKEN, sid)}", flush=True)

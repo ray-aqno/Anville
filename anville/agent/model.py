@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -18,6 +19,8 @@ from typing import Mapping, Protocol
 
 MIN_MAX_TOKENS = 4096
 META_API = "https://api.meta.ai/v1"
+FIREWORKS_API = "https://api.fireworks.ai/inference/v1"  # prior: Fireworks' OpenAI-compatible base URL
+FIREWORKS_SPARK_OPEN = "accounts/fireworks/models/muse-spark-open"  # fireworks.ai model page, 2026-10-31
 
 
 @dataclass
@@ -85,13 +88,23 @@ class OpenAICompatModel:
         self._timeout = timeout_s
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str], which: str = "open") -> "OpenAICompatModel":
-        """`open`: Muse Spark Open on Baseten. `spark`: muse-spark-1.3 on the Meta Model API, at low effort."""
+    def from_env(cls, env: Mapping[str, str], which: str = "open") -> "OpenAICompatModel | FailoverModel":
+        """`open`: Muse Spark Open on Baseten. `spark`: muse-spark-1.3 on the Meta Model API, at low effort.
+        `reply`: Muse Spark Open for the reply reader, on Fireworks then Baseten (ADR 0011 Amendment 1);
+        Baseten alone without a Fireworks key. `wonder`: muse-wonder-1.0 on the Meta Model API."""
         if which == "open":
             return cls(env["MUSE_SPARK_OPEN_BASE_URL"], env["MUSE_SPARK_OPEN_API_KEY"],
                        env["MUSE_SPARK_OPEN_MODEL_ID"])
+        if which == "reply":
+            if not env.get("FIREWORKS_API_KEY"):
+                return cls.from_env(env, "open")
+            fireworks = cls(env.get("FIREWORKS_BASE_URL", FIREWORKS_API), env["FIREWORKS_API_KEY"],
+                            env.get("FIREWORKS_MODEL_ID", FIREWORKS_SPARK_OPEN))
+            return FailoverModel([fireworks, cls.from_env(env, "open")])
         if which == "spark":
             return cls(META_API, env["MODEL_API_KEY"], env["MUSE_SPARK_MODEL_ID"], reasoning_effort="low")
+        if which == "wonder":  # Muse Wonder, Muse Code's model, writes the fix branch's patch (ADR 0004 Am.)
+            return cls(META_API, env["MODEL_API_KEY"], env.get("MUSE_WONDER_MODEL_ID") or "muse-wonder-1.0")
         raise ValueError(f"unknown model {which!r}")
 
     def call(self, messages: list[dict], tools: list[dict], *, max_tokens: int | None = None,
@@ -140,3 +153,64 @@ class OpenAICompatModel:
         if "error" in box:
             raise box["error"]
         return box["raw"]
+
+
+class FailoverModel:
+    """The same model on several hosts, tried in order on each call (ADR 0011). `host` names the host that
+    served the last call, so the trace credits the sponsor that did the work, not the one tried first."""
+
+    def __init__(self, models: list):
+        self.models = models
+        self.name = models[0].name
+        self.host = models[0].host
+
+    def call(self, messages: list[dict], tools: list[dict], *, timeout_s: float | None = None, **kw) -> Reply:
+        # One budget for the whole call: a backup host gets only the time the first left (Codex, PR #47),
+        # so a failover can't run past the job's deadline for posting.
+        started = time.monotonic() if timeout_s is not None else None
+        for i, m in enumerate(self.models):
+            left = None if started is None else timeout_s - (time.monotonic() - started if i else 0)
+            if left is not None and left <= 1:
+                break
+            self.host = m.host
+            try:
+                return m.call(messages, tools, timeout_s=left, **kw)
+            except ModelUnavailable as e:
+                error = e
+        raise error
+
+
+# The credits line under every comment (rubric: visible Meta tooling). It is rendered by code from the job's call
+# records (stage, model, host, latency_s), so it names only what ran. A new stage needs only a role here.
+ROLES = {"read_reply": "reply read by", "plan": "reviewed by", "decide": "reviewed by", "verify": "checked by",
+         "fix_branch": "fix drafted by", "fix_patch": "fix drafted by", "anchor": "flags anchored by"}
+_MODELS = (("muse-spark-open", "Muse Spark Open"), ("muse-wonder", "Muse Wonder"), ("sam-3", "SAM 3.1"),
+           ("muse-code", "Muse Code"))
+_HOSTS = (("baseten", "Baseten"), ("api.meta.ai", "Meta API"), ("fireworks", "Fireworks"), ("modal", "Modal"))
+
+
+def _known(name: str, table) -> str:
+    """A display name for a model id or host; an id nobody listed is shown as itself."""
+    low = (name or "").lower()
+    if low.startswith("muse-spark-") and "open" not in low:
+        return f"Muse Spark {name[len('muse-spark-'):]}"  # muse-spark-1.3 -> Muse Spark 1.3
+    return next((shown for part, shown in table if part in low), name or "unknown")
+
+
+def credits_line(calls: list[dict], fallbacks=()) -> str:
+    """'Reviewed by Muse Spark Open (Baseten) · checked by Muse Spark 1.3 (Meta API) · 3 model calls · 20 s'.
+    Every call counts, retries and failures included; the time is the calls' own, which run one after another."""
+    if not calls:
+        return ""
+    by_role: dict[str, dict[str, list[str]]] = {}
+    for c in sorted(calls, key=lambda c: list(ROLES).index(c["stage"]) if c["stage"] in ROLES else len(ROLES)):
+        hosts = by_role.setdefault(ROLES.get(c["stage"], f"{c['stage']} by"), {}).setdefault(
+            _known(c.get("model"), _MODELS), [])
+        if _known(c.get("host"), _HOSTS) not in hosts:
+            hosts.append(_known(c.get("host"), _HOSTS))
+    parts = [f"{role} " + ", ".join(f"{m} ({', '.join(h)})" for m, h in models.items())
+             for role, models in by_role.items()]
+    seconds = max(1, round(sum(c.get("latency_s") or 0 for c in calls)))
+    parts += [f"{len(calls)} model calls", f"{seconds} s"] + [f"{s} fell back to code" for s in fallbacks]
+    line = " · ".join(parts)
+    return line[0].upper() + line[1:]

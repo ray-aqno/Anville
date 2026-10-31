@@ -13,8 +13,10 @@ Register: python3 scripts/register_webhook.py <web URL printed by deploy>
 """
 
 import datetime as dt
+import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -46,7 +48,7 @@ image = _base.pip_install("fastapi[standard]").add_local_python_source("anville"
 # so only analyze() uses this image; the webhook stays small and starts fast.
 geo_image = (
     _base.apt_install("libgl1", "libx11-6")
-    .pip_install("cadquery-ocp-novtk==8.0.1.1.0")
+    .pip_install("cadquery-ocp-novtk==8.0.1.1.0", "meta-sam-parser==0.1.0")  # SAM's mask format (ADR 0007 Am. 4)
     .add_local_python_source("anville")
 )
 # .env is read only on the deploying machine; containers receive the values via the Secret.
@@ -80,6 +82,11 @@ SELF_COMMENT_RECHECK_S = 3
 REAPER_PERIOD_MIN = 5
 RECEIVED_GRACE_S = 60
 UNCONFIRMED_POST_S = 120
+
+# Background tasks append to the review's run from their own containers; their seq starts high so the run's
+# events stay distinct by task. The store orders by cursor, so seq only labels.
+BACKGROUND_SEQ = {"anchor": 1000, "branch": 2000}
+
 
 def _shop_scope() -> str:
     """The shop ledger scope for the current recording take (`modal run anville/modal_app.py::new_take`)."""
@@ -257,7 +264,7 @@ class _Trace:
             self.buf = []
 
 
-@app.function(image=image, secrets=secrets)
+@app.function(image=image, secrets=secrets, volumes={"/data": data})
 @modal.asgi_app()
 def web():
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -269,9 +276,22 @@ def web():
         from anville.panel import make_router
 
         # No writer yet: asks get 501 until panel.ask is handled (ADR 0012's loop; Codex, PR #34).
+        def read_render(version_id: str, document_id: str | None = None) -> bytes | None:  # ADR 0007 Am. 4
+            # SAM's picture of the flagged face. From the panel, only for a version of that document (Codex,
+            # PR #51); the sheet passes no document, since its version comes from its own signed sheet.
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", version_id or ""):
+                return None
+            if document_id is not None:
+                ev = StoreSvc().call.remote("event", f"version:{version_id}")
+                if ev is None or ev.document_id != document_id:
+                    return None
+            data.reload()  # written by anchor_task's container
+            path = Path(f"/data/render/{version_id}.png")
+            return path.read_bytes() if path.exists() else None
+
         api.include_router(make_router(
             lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n), None,
-            panel_secret=secret, allowed_docs=_allowed))
+            panel_secret=secret, allowed_docs=_allowed, read_render=read_render))
 
         # The shop's traveler (ADR 0007 Amendment 3, PR #42): the sheet the review stored, and the machinist's note.
         from anville.panel import make_sheet_router
@@ -289,7 +309,7 @@ def web():
                     _log("spawn_failed", key=key, error=repr(e)[:300])
             return inserted
 
-        api.include_router(make_sheet_router(read_sheet, write_note, panel_secret=secret))
+        api.include_router(make_sheet_router(read_sheet, write_note, panel_secret=secret, read_render=read_render))
     else:
         _log("panel_unmounted", reason="ANVILLE_PANEL_TOKEN is unset or equals the webhook secret")
 
@@ -528,7 +548,7 @@ def _on_reply(store, ev, deadline: float) -> None:
 
 def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, vid: str,
             deadline: float) -> None:
-    from anville.agent.job import agent_comment, flushing_at_stage_changes, read_reply_turn, review_shop
+    from anville.agent.job import agent_comment, flushing_at_stage_changes, read_reply_turn, review_shop, with_credits
     from anville.agent.reply import constraint_entry, constraints_from_ledger, nothing_read, unrecorded
 
     cid, did, review_key = ev.payload["commentId"], ev.document_id, review.key
@@ -538,8 +558,11 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
     # The issues the designer is answering are the review's: the shop as it was then (Codex, PR #38).
     then, _ = review_shop([r for r in ledger if r.get("created_at", 0) <= review.received_at])
     emit = flushing_at_stage_changes(trace.add, trace.flush)
-    found, groups, setups = read_reply_turn(result["facts"], shop, os.environ, emit, reply.get("message") or "",
-                                            deadline=deadline, back_chamfer=result["back_chamfer"], issue_shop=then)
+    found, groups, setups, (read_calls, read_fallbacks) = read_reply_turn(result["facts"], shop, os.environ, emit,
+                                                                          reply.get("message") or "",
+                                                                          deadline=deadline,
+                                                                          back_chamfer=result["back_chamfer"],
+                                                                          issue_shop=then)
     scope = f"doc:{did}"
     entries = [constraint_entry(rule, reply_id=cid, review_key=review_key, version_id=vid) for rule in found or []]
     for entry in unrecorded(entries, store.call.remote("read_ledger", "constraint", scope)):  # a retry adds nothing
@@ -549,11 +572,14 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
                   quote=rule["quote"])
     if found:
         constraints = constraints_from_ledger(store.call.remote("read_ledger", "constraint", scope), version_id=vid)
-        comment, _ = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
-                                   back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
-        message = comment or _review_message(vid, result["plan"])
+        comment, stats = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
+                                       back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
+        # The reader worked even when the review falls back to the setup count (Codex, P2): credit what ran.
+        message = with_credits(comment or _review_message(vid, result["plan"]),
+                               read_calls + stats.get("agent_usage", []),
+                               [*read_fallbacks, *stats.get("agent_fallbacks", [])])
     else:
-        message = nothing_read(groups, setups) if groups else None
+        message = with_credits(nothing_read(groups, setups), read_calls, read_fallbacks) if groups else None
     trace.flush()
     if message and store.call.remote("reserve_post", ev.key, "replan"):
         from anville.connectors.onshape.oauth import post_as_anville
@@ -603,8 +629,9 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     trace.add("verify", "Setup count computed from geometry", setups=plan["count"],
               directions=[s["directions"] for s in plan["setups"]],
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
-    message = (_agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing, deadline)
-               or _review_message(vid, plan))
+    comment, calls, fallbacks = _agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing,
+                                               deadline)
+    message = comment or _review_message(vid, plan)
     timing["sheet_id"] = _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"], ledger,
                                       timing.get("buying") or [], trace)
     from anville.deploy import sheet_link
@@ -612,6 +639,10 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     link = sheet_link(os.environ, timing["sheet_id"])
     if link:  # the setup sheet goes to the shop with the review (demo spine, beat 2)
         message += f"\nSetup sheet for the shop: {link}"
+    if comment:  # the models that wrote this review, named under it (rubric: visible Meta tooling)
+        from anville.agent.job import with_credits
+
+        message = with_credits(message, calls, fallbacks)
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.
@@ -635,6 +666,18 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
         store.call.remote("complete_post", ev.key, "review", comment["id"])
         timing["comment_posted_at"] = time.time()
         trace.add("comment_posted", "Posted the review", comment_id=comment["id"], posted_as=identity)
+        try:  # SAM outlines the flagged face for the panel and the sheet, after the comment is up (ADR 0007 Am. 4)
+            from anville.agent.job import flagged_groups, review_shop
+
+            groups = flagged_groups(result["facts"], review_shop(ledger)[0], result["back_chamfer"])
+            if groups:
+                anchor_task.spawn(did, vid, eid, groups[0], trace.run_id)
+        except Exception as e:  # a picture must never cost the review
+            _log("anchor_spawn_failed", error=repr(e)[:300])
+        if os.environ.get("ANVILLE_FIX_BRANCH", "off") == "on":
+            # A branch export takes ~51 s (RFC 0005, live), so the branch runs on its own once the review is up
+            # and answers in its thread. It holds no document claim: a designer's reply isn't kept waiting.
+            fix_branch_task.spawn(ev.key, did, vid, eid, comment["id"], trace.run_id)
     trace.add("run_finished", "Review finished")
     trace.flush()
 
@@ -652,9 +695,82 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
     _log("timing", **timing)
 
 
+@app.function(image=geo_image, secrets=secrets, volumes={"/data": data}, timeout=120)
+def anchor_task(did: str, vid: str, eid: str, group: str, run_id: str) -> None:
+    """SAM 3.1 outlines the face the review flagged; the PNG goes to the panel and the setup sheet (ADR 0007
+    Amendment 4). Code picks and renders the group; SAM confirms the outline or is shown to disagree."""
+    from anville.geometry import PartFacts
+    from anville.geometry.sam_anchor import SamClient, anchor
+
+    data.reload()
+    store = StoreSvc()
+    # Into the review's own run, after its events (Codex, PR #51): a run of its own would take the panel's
+    # latest slot from the review. No run_started/run_finished, which belong to the review.
+    trace = _Trace(store, did, run_id, vid)
+    trace.element_id, trace.seq = eid, BACKGROUND_SEQ["anchor"]
+    sam = SamClient.from_env(os.environ)
+    if sam is not None:
+        trace.add("tool_call", "Model called", stage="anchor", model=sam.model, host=sam.host)
+    trace.flush()
+    facts = PartFacts.from_dict(json.loads(Path(f"/data/facts/{vid}.json").read_text()))
+    a = anchor(f"/data/step/{vid}.step", facts, group, sam=sam)
+    if a is None:
+        trace.add("decision", "The flagged face isn't visible from any view", stage="anchor", group=group)
+    else:
+        Path("/data/render").mkdir(parents=True, exist_ok=True)
+        Path(f"/data/render/{vid}.png").write_bytes(a.png)
+        data.commit()
+        trace.add("tool_result", "Face anchored", **a.record, version_id=vid)
+    trace.flush()
+    _log("anchor", **(a.record if a else {"group": group, "visible": False}))
+
+
+@app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=300)
+def fix_branch_task(key: str, did: str, vid: str, eid: str, root: str, run_id: str) -> None:
+    """Demo beat (c): the removal built on an anville/alt branch, measured, and answered under the review
+    (RFC 0005; ADR 0002 Amendment 2). Once per review: a second spawn for the same review does nothing."""
+    from anville.agent.job import fix_branch, flushing_at_stage_changes, review_shop, with_credits
+
+    if state.get(f"branch:{key}"):
+        return
+    state[f"branch:{key}"] = time.time()
+    store = StoreSvc()
+    trace = _Trace(store, did, run_id, vid)  # the review's run, as for anchor_task
+    trace.element_id, trace.seq = eid, BACKGROUND_SEQ["branch"]
+    ledger = _shop_ledger(store)
+    result = analyze.remote(vid, ledger)  # the review's STEP is on the volume: no second export
+    shop, _ = review_shop(ledger)
+    run = hashlib.sha256(key.encode()).hexdigest()[:6]
+
+    def measure(step: bytes) -> int:  # the branch's STEP, counted by the same geometry and shop as the review
+        alt = f"{vid}-alt-{run}"
+        Path(f"/data/step/{alt}.step").write_bytes(step)
+        data.commit()
+        return analyze.remote(alt, ledger)["plan"]["count"]
+
+    client = _client()
+    line, stats = fix_branch(client, result["facts"], shop, os.environ,
+                             flushing_at_stage_changes(trace.add, trace.flush), did=did, vid=vid, eid=eid, run=run,
+                             measure=measure, back_chamfer=result["back_chamfer"],
+                             wait=lambda c, tid: _wait_for_translation(c, tid, {}))
+    branch = stats.get("fix_branch") if isinstance(stats.get("fix_branch"), dict) else {}
+    if line and store.call.remote("reserve_post", key, "branch"):
+        from anville.connectors.onshape.oauth import post_as_anville
+
+        posted, identity = post_as_anville(_anville_client(), client, {
+            "documentId": did, "parentId": root, "message": with_credits(line, branch.get("usage", []))})
+        state[f"self:{posted['id']}"] = time.time()
+        store.call.remote("complete_post", key, "branch", posted["id"])
+        trace.add("comment_posted", "Branch result posted in the thread", comment_id=posted["id"],
+                  posted_as=identity)
+    trace.flush()
+    _log("fix_branch", **{k: v for k, v in branch.items() if k != "usage"}, calls_today=client.calls_today())
+
+
 def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], trace: "_Trace", timing: dict,
-                   deadline: float) -> str | None:
-    """The agent's review (ADR 0009), or None so the job posts the plain setup-count line."""
+                   deadline: float) -> tuple[str | None, list[dict], list[str]]:
+    """The agent's review (ADR 0009), or None so the job posts the plain setup-count line; with its call records
+    and fallbacks, for the credits line."""
     from anville.agent.job import agent_comment, flushing_at_stage_changes, review_shop
 
     shop, learned = review_shop(ledger)
@@ -668,7 +784,7 @@ def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], tr
     timing.update(stats, agent_tokens=sum(u.get("completion_tokens") or 0 for u in usage))
     if "agent_error" in stats:
         _log("agent_failed", error=stats["agent_error"])
-    return comment
+    return comment, usage, stats.get("agent_fallbacks", [])
 
 
 def _review_message(vid: str, plan: dict) -> str:

@@ -59,3 +59,25 @@ Capability and cost differ by role, and claims about which model is better are v
 - **Easier:** a missing or expensive host never blocks the demo, because there is always a fallback. Model claims in the writeup are backed by measured numbers.
 - **Harder:** any prompt change has to re-run the eval for that role.
 - **Revisit:** when hosted Muse Spark Open pricing or availability changes, or when the reply-parsing role is decided.
+
+## Amendment 1: Muse Wonder writes the fix patch (2026-10-31)
+
+- **Status:** Accepted (Rayyan Aquino, 2026-10-31: "I would amend to 'wonder' and that would pair very well with the Sam model that we want to use").
+
+### Context
+- **Muse Code has no model ID on the Meta Model API** (verified, dev.meta.ai/docs/models, 2026-10-31, by the geometry session). It is a product. Decision 6's escalation through `muse-code-sdk` is the only way to drive it.
+- **Muse Wonder is Muse Code's model, and it is on the API:** `muse-wonder-1.0`, Standard mode, preview, "available on Model API and in Muse Code", built for "complex software engineering and long-horizon agentic work" (same page). Muse Wonder Full is Muse Code-only.
+- **Our key can call it** (verified live, 2026-10-31): `muse-wonder-1.0` at `https://api.meta.ai/v1/chat/completions` with `MODEL_API_KEY` answered a one-tool patch request with a correct tool call in 1.9 s, 768 tokens (186 reasoning).
+- **The fix branch is proven live** (RFC 0005, DEMO A v1, 2026-10-31): suppressing the weld clearance chamfer on a branch workspace and re-extracting the branch's STEP measured 1 setup, as predicted.
+
+### Decision
+1. **The fix compiler's primary model is `muse-wonder-1.0`** (Meta Model API), replacing Muse Spark Open in decision 1's table. Its fallback is code's own patch for the edits code can write itself (suppression), labelled as a fallback in the trace.
+2. **The harness checks every patch:** the patched feature JSON may differ from the original only in the parameters the edit names (for suppression, only `suppressed`). A patch that fails the check is never sent.
+3. **The model ID is configuration** (`MUSE_WONDER_MODEL_ID`, default `muse-wonder-1.0`).
+4. **On screen and in the writeup it is "Muse Wonder (Muse Code's model)", never "Muse Code"**, unless the `muse-code-sdk` escalation of decision 6 is actually in the loop.
+5. **Decision 2's eval rule still applies:** the role is gated on fix-JSON validity before it counts as working.
+
+### Consequences
+- **Easier:** a fourth Meta model does real work in every take (Muse Spark Open, Muse Spark, Muse Wonder, SAM 3.1), with no new key or service.
+- **Harder:** a preview model in the fix path. Its availability can change, and the code fallback covers only suppression.
+- **Revisit:** if Muse Wonder leaves preview, changes price, or fails the gate.

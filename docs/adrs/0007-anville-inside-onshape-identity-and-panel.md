@@ -225,3 +225,46 @@ Drafted by the panel lane against `anville/panel/DESIGN.md`. Main agreed the pan
 - **Easier:** the machinist's answer reaches the ledger with no account and no app. The link alone is enough, and it opens exactly one sheet.
 - **Harder:** anyone holding a sheet link can post notes to that sheet until the panel secret is rotated. Rotating the secret also breaks every sheet link already posted.
 - **Revisit:** whether a note should expire with the sheet, after a newer version's sheet replaces it.
+
+## Amendment 4 (Accepted, Rayyan Aquino, 2026-10-31): the flagged face's picture, traced by SAM 3.1
+
+**Context.** Locked decision 5 gives SAM 3.1 one job: point the flag at exact geometry. ADR 0004 puts `sam-3.1` on the Meta Model API. RFC 0003 says SAM never chooses the face. `anville/geometry/render.py` (RFC 0004) already paints the flagged group exactly, from the B-rep. Rayyan decided on 2026-10-31 that SAM's role is to **confirm the code**:
+- the code picks and paints the group;
+- SAM traces it on a plain render of the same view;
+- SAM's outline is drawn only when it agrees.
+
+**1. What runs** (`anville/geometry/sam_anchor.py`, `anchor(step_path, facts, group, *, sam) -> Anchor | None`):
+- The highlighted render picks the view. A plain render from the same camera goes to SAM, with the group's largest visible piece as a box prompt and a positive point on its pixel nearest the box centre (`meta-sam-parser`'s `build_object_prompt`).
+- SAM's mask is compared with the code's pixels (render.py's own key, R > B, inside that box).
+  - At IoU ≥ 0.8, its outline is drawn in blue over the code's orange.
+  - Below that, the picture is the code's alone, and the record says SAM disagreed.
+  - A label chip with the group's name (`G11`) sits just above the group, over the prompted point.
+- SAM never raises out of `anchor()`. A timeout, an HTTP error, an unreadable reply or no `MODEL_API_KEY` yields `agreed: null` and an `error`, and the picture still goes out.
+- Verified 2026-10-31, on synthetic `demo_bracket`:
+  - The probe sent `POST https://api.meta.ai/v1/responses` with stream off and the image as a base64 `data:` URL, and got HTTP 200.
+  - Masks decode with Meta's `meta-sam-parser==0.1.0` (SAM License; Rayyan approved the pinned dependency).
+  - Live IoU was 0.99 (G1), 0.857 (G3, a chamfer stripe) and 0.918 (G9, a hole), at 0.6–1.9 s per call.
+
+**2. Trace.** `anchor_fn(version_id, group)` runs after the comment posts, on the same `run_id`. Main owns it.
+- It emits `tool_call` "Model called" with `{stage: "anchor", model: "sam-3.1", host: "api.meta.ai"}`, but only when SAM is configured.
+- It then emits `tool_result` **"Face anchored"** with `{group, model, host, latency_s, iou, agreed, error, version_id}`. `latency_s` is null when SAM wasn't called.
+- The PNG is written to `/data/render/{version_id}.png` **before** "Face anchored" is emitted, so the panel never asks for a picture that isn't there yet.
+- The panel adds SAM's chip (latency only; SAM has no tokens). It shows the picture under the decision cards, with a caption saying whether SAM's trace matched, didn't match, or didn't come.
+
+**3. Endpoints.** Both routers take an optional `read_render(version_id) -> bytes | None`. Without it, both routes return 404.
+
+| Method | Path | Behaviour |
+|---|---|---|
+| GET | `/panel/render/{version_id}?documentId=&t=` | The PNG, behind the panel token and the document allowlist. `Cache-Control: no-store` |
+| GET | `/sheet/{sheet_id}/render?s=` | The PNG for the stored sheet's `version_id`, behind the sheet's signature. Amendment 3's private headers |
+
+- `version_id` must match `[A-Za-z0-9_-]{1,64}` before it reaches `read_render`, because main maps it to a file path.
+- The sheet page shows the picture above the setups only when it exists at page load.
+
+**Consequences.**
+- **Easier:** judges see which face a flag means, and see Meta's segmentation model checking the geometry with a number, not decoration. The picture needs no Onshape call, since comments link to the sheet.
+- **Harder:**
+  - One more paid call per review (about $0.0025; ADR 0004's price).
+  - One more dependency.
+  - The panel token can fetch the picture for any stored version id, not only its own document's. Version ids are Onshape's 24-character ids, not secrets, so a token holder for one allowed document could read another allowed document's picture.
+- **Revisit:** checking the version's document in `read_render`. Also whether to show SAM's trace when it disagrees, as evidence for a human.

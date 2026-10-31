@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -27,6 +28,8 @@ from anville.connectors.onshape.events import token_matches
 
 Reader = Callable[[str, int, int], list[dict]]  # trace_after(document_id, after, limit), oldest first
 Writer = Callable[..., bool]                     # record(key, document_id, payload): False on a duplicate key
+RenderReader = Callable[..., "bytes | None"]   # (version_id, document_id=None) -> the flagged face's PNG, or None
+# (Amendment 4). The panel passes its document so main can check the version belongs to it (Codex, PR #51).
 
 STATIC = Path(__file__).parent / "static"
 ASSETS = frozenset({"panel.js", "panel.css", "reduce.js", "pace.js", "view.js", "sheet.js", "sheet.css"})
@@ -36,6 +39,8 @@ PAGE = 500
 MAX_PAGES = 2000  # 1M events at PAGE 500: a runaway guard; the stream resumes from the cursor reached
 
 Id = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+# Main reads /data/render/<version_id>.png: an id is checked here before it can name any other file.
+VERSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class Ask(BaseModel):
@@ -58,7 +63,7 @@ class Ask(BaseModel):
 
 def make_router(reader: Reader, writer: Writer | None, *, panel_secret: str, allowed_docs: Callable[[], set[str]],
                 poll_s: float = 1.0, heartbeat_s: float = 15.0, stream_s: float = 55.0,
-                clock: Callable[[], float] = time.time) -> APIRouter:
+                clock: Callable[[], float] = time.time, read_render: RenderReader | None = None) -> APIRouter:
     """The panel's routes. `allowed_docs` is called per request, so the allowlist can change without a restart.
     `writer=None` refuses asks with 501: until a panel.ask handler exists, a 202 would promise an answer that never
     comes (Codex, PR #34)."""
@@ -79,6 +84,16 @@ def make_router(reader: Reader, writer: Writer | None, *, panel_secret: str, all
         if name not in ASSETS:
             return Response(status_code=404)
         return FileResponse(STATIC / name, media_type=MEDIA[Path(name).suffix])
+
+    @router.get("/panel/render/{version_id}")
+    async def face_render(version_id: str, documentId: str | None = None, t: str | None = None):
+        # The flagged face's picture (ADR 0007 Amendment 4); it lands after the comment, so a 404 means "not yet".
+        if not allowed(t, documentId) or read_render is None or not VERSION_ID.fullmatch(version_id):
+            return Response(status_code=404)
+        png = await asyncio.to_thread(read_render, version_id, documentId)  # main checks they belong together
+        if not png:
+            return Response(status_code=404)
+        return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
     @router.get("/api/runs")
     async def runs(documentId: str | None = None, t: str | None = None):

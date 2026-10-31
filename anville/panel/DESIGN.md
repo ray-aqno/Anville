@@ -153,6 +153,8 @@ tests/panel/
 - **`writer`** is a protocol: `record(key, document_id, payload, ...) -> bool`. Main injects the store's `record`. The panel writes only `ask:<request_id>` and, in P2, `shop:<request_id>` events.
 - **Onshape client messaging (verified in their docs, 2026-10-29):** send `applicationInit` first, with documentId, workspaceId and elementId; validate every incoming message's `origin` against the `server` query parameter; SELECTION then arrives on user selection. Right panels also support `requestSelection`, `requestSelectionHighlight`, `requestViewerImage`, `showMessageBubble` and `keepAlive`.
 
+- **The flagged face's picture** (ADR 0007 Amendment 4): `anville/geometry/sam_anchor.py` draws it; the panel shows it under the cards (`/panel/render/{version_id}`) and the sheet above its setups (`/sheet/{id}/render`), both read through an optional `read_render` main injects. SAM 3.1's chip joins the agent's chips with its latency.
+
 ## 8. What the panel needs from main (handoff, in priority order)
 
 | # | Ask | Why | Size (inference) |

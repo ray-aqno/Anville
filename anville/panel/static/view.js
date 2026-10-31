@@ -14,6 +14,7 @@ function modelName(model) {
   if (!model) return "—";
   if (/muse-spark-open/i.test(model)) return "Muse Spark Open";
   if (/muse-spark-1\.3/i.test(model)) return "Muse Spark 1.3";
+  if (/^sam-3\.1$/i.test(model)) return "SAM 3.1";
   return model.split("/").at(-1);
 }
 
@@ -84,14 +85,15 @@ function chips(run) {
     return `<b>${esc(c.stage)}</b> <span class="model">${esc(modelName(c.model))}</span>
   <span class="host" data-host="${host}">${host}</span>`;
   };
-  if (run.calls.length) {
-    return run.calls.map((c) => c.error
-      ? `<li class="chip failed">${head(c)} <span class="num">failed after ${esc(dash(c.latencyS))} s: ${esc(c.error)}</span></li>`
-      : `<li class="chip">${head(c)}
-  <span class="num">${esc(dash(c.promptTokens))} in · ${esc(dash(c.completionTokens))} out · ${esc(dash(c.cachedTokens))} cached · ${esc(dash(c.latencyS))} s</span></li>`).join("");
-  }
-  // During the run: one chip per call as it starts ("Model called"); tokens and latency arrive with "Agent finished".
-  return run.liveCalls.map((c) => `<li class="chip pending${c.answered ? "" : " calling"}">${head(c)}
+  const tokens = (c) => (c.promptTokens === null && c.completionTokens === null ? ""  // SAM: no tokens to show
+    : `${esc(dash(c.promptTokens))} in · ${esc(dash(c.completionTokens))} out · ${esc(dash(c.cachedTokens))} cached · `);
+  const done = run.calls.map((c) => c.error
+    ? `<li class="chip failed">${head(c)} <span class="num">failed after ${esc(dash(c.latencyS))} s: ${esc(c.error)}</span></li>`
+    : `<li class="chip">${head(c)}
+  <span class="num">${tokens(c)}${esc(dash(c.latencyS))} s</span></li>`).join("");
+  // One chip per call as it starts ("Model called"); tokens and latency arrive with "Agent finished", or with
+  // "Face anchored" for SAM, whose call starts after the agent's chips are done.
+  return done + run.liveCalls.map((c) => `<li class="chip pending${c.answered ? "" : " calling"}">${head(c)}
   <span class="num">${c.answered ? "answered" : "calling…"}${c.attempt > 1 ? ` · attempt ${esc(c.attempt)}` : ""}</span></li>`).join("");
 }
 
@@ -124,7 +126,19 @@ function earlier(state, shown) {
     ? `<details class="earlier"><summary>Earlier runs</summary><ul>${rows.join("")}</ul></details>` : ""}</div>`;
 }
 
-export function renderHTML(state, runId = null) {
+// The flagged face as Anville drew it, and what SAM 3.1 said about it (ADR 0007 Amendment 4).
+function face(run, renderUrl) {
+  const a = run.anchor;
+  if (!a || !renderUrl || !a.versionId) return "";
+  const g = esc(a.group);
+  const said = a.agreed === true ? `${g}, traced by SAM 3.1: it matches the geometry (IoU ${esc(a.iou)})`
+    : a.agreed === false ? `${g}, from the geometry. SAM 3.1 traced a different shape (IoU ${esc(a.iou)}), so its outline isn't drawn.`
+      : `${g}, from the geometry.${run.calls.some((c) => c.stage === "anchor") ? " SAM 3.1 didn't answer." : ""}`;
+  return `<figure class="face" data-section="face"><img src="${esc(renderUrl(a.versionId))}" alt="${g} highlighted on the part">
+<figcaption>${said}</figcaption></figure>`;
+}
+
+export function renderHTML(state, runId = null, { renderUrl = null } = {}) {
   const run = (runId && state.runs[runId]) || latestRun(state);
   if (!run) return `<header class="hd"><span class="dot"></span>Anville</header><p class="empty">Waiting for the next save.</p>`;
   const cards = decisionCards(run);
@@ -138,6 +152,7 @@ export function renderHTML(state, runId = null) {
 ${costStrip(costSummary(run))}
 ${run.learned.length ? `<p class="learned">Learned from the shop: ${esc(run.learned.join(", "))}</p>` : ""}
 ${run.agentFailed ? `<p class="note">Agent failed; posted the setup count instead.</p>` : ""}</div>
+${face(run, renderUrl)}
 <section class="agent" data-section="agent"><div class="tag">Agent${calls ? ` · ${run.calls.length || run.liveCalls.length} model calls` : ""}</div>
 ${rail(run)}
 <ul class="chips">${chips(run)}</ul>

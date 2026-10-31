@@ -30,7 +30,7 @@ function newRun(event) {
     stages: Object.fromEntries(STAGES.map((s) => [s, { status: "pending", retries: 0 }])),
     current: null, agentFailed: false, calls: [], liveCalls: [],
     issues: {}, intents: {}, options: {}, rejected: [], decisions: [], checks: [], verdicts: [],
-    ledgerUsed: false, learned: [], costs: null, commentPosted: false, reviewFailed: false,
+    ledgerUsed: false, learned: [], costs: null, commentPosted: false, reviewFailed: false, anchor: null,
   };
 }
 
@@ -100,6 +100,12 @@ function applyEvent(run, event, d) {
     case "Agent finished":
       run.calls = (d.calls ?? []).map(call);
       run.liveCalls = [];
+      return;
+    case "Face anchored":  // SAM 3.1 on the flagged face, after the comment posts (ADR 0007 Amendment 4)
+      run.liveCalls = run.liveCalls.filter((c) => c.stage !== "anchor");
+      if (typeof d.latency_s === "number") run.calls.push(call({ ...d, stage: "anchor" }));  // null: SAM wasn't called
+      run.anchor = { group: d.group ?? null, iou: d.iou ?? null, agreed: d.agreed ?? null, error: d.error ?? null,
+        versionId: d.version_id ?? run.versionId };
       return;
     case "Review failed":
       run.reviewFailed = true;

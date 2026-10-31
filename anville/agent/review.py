@@ -348,10 +348,13 @@ class _Runner:
                                    reasoning_effort=effort, timeout_s=left)
             except ModelUnavailable as e:
                 # Failed calls are often the slowest: their time belongs in the record too (Codex, PR #24).
-                self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), "error": str(e)})
+                self.usage.append({**record, "host": getattr(model, "host", None),
+                                   "latency_s": round(time.monotonic() - started, 3), "error": str(e)})
                 error = f"model unavailable: {e}"
                 break
-            self.usage.append({**record, "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
+            # Read after the call: a failover model names the host that served it (ADR 0011 Amendment 1).
+            self.usage.append({**record, "host": getattr(model, "host", None),
+                               "latency_s": round(time.monotonic() - started, 3), **(reply.usage or {})})
             if reply.finish_reason == "length":  # RFC 0001 budget policy: the retry thinks less (gate on #26)
                 effort = "low"
             if reply.error:
