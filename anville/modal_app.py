@@ -13,6 +13,7 @@ Register: python3 scripts/register_webhook.py <web URL printed by deploy>
 """
 
 import datetime as dt
+import hashlib
 import json
 import os
 import time
@@ -646,6 +647,10 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
         store.call.remote("complete_post", ev.key, "review", comment["id"])
         timing["comment_posted_at"] = time.time()
         trace.add("comment_posted", "Posted the review", comment_id=comment["id"], posted_as=identity)
+        if os.environ.get("ANVILLE_FIX_BRANCH", "off") == "on":
+            # A branch export takes ~51 s (RFC 0005, live), so the branch runs on its own once the review is up
+            # and answers in its thread. It holds no document claim: a designer's reply isn't kept waiting.
+            fix_branch_task.spawn(ev.key, did, vid, eid, comment["id"])
     trace.add("run_finished", "Review finished")
     trace.flush()
 
@@ -661,6 +666,49 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
         timing["receive_to_comment_s"] = round(timing["comment_posted_at"] - received_at, 2)
     state[f"timing:{vid}"] = timing
     _log("timing", **timing)
+
+
+@app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=300)
+def fix_branch_task(key: str, did: str, vid: str, eid: str, root: str) -> None:
+    """Demo beat (c): the removal built on an anville/alt branch, measured, and answered under the review
+    (RFC 0005; ADR 0002 Amendment 2). Once per review: a second spawn for the same review does nothing."""
+    from anville.agent.job import fix_branch, flushing_at_stage_changes, review_shop, with_credits
+
+    if state.get(f"branch:{key}"):
+        return
+    state[f"branch:{key}"] = time.time()
+    store = StoreSvc()
+    trace = _Trace(store, did, f"{vid[:8]}-b", vid)
+    trace.element_id = eid
+    trace.add("run_started", "Building the alternative on a branch")
+    ledger = _shop_ledger(store)
+    result = analyze.remote(vid, ledger)  # the review's STEP is on the volume: no second export
+    shop, _ = review_shop(ledger)
+    run = hashlib.sha256(key.encode()).hexdigest()[:6]
+
+    def measure(step: bytes) -> int:  # the branch's STEP, counted by the same geometry and shop as the review
+        alt = f"{vid}-alt-{run}"
+        Path(f"/data/step/{alt}.step").write_bytes(step)
+        data.commit()
+        return analyze.remote(alt, ledger)["plan"]["count"]
+
+    client = _client()
+    line, stats = fix_branch(client, result["facts"], shop, os.environ,
+                             flushing_at_stage_changes(trace.add, trace.flush), did=did, vid=vid, eid=eid, run=run,
+                             measure=measure, back_chamfer=result["back_chamfer"],
+                             wait=lambda c, tid: _wait_for_translation(c, tid, {}))
+    branch = stats.get("fix_branch") if isinstance(stats.get("fix_branch"), dict) else {}
+    if line and store.call.remote("reserve_post", key, "branch"):
+        from anville.connectors.onshape.oauth import post_as_anville
+
+        posted, identity = post_as_anville(_anville_client(), client, {
+            "documentId": did, "parentId": root, "message": with_credits(line, branch.get("usage", []))})
+        state[f"self:{posted['id']}"] = time.time()
+        store.call.remote("complete_post", key, "branch", posted["id"])
+        trace.add("comment_posted", "Answered in the thread", comment_id=posted["id"], posted_as=identity)
+    trace.add("run_finished", "Branch finished")
+    trace.flush()
+    _log("fix_branch", **{k: v for k, v in branch.items() if k != "usage"}, calls_today=client.calls_today())
 
 
 def _agent_comment(facts: dict, back_chamfer: list[dict], ledger: list[dict], trace: "_Trace", timing: dict,
