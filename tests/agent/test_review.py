@@ -956,3 +956,71 @@ def test_option_scored_carries_the_plain_name_and_params(part_a, shop, catalog_a
     buy = next(d for k, d in scored.items() if k.startswith("add_tool/"))
     assert buy["name"] == "buying the 910480 back-chamfer cutter" and buy["edit_kind"] == "add_tool"
     assert buy["params"]["owned"] is False and "{{" not in "".join(d["name"] for d in scored.values())
+
+
+# --- Rayyan, 2026-10-31: once the designer frees a face, its part edits are ranked with the shop fixes ----------
+
+
+def _freed(chamfer, **kw):
+    return [{"id": 1, "face_group": chamfer, "rule": "may_change", "reason": "not needed", **kw}]
+
+
+def test_a_freed_chamfers_removal_is_ranked_and_leads(part_a, costed, chamfer, catalog_access):
+    """Gate on #37: after "not needed", turn 2 bought the $243 cutter 10 of 10 times; nothing ranked the free
+    removal against it. The designer's own edit time is theirs to give, so it no longer counts against it."""
+    removal = f"remove_feature/{chamfer}"
+    events = []
+    r = run_review(part_a, costed, None, back_chamfer=catalog_access, constraints=_freed(chamfer),
+                   emit=lambda kind, title, **d: events.append((title, d)))
+    (ranked,) = [d for t, d in events if t == "Fixes ranked"]
+    assert ranked["lead"] == removal and BUY not in ranked["top"]
+    assert r.decisions[0].option_key == removal
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+
+
+def test_the_model_may_not_lead_with_the_cutter_over_a_freed_removal(part_a, costed, chamfer, catalog_access):
+    removal = f"remove_feature/{chamfer}"
+    buy = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    rm = {"issue_id": "I1", "action": "propose", "option_key": removal, "reason": "x"}
+    model = Scripted(plan(*requests_for(chamfer)), decide(buy), decide(rm))
+    r = run_review(part_a, costed, model, back_chamfer=catalog_access, constraints=_freed(chamfer))
+    assert r.decisions[0].option_key == removal and "decide" not in r.fallbacks
+    assert removal in model.sent[2][0][1]["content"]  # the retry was told which fix leads
+
+
+def test_a_designer_who_explicitly_wants_the_shop_fix_gets_it(part_a, costed, chamfer, catalog_access):
+    """'Unless the designer is clearly explicit': a reply that frees the face but asks for the cutter keeps the
+    ranking over the shop fixes, as before."""
+    events = []
+    r = run_review(part_a, costed, None, back_chamfer=catalog_access,
+                   constraints=_freed(chamfer, prefer="shop_fix", prefer_reason="buy the cutter anyway"),
+                   emit=lambda kind, title, **d: events.append((title, d)))
+    (ranked,) = [d for t, d in events if t == "Fixes ranked"]
+    assert ranked["lead"] == BUY and not any(k.startswith("remove_feature/") for k in ranked["top"])
+    assert r.decisions[0].option_key == BUY
+
+
+def test_a_freed_faces_part_edits_are_scored_even_if_plan_asks_only_for_shop_fixes(part_a, costed, chamfer,
+                                                                                    catalog_access):
+    """Codex, PR #41 (P1): the removal was offered only when Plan asked for it."""
+    removal = f"remove_feature/{chamfer}"
+    rm = {"issue_id": "I1", "action": "propose", "option_key": removal, "reason": "x"}
+    shop_only = plan({"kind": "route_machine"}, {"kind": "add_tool", "face_group": chamfer})
+    r = run_review(part_a, costed, Scripted(shop_only, decide(rm)), back_chamfer=catalog_access,
+                   constraints=_freed(chamfer))
+    assert removal in r.options and r.decisions[0].option_key == removal
+
+
+def test_an_explicit_side_with_no_fix_falls_back_to_the_other_side():
+    """Codex, PR #41: asking for a part edit when none changes the plan must not leave the review quiet."""
+    from types import SimpleNamespace as NS
+
+    from anville.agent.review import _fallback_decision
+
+    shop_fix = NS(key="route_machine/5", side="shop", face_group=None, changes_plan=True)
+    no_help = NS(key="set_depth/G3", side="part", face_group="G3", changes_plan=False)
+    issue = NS(id="I1", face_group="G3")
+    d = _fallback_decision(issue, False, [no_help, shop_fix], prefer="part_edit")
+    assert (d.action, d.option_key) == ("propose", "route_machine/5")
+    helps = NS(key="remove_feature/G3", side="part", face_group="G3", changes_plan=True)
+    assert _fallback_decision(issue, False, [shop_fix, helps], prefer="part_edit").option_key == "remove_feature/G3"

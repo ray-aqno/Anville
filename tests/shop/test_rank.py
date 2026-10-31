@@ -86,3 +86,20 @@ def test_ranking_needs_a_quantity_to_compare_at():
     none = replace(SHOP, costs=replace(COSTS, scenarios=replace(COSTS.scenarios, quantities=())))
     with pytest.raises(ValueError, match="quantity"):
         _rank(none, [BUY, FIVE])
+
+
+def test_a_waived_cost_no_longer_keeps_the_removal_from_leading(step, facts):
+    """Rayyan, 2026-10-31: once the designer says the chamfer may change, the free removal is ranked with the
+    shop fixes. Its only unpriced cost is the designer's own time to make the edit, which they volunteered, so
+    it's waived; without the waiver, nothing that leaves a cost unpriced may outrank a fix that doesn't."""
+    from anville.shop.cost import DESIGNER_TIME
+
+    f, options, plan = _part_a(step, facts)
+    keys = [o.key for o in options]
+    (removal,) = [k for k in keys if k.startswith("remove_feature/")]
+    result = cost_options(f, DLL, options, plan=plan)
+    assert rank_fixes(result, DLL, keys).lead != removal
+    # Cheaper than buying at every corner; routing out costs less at some extremes, so the removal leads on
+    # mid-range cost, and the comment names the route as its rival.
+    assert rank_fixes(result, DLL, keys, waived={DESIGNER_TIME}) == Ranking(
+        [removal, "route_machine/5"], removal, "mid_range")

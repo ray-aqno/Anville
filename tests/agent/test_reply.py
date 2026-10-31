@@ -114,3 +114,29 @@ def test_a_retried_reply_appends_nothing_twice():
     assert unrecorded([entry], stored) == []
     other = constraint_entry(keep(group="G6"), reply_id="c-reply", review_key="version:v1", version_id="v1")
     assert unrecorded([entry, other], stored) == [other]
+
+
+# --- Rayyan, 2026-10-31: "unless the designer is clearly explicit" -------------------------------------------
+
+def test_an_explicit_side_is_read_only_with_the_designers_own_words(part_a, shop, chamfer):
+    reply = "G3 isn't needed, but buy the cutter anyway: we'll want it on the next bracket."
+    wants = {"face_group": chamfer, "rule": "may_change", "quote": "isn't needed",
+             "prefer": "shop_fix", "prefer_quote": "buy the cutter anyway"}
+    found, _ = read_reply(Scripted(rules(wants)), reply, {chamfer: "x"}, emit=lambda *a, **k: None)
+    assert found == [wants]
+    entry = constraint_entry(wants, reply_id="c", review_key="version:v1", version_id="v1")
+    assert entry["payload"]["prefer"] == "shop_fix" and entry["payload"]["prefer_reason"] == "buy the cutter anyway"
+    (c,) = constraints_from_ledger([{"id": 1, **entry}])
+    assert c["prefer"] == "shop_fix"
+
+
+def test_an_invented_preference_is_refused(part_a, shop, chamfer):
+    reply = "G3 isn't needed."
+    made_up = {"face_group": chamfer, "rule": "may_change", "quote": "isn't needed",
+               "prefer": "shop_fix", "prefer_quote": "buy the cutter"}
+    no_quote = {**made_up, "prefer_quote": ""}
+    on_keep = {"face_group": chamfer, "rule": "keep", "quote": "isn't needed", "prefer": "part_edit",
+               "prefer_quote": "isn't needed"}
+    for bad in (made_up, no_quote, on_keep):
+        found, run = read_reply(Scripted(rules(bad), rules(bad)), reply, {chamfer: "x"}, emit=lambda *a, **k: None)
+        assert found is None and run.fallbacks == ["read_reply"], bad

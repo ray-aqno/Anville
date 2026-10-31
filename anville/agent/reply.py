@@ -16,11 +16,18 @@ READ_TOOL = _tool(
         "face_group": {"type": "string"},
         "rule": {"type": "string", "enum": ["keep", "may_change"]},
         "quote": {"type": "string", "description": "the designer's words that make the decision, copied exactly"},
+        "prefer": {"type": "string", "enum": ["shop_fix", "part_edit"],
+                   "description": "only with may_change, and only when the reply explicitly asks for one kind of fix"},
+        "prefer_quote": {"type": "string", "description": "the designer's words that ask for it, copied exactly"},
     })}}),
 )
 INSTRUCTIONS = ("Read the designer's reply to the review. For each face group the reply decides, say whether it "
                 "must stay as designed (keep) or may change (may_change), and quote the reply's words that say so. "
-                "Decide nothing the reply doesn't say; a reply that decides nothing gets no rules.")
+                "If a reply that lets the face change also explicitly asks for one kind of fix, give `prefer` and "
+                "quote those words too: a part edit (\"delete it\", \"remove the chamfer\") or a shop fix (\"buy "
+                "the cutter\", \"don't touch the model\"). Words that only allow a change (\"not needed\", \"it "
+                "can go\", \"isn't critical\") are permission, not a request: they get no `prefer`. Decide nothing "
+                "the reply doesn't say; a reply that decides nothing gets no rules.")
 
 
 def _norm(text: str) -> str:
@@ -45,7 +52,15 @@ def read_reply(model, reply: str, raised: dict[str, str], *, emit: Emit, deadlin
             if g in seen:
                 return None, f"one rule per face group: {g} has two"
             seen.add(g)
-            out.append({"face_group": g, "rule": rule, "quote": quote})
+            rule_out = {"face_group": g, "rule": rule, "quote": quote}
+            prefer, said = r.get("prefer"), r.get("prefer_quote") or ""
+            if prefer:  # "unless the designer is clearly explicit" (Rayyan, 2026-10-31): only on their own words
+                if rule != "may_change" or prefer not in ("shop_fix", "part_edit"):
+                    return None, f"prefer is shop_fix or part_edit, and only on a may_change rule ({g})"
+                if not said.strip() or _norm(said) not in _norm(reply):
+                    return None, f"the words asking for a {prefer} on {g} must be copied from the reply"
+                rule_out.update(prefer=prefer, prefer_quote=said)
+            out.append(rule_out)
         return out, ""
 
     # The reply is quoted data, never instructions (ADR 0003 trust boundary).
@@ -55,8 +70,9 @@ def read_reply(model, reply: str, raised: dict[str, str], *, emit: Emit, deadlin
 
 def constraint_entry(rule: dict, *, reply_id: str, review_key: str, version_id: str) -> dict:
     """The constraint ledger entry for one accepted rule, as {"payload", "provenance"} for append_ledger."""
+    explicit = {"prefer": rule["prefer"], "prefer_reason": rule["prefer_quote"]} if rule.get("prefer") else {}
     return {"payload": {"face_group": rule["face_group"], "rule": rule["rule"], "reason": rule["quote"],
-                        "version_id": version_id},
+                        "version_id": version_id, **explicit},
             "provenance": {"comment": reply_id, "review": review_key}}
 
 

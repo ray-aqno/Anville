@@ -21,10 +21,13 @@ class Ranking:
     basis: str        # dominates | mid_range (the tie-break) | tie | sole (one complete fix) | none
 
 
-def rank_fixes(result: CostResult, shop: Shop, keys: list[str], *, quantity: int | None = None) -> Ranking:
-    """Rank the any-intent fixes `keys` (shop-side, plan-changing; best_option order) priced in `result`.
+def rank_fixes(result: CostResult, shop: Shop, keys: list[str], *, quantity: int | None = None,
+               waived: frozenset[str] | set[str] = frozenset()) -> Ranking:
+    """Rank the fixes `keys` (plan-changing; best_option order) priced in `result`.
 
     `quantity`: the designer's stated quantity; without one, a ranking must hold at every scenario quantity.
+    `waived`: unpriced costs that no longer count against a fix: the designer's own edit time, once they've said
+    the face may change (ADR 0010 Amendment 1).
     """
     routes = {r.key: r for r in result.routes}
     missing = [k for k in keys if k not in routes]
@@ -49,7 +52,7 @@ def rank_fixes(result: CostResult, shop: Shop, keys: list[str], *, quantity: int
     at = {r.key: [x for c in corners for x in dollars(r, c)] for r in fixes}
 
     def cheaper(a: Route, b: Route, table: dict) -> bool:
-        return set(a.unpriced) <= set(b.unpriced) and all(x < y - TOL for x, y in zip(table[a.key], table[b.key]))
+        return set(a.unpriced) - set(waived) <= set(b.unpriced) and all(x < y - TOL for x, y in zip(table[a.key], table[b.key]))
 
     top = [b for b in fixes if not any(cheaper(a, b, at) for a in fixes if a is not b)]
     if len(top) == 1:
