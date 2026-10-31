@@ -174,8 +174,11 @@ class Store:
         payload: dict,
         version_id: str | None = None,
         version_ts: float | None = None,
+        settled: bool = False,
     ) -> bool:
         """Insert a delivery; False means the key was already recorded (a duplicate).
+
+        `settled`: stored `done`, for a record kept only to be read back (a setup sheet), never claimed or reaped.
 
         A version event (`version_id` given) also advances doc_state in the same
         transaction, if it is newer than the version already there. Webhooks can
@@ -189,8 +192,10 @@ class Store:
         now = self._clock()
         with self._write() as conn:
             cur = conn.execute(
-                "INSERT OR IGNORE INTO events (key, document_id, payload, received_at) VALUES (?, ?, ?, ?)",
-                (key, document_id, json.dumps(payload, sort_keys=True), now),
+                "INSERT OR IGNORE INTO events (key, document_id, payload, received_at, status, finished_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (key, document_id, json.dumps(payload, sort_keys=True), now,
+                 "done" if settled else "received", now if settled else None),
             )
             inserted = cur.rowcount == 1
             if inserted and version_id is not None:
@@ -327,6 +332,16 @@ class Store:
             )
             if cur.rowcount != 1:
                 raise KeyError(f"no reserved post for {event_key} / {kind}")
+
+    def post_for_comment(self, comment_id: str) -> tuple[str, str] | None:
+        """(event_key, kind) of the post that created `comment_id`, or None: how a reply's parentId leads back to
+        the review it answers (ADR 0012)."""
+        if not comment_id:
+            return None
+        row = self._conn().execute(
+            "SELECT event_key, kind FROM posted WHERE comment_id = ?", (comment_id,)
+        ).fetchone()
+        return (row[0], row[1]) if row else None
 
     def already_posted(self, event_key: str, kind: str) -> bool:
         """True once reserved, confirmed or not."""

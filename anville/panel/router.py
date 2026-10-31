@@ -56,10 +56,12 @@ class Ask(BaseModel):
         return v
 
 
-def make_router(reader: Reader, writer: Writer, *, panel_secret: str, allowed_docs: Callable[[], set[str]],
+def make_router(reader: Reader, writer: Writer | None, *, panel_secret: str, allowed_docs: Callable[[], set[str]],
                 poll_s: float = 1.0, heartbeat_s: float = 15.0, stream_s: float = 55.0,
                 clock: Callable[[], float] = time.time) -> APIRouter:
-    """The panel's routes. `allowed_docs` is called per request, so the allowlist can change without a restart."""
+    """The panel's routes. `allowed_docs` is called per request, so the allowlist can change without a restart.
+    `writer=None` refuses asks with 501: until a panel.ask handler exists, a 202 would promise an answer that never
+    comes (Codex, PR #34)."""
     router = APIRouter()
 
     def allowed(t: str | None, document_id: str | None) -> bool:
@@ -112,6 +114,8 @@ def make_router(reader: Reader, writer: Writer, *, panel_secret: str, allowed_do
             a = Ask.model_validate(raw)
         except ValidationError as e:
             return JSONResponse({"detail": e.errors(include_url=False, include_context=False)}, status_code=422)
+        if writer is None:
+            return JSONResponse({"detail": "asks aren't answered yet"}, status_code=501)
         key = f"ask:{a.request_id}"
         payload = {**a.model_dump(), "event": "panel.ask", "received_at": clock()}
         inserted = await asyncio.to_thread(writer, key, a.documentId, payload)

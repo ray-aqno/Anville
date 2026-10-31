@@ -25,6 +25,7 @@ try:  # Present in the container image; module-level so FastAPI can resolve the 
 except ImportError:  # local deploy environment doesn't need FastAPI
     FastAPI = HTTPException = Query = Request = None
 
+from anville.deploy import image_ignore, panel_secret
 from anville.connectors.onshape.events import (
     COMMENT_CREATE,
     CREATE_VERSION,
@@ -34,10 +35,13 @@ from anville.connectors.onshape.events import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# What the panel's traveler records as shop:<request_id> (ADR 0007 Amendment 3).
+SHOP_NOTE_EVENT = "shop.note"
 
 app = modal.App("anville")
 _base = modal.Image.debian_slim(python_version="3.12")
-image = _base.pip_install("fastapi[standard]").add_local_python_source("anville")
+# Modal ships only .py files by default: the panel's page and scripts must be let in (anville/deploy.py).
+image = _base.pip_install("fastapi[standard]").add_local_python_source("anville", ignore=image_ignore)
 # OCP links libGL/libX11, which its wheel doesn't bundle (ADR 0008). ~380 MB installed,
 # so only analyze() uses this image; the webhook stays small and starts fast.
 geo_image = (
@@ -91,7 +95,7 @@ def _shop_ledger(store) -> list[dict]:
 # The Store methods a remote caller may run.
 STORE_OPS = frozenset({
     "record", "claim", "finish", "reapable", "event", "is_current",
-    "reserve_post", "complete_post", "already_posted", "unconfirmed_posts",
+    "reserve_post", "complete_post", "already_posted", "unconfirmed_posts", "post_for_comment",
     "append_trace", "trace_after", "append_ledger", "read_ledger",
     "reserve_call", "release_call", "calls",
 })
@@ -238,6 +242,19 @@ class _Trace:
 def web():
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
+    # The docked panel (ADR 0007, PR #33). Without its own token it stays unmounted: a missing variable
+    # must not take the webhook endpoint down with it.
+    secret = panel_secret(os.environ)
+    if secret:
+        from anville.panel import make_router
+
+        # No writer yet: asks get 501 until panel.ask is handled (ADR 0012's loop; Codex, PR #34).
+        api.include_router(make_router(
+            lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n), None,
+            panel_secret=secret, allowed_docs=_allowed))
+    else:
+        _log("panel_unmounted", reason="ANVILLE_PANEL_TOKEN is unset or equals the webhook secret")
+
     @api.get("/healthz")
     async def healthz():
         import sys
@@ -358,6 +375,8 @@ def handle_event(key: str) -> None:
         name = ev.payload.get("event")
         if name == CREATE_VERSION:
             _on_create_version(store, ev, deadline)
+        elif name == SHOP_NOTE_EVENT:
+            _on_shop_note(store, ev)
         elif name == COMMENT_CREATE:
             time.sleep(SELF_COMMENT_RECHECK_S)
             cid = ev.payload["commentId"]
@@ -365,6 +384,7 @@ def handle_event(key: str) -> None:
                 _log("ignored", reason="own comment (late recheck, F1)", commentId=cid)
             else:
                 _log("designer_comment", commentId=cid, documentId=ev.document_id)
+                _on_reply(store, ev, deadline)
         ok = True
     finally:
         # A failed job is marked failed, not retried: the reaper only retries lost or expired claims.
@@ -375,6 +395,46 @@ def handle_event(key: str) -> None:
             nxt = None
         if nxt:
             handle_event.spawn(nxt)
+
+
+def _on_shop_note(store, ev) -> None:
+    """A machinist's note from the traveler (ADR 0007 Amendment 3) goes to the shop ledger, so the next review
+    starts from it: a cutter ticked as arrived becomes one the shop owns (demo gaps 2 and 3)."""
+    from anville.agent.job import SHOP_SCOPE, shop_note_writes
+
+    note = ev.payload
+    sheet = store.call.remote("event", f"sheet:{note.get('sheet_id')}")
+    if sheet is None:
+        _log("ignored", reason="shop note for an unknown sheet", key=ev.key, sheet_id=note.get("sheet_id"))
+        return
+    try:
+        entries = shop_note_writes(note, sheet.payload, stored=store.call.remote("read_ledger", "shop_outcome",
+                                                                                 SHOP_SCOPE),
+                                   sheet_document=sheet.document_id, note_document=ev.document_id)
+    except ValueError as e:  # the panel validates first; a note that still fails costs only itself
+        _log("shop_note_rejected", key=ev.key, error=str(e)[:300])
+        return
+    for entry in entries:
+        store.call.remote("append_ledger", "shop_outcome", SHOP_SCOPE, entry["payload"], entry["provenance"])
+    _log("shop_note_recorded", key=ev.key, kinds=[e["payload"]["kind"] for e in entries])
+
+
+def _store_sheet(store, key: str, did: str, vid: str, facts: dict, back_chamfer: list[dict], ledger: list[dict],
+                 buying: list[str], trace: "_Trace") -> str | None:
+    """The setup sheet the shop runs, stored for the traveler as event sheet:<id>. A sheet failure costs only the
+    sheet, never the review."""
+    from anville.agent.job import review_shop, sheet_for, sheet_id_for
+
+    try:
+        shop, learned = review_shop(ledger)
+        sheet = sheet_for(facts, shop, back_chamfer, buying=buying, provenance=learned)
+        sid = sheet_id_for(key)  # a retry keeps the first sheet: record ignores the duplicate key
+        store.call.remote("record", f"sheet:{sid}", did, {**sheet, "version_id": vid}, settled=True)
+    except Exception as e:
+        _log("sheet_failed", error=repr(e)[:300])
+        return None
+    trace.add("tool_result", "Setup sheet ready", sheet_id=sid, setups=len(sheet["setups"]), buying=buying)
+    return sid
 
 
 def _on_create_version(store, ev, deadline: float) -> None:
@@ -393,6 +453,80 @@ def _on_create_version(store, ev, deadline: float) -> None:
         trace.add("run_finished", "Review ended with an error")
         trace.flush()
         raise
+
+
+def _on_reply(store, ev, deadline: float) -> None:
+    """ADR 0012: a reply under an Anville comment becomes constraints, and the same version is re-planned and
+    answered in the thread. Any other comment stays quiet."""
+    from anville.agent.reply import is_own_comment, resolve_review
+
+    cid, did = ev.payload["commentId"], ev.document_id
+    client = _client()
+    reply = client.get(f"/comments/{cid}")
+    posts = lambda c: store.call.remote("post_for_comment", c)  # noqa: E731
+    if is_own_comment(reply, posts):  # durable, not just state: the self-loop guard (Codex, PR #38)
+        _log("ignored", reason="own comment (durable check, F1)", commentId=cid)
+        return
+    root = reply.get("parentId")  # inference until the live check (ADR 0012, open question 1)
+    review_key = resolve_review(root, posts, lambda c: client.get(f"/comments/{c}").get("parentId")) if root else None
+    if review_key is None:
+        _log("ignored", reason="not a reply to Anville", commentId=cid)
+        return
+    review = store.call.remote("event", review_key)
+    if review is None or "versionId" not in review.payload:
+        _log("ignored", reason="reply thread has no review on record", commentId=cid, parentId=root)
+        return
+    vid = review.payload["versionId"]
+    trace = _Trace(store, did, f"{vid[:8]}-r{ev.attempts}", vid)
+    trace.add("run_started", "Reading a designer's reply", comment_id=cid)
+    try:
+        _replan(store, ev, trace, client, reply, root, review, vid, deadline)
+    except Exception as e:
+        trace.add("error", "Re-plan failed", error=type(e).__name__, message=str(e)[:300])
+        trace.add("run_finished", "Re-plan ended with an error")
+        trace.flush()
+        raise
+
+
+def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, vid: str,
+            deadline: float) -> None:
+    from anville.agent.job import agent_comment, flushing_at_stage_changes, read_reply_turn, review_shop
+    from anville.agent.reply import constraint_entry, constraints_from_ledger, nothing_read, unrecorded
+
+    cid, did, review_key = ev.payload["commentId"], ev.document_id, review.key
+    ledger = _shop_ledger(store)
+    result = analyze.remote(vid, ledger)  # the version's STEP is already on the volume: no second export
+    shop, learned = review_shop(ledger)
+    # The issues the designer is answering are the review's: the shop as it was then (Codex, PR #38).
+    then, _ = review_shop([r for r in ledger if r.get("created_at", 0) <= review.received_at])
+    emit = flushing_at_stage_changes(trace.add, trace.flush)
+    found, groups, setups = read_reply_turn(result["facts"], shop, os.environ, emit, reply.get("message") or "",
+                                            deadline=deadline, back_chamfer=result["back_chamfer"], issue_shop=then)
+    scope = f"doc:{did}"
+    entries = [constraint_entry(rule, reply_id=cid, review_key=review_key, version_id=vid) for rule in found or []]
+    for entry in unrecorded(entries, store.call.remote("read_ledger", "constraint", scope)):  # a retry adds nothing
+        store.call.remote("append_ledger", "constraint", scope, entry["payload"], entry["provenance"])
+    for rule in found or []:
+        trace.add("tool_result", "Constraint recorded", face_group=rule["face_group"], rule=rule["rule"],
+                  quote=rule["quote"])
+    if found:
+        constraints = constraints_from_ledger(store.call.remote("read_ledger", "constraint", scope), version_id=vid)
+        comment, _ = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
+                                   back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
+        message = comment or _review_message(vid, result["plan"])
+    else:
+        message = nothing_read(groups, setups) if groups else None
+    trace.flush()
+    if message and store.call.remote("reserve_post", ev.key, "replan"):
+        from anville.connectors.onshape.oauth import post_as_anville
+
+        posted, identity = post_as_anville(_anville_client(), client, {
+            "documentId": did, "parentId": root, "message": message})
+        state[f"self:{posted['id']}"] = time.time()
+        store.call.remote("complete_post", ev.key, "replan", posted["id"])
+        trace.add("comment_posted", "Answered in the thread", comment_id=posted["id"], posted_as=identity)
+    trace.add("run_finished", "Re-plan finished")
+    trace.flush()
 
 
 def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
@@ -433,6 +567,8 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
     message = (_agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing, deadline)
                or _review_message(vid, plan))
+    timing["sheet_id"] = _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"], ledger,
+                                      timing.get("buying") or [], trace)
     timing["reviewed_at"] = time.time()
 
     # Version guard (ADR 0006 §5): a superseded version gets no comment.

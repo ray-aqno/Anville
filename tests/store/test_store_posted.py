@@ -44,3 +44,22 @@ def test_fresh_reservations_are_not_yet_unconfirmed(store, clock):
 def test_completing_a_post_that_was_never_reserved_is_an_error(store):
     with pytest.raises(KeyError):
         store.complete_post("version:v1", "review", comment_id="c-1")
+
+
+def test_a_settled_record_is_stored_done_and_never_reaped(store, clock):
+    """A setup sheet is stored as an event so the panel can load it, but there's nothing to run."""
+    assert store.record("sheet:abc", "d1", {"schema": "anville.setup_sheet/1"}, settled=True)
+    clock.advance(3600)
+    assert store.event("sheet:abc").payload["schema"] == "anville.setup_sheet/1"
+    assert [e.key for e in store.reapable(60)] == []
+    assert store.claim("sheet:abc") is None
+
+
+def test_a_posted_comment_leads_back_to_the_event_that_posted_it(store):
+    """ADR 0012: a reply's parentId is how Anville finds the review it answers."""
+    store.reserve_post("version:v1", "review")
+    store.complete_post("version:v1", "review", "c-root")
+    assert store.post_for_comment("c-root") == ("version:v1", "review")
+    assert store.post_for_comment("c-unknown") is None
+    store.reserve_post("version:v2", "review")  # reserved, never confirmed: no comment id to match
+    assert store.post_for_comment("") is None

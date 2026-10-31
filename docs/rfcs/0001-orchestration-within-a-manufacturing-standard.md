@@ -1,6 +1,6 @@
 # RFC 0001: Orchestration within a manufacturing standard, and domain knowledge without fine-tuning
 
-- **Status:** Draft
+- **Status:** Closed (2026-10-30): adopted as ADR 0009 (stage graph) and the eval gate (PR #31)
 - **Date:** 2026-10-27
 - **Touches:** ADR 0002 (planner), ADR 0003 (agent loop, Amendment 1), ADR 0004 (model selection), ADR 0006 (store), locked decision 4 ("the model reasons, the harness learns")
 

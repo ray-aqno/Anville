@@ -1,6 +1,7 @@
 # ADR 0006: Architecture shape: per-event jobs over one durable event store
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
+- **Notes:** §9 (evidence intake) falls with ADR 0005, rejected. §10 (anchoring) waits on RFC 0003.
 - **Date:** 2026-10-27
 - **Depends on:** ADR 0001, ADR 0003, ADR 0005
 

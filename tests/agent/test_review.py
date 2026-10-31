@@ -670,8 +670,8 @@ def test_a_purchase_proposal_states_its_payback_range_in_code(part_a, costed, ch
 
 
 def test_other_proposals_and_unpriced_shops_carry_no_dollars(part_a, shop, costed, chamfer, catalog_access):
-    route = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())),
-                       back_chamfer=catalog_access)
+    # Without the catalog cutter the route is Part A's only shop fix, so ADR 0010 lets it lead.
+    route = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())))
     assert "pays off" not in route.comment
     buy = decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"})
     plain = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), buy), back_chamfer=catalog_access)
@@ -712,7 +712,7 @@ def test_the_cost_comparison_and_its_inputs_reach_the_trace(part_a, costed, cham
     """Codex, PR #26: the panel must show that the verdict depends, and which inputs are placeholders."""
     events = []
     run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(propose_route())),
-               back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+               emit=lambda kind, title, **d: events.append((title, d)))  # route is the only shop fix (ADR 0010)
     (compared,) = [d for t, d in events if t == "Costs compared"]
     assert {v["quantity"] for v in compared["verdicts"]} == {4, 10, 20}
     assert any(i["status"] == "placeholder" for i in compared["inputs"].values())
@@ -778,7 +778,7 @@ def test_only_plan_changing_options_are_priced(part_a, costed, chamfer, catalog_
     events = []
     run_review(part_a, costed, Scripted(plan(*requests_for(chamfer), {"kind": "set_depth", "face_group": chamfer}),
                                         decide(propose_route())),
-               back_chamfer=catalog_access, emit=lambda kind, title, **d: events.append((title, d)))
+               emit=lambda kind, title, **d: events.append((title, d)))  # route is the only shop fix (ADR 0010)
     scored = [d for t, d in events if t == "Option scored"]
     assert all(("costs" in d) == d["changes_plan"] for d in scored) and any(not d["changes_plan"] for d in scored)
 
@@ -864,3 +864,95 @@ def test_one_route_is_said_once(shop, tmp_path):
     lines = run_review(facts, shop, None).comment.splitlines()
     assert sum("outside 5-axis shop" in line for line in lines) <= 1
     assert sum(line.endswith("the same change covers it.") for line in lines) >= 1, lines
+
+
+# --- ADR 0010: cost-ranked any-intent fixes (mid-range tie-break, Rayyan 2026-10-30) ----------------------
+
+
+def test_the_ranked_lead_is_the_only_shop_fix_that_may_lead(part_a, costed, chamfer, catalog_access):
+    """Gate on #26: with intent stated, Part A led with the 5-axis route 10 of 10 and the 910480 0 of 10.
+    On DLL inputs the 910480 is cheaper at mid-range inputs at every quantity, so it leads."""
+    buy = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route()), decide(buy))
+    r = run_review(part_a, costed, model, back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"})
+    assert r.decisions[0].option_key == BUY and "decide" not in r.fallbacks
+    assert "costs less at mid-range inputs" in model.sent[2][0][1]["content"]
+
+
+def test_the_fallback_leads_with_the_ranked_fix(part_a, costed, chamfer, catalog_access):
+    r = run_review(part_a, costed, None, back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"})
+    assert r.decisions[0].option_key == BUY
+
+
+def test_a_tie_break_lead_names_its_rival_and_never_claims_cheapest(part_a, costed, chamfer, catalog_access):
+    """ADR 0010 §5: the lead wins only at mid-range inputs, so the comment says the route can cost less,
+    and model prose may not call the lead cheapest."""
+    r = run_review(part_a, costed, None, back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"})
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+    cheapest = {"text": "Buying the cutter is the cheapest fix.", "role": "action", "cites": ["decision:I1"]}
+    buy = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    model = Scripted(plan(*requests_for(chamfer)), decide(buy, comment=[cheapest]), decide(buy))
+    run_review(part_a, costed, model, back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"})
+    assert "cheapest" in model.sent[2][0][1]["content"]
+
+
+def test_each_issue_is_ranked_over_its_own_fixes(part_a, costed, chamfer, catalog_access):
+    events = []
+    run_review(part_a, costed, None, back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"},
+               emit=lambda kind, title, **d: events.append((title, d)))
+    (ranked,) = [d for t, d in events if t == "Fixes ranked"]
+    assert ranked["issue_id"] == "I1" and ranked["lead"] == BUY and ranked["basis"] == "mid_range"
+    assert set(ranked["top"]) == {BUY, ROUTE}
+
+
+# --- Rayyan's ruling (a), 2026-10-30: the intent question is always attached where it could change the plan ---
+
+
+def _buy(question=None):
+    d = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    return {**d, "question": question} if question else d
+
+
+def test_code_attaches_the_intent_question_when_the_model_leaves_it_out(part_a, costed, chamfer, catalog_access):
+    """Gate on #37: on the live (unknown-intent) path the model asked in 1 of 20 runs, so the comment never invited
+    the reply the re-plan beat needs."""
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy())), back_chamfer=catalog_access)
+    lines = r.comment.splitlines()
+    assert r.decisions[0].question == f"Is {chamfer} required as modelled?"
+    assert f"If {chamfer} isn't needed, removing {chamfer} also takes it to 1 setup(s)." in lines
+    assert lines[-1].endswith("The answer could change the best plan.")
+
+
+def test_a_valid_model_question_is_kept(part_a, costed, chamfer, catalog_access):
+    mine = f"Does the weld fixture need {chamfer}?"
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine))),
+                   back_chamfer=catalog_access)
+    assert r.decisions[0].question == mine
+
+
+def test_no_question_is_attached_when_intent_is_stated(part_a, costed, chamfer, catalog_access):
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy())),
+                   back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"})
+    assert r.decisions[0].question is None
+
+
+def test_one_fix_covering_two_issues_asks_once(shop, tmp_path):
+    """The ruling's one intent question: two_pockets' fallback asked about G8 and again about G10."""
+    from tests.geometry.parts import PARTS, write_step
+
+    facts = extract(write_step(PARTS["two_pockets"](), tmp_path / "p.step"))
+    r = run_review(facts, shop, None)
+    assert sum(d.question is not None for d in r.decisions) == 1
+    assert sum("required as modelled?" in line for line in r.comment.splitlines()) == 1
+
+
+def test_option_scored_carries_the_plain_name_and_params(part_a, shop, catalog_access):
+    """Panel lane: it re-derived names from keys, and an owned cutter ("use the shop's") can't be told
+    from the key. The trace now carries review's own name, slots filled, plus kind and params."""
+    events = []
+    run_review(part_a, shop, None, back_chamfer=catalog_access,
+               emit=lambda kind, title, **d: events.append((title, d)))
+    scored = {d["key"]: d for t, d in events if t == "Option scored"}
+    buy = next(d for k, d in scored.items() if k.startswith("add_tool/"))
+    assert buy["name"] == "buying the 910480 back-chamfer cutter" and buy["edit_kind"] == "add_tool"
+    assert buy["params"]["owned"] is False and "{{" not in "".join(d["name"] for d in scored.values())

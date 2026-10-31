@@ -68,7 +68,8 @@ def flushing_at_stage_changes(add: Emit, flush) -> Emit:
 def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, *,
                   model: ChatModel | None = None, verifier: ChatModel | None = None,
                   deadline: float | None = None, back_chamfer: list[dict] = (),
-                  learned: dict[str, dict] | None = None) -> tuple[str | None, dict]:
+                  learned: dict[str, dict] | None = None,
+                  constraints: list[dict] | None = None) -> tuple[str | None, dict]:
     """The agent's comment and its run stats for the job's timing log.
 
     `ANVILLE_AGENT=off` skips it. Models come from `env` unless passed in; the verifier
@@ -84,7 +85,8 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
         if verifier is None and env.get("MODEL_API_KEY"):
             verifier = OpenAICompatModel.from_env(env, "spark")
         r = run_review(PartFacts.from_dict(facts), shop, model, verifier=verifier, emit=emit,
-                       deadline=deadline, back_chamfer=[BackChamferAccess.from_dict(a) for a in back_chamfer])
+                       deadline=deadline, back_chamfer=[BackChamferAccess.from_dict(a) for a in back_chamfer],
+                       constraints=constraints)
     except Exception as e:  # an agent bug must not cost the designer the review
         error = repr(e)[:300]
         emit("error", "Agent failed; posting the setup count instead", error=error)
@@ -98,4 +100,97 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
             on = f" on {source['on']}" if source.get("on") else ""
             comment += f"\nIt plans with the {name} the shop bought{on}."
     return comment or None, {"agent_calls": r.model_calls, "agent_fallbacks": r.fallbacks,
-                               "agent_usage": r.usage}
+                               "agent_usage": r.usage, "buying": buying_from(r)}
+
+
+def buying_from(r) -> list[str]:
+    """The catalog back-chamfer cutters the review proposed buying: the setup sheet plans with them, unowned, so
+    the traveler can tick them as arrived (demo gap 2)."""
+    names = []
+    for d in r.decisions:
+        o = r.options.get(d.option_key) if d.action == "propose" else None
+        if o and o.kind == "add_tool" and o.params.get("type") == "back_chamfer" and o.params.get("owned") is False:
+            names.append(o.params["name"])
+    return sorted(set(names))
+
+
+def sheet_for(facts: dict, shop: ShopProfile, back_chamfer: list[dict], *, buying: list[str] = (),
+              provenance: dict[str, dict] | None = None) -> dict:
+    """The setup sheet the shop runs: the plan with the cutters the review decided to buy (demo gap 3)."""
+    from dataclasses import replace
+
+    from anville.geometry import BACK_CHAMFER_CATALOG, min_setups
+    from anville.shop.sheet import setup_sheet
+
+    part = PartFacts.from_dict(facts)
+    access = [BackChamferAccess.from_dict(a) for a in back_chamfer]
+    catalog = {c.name: c for c in BACK_CHAMFER_CATALOG}
+    with_bought = replace(shop, back_chamfer_tools=[*shop.back_chamfer_tools, *(catalog[n] for n in buying)])
+    plan = min_setups(part, with_bought, back_chamfer=access)
+    return setup_sheet(part, shop, plan, back_chamfer=access, provenance=provenance, buying=tuple(buying))
+
+
+def shop_note_writes(note: dict, sheet: dict, *, stored: list[dict], sheet_document: str | None = None,
+                     note_document: str | None = None) -> list[dict]:
+    """A shop note's ledger entries not already written, so a retried job writes nothing twice and finishes what a
+    job that died mid-write began. A note may answer only a sheet on its own document, and a note id already
+    recorded can't come back saying something else (Codex, PR #40)."""
+    from anville.shop.ledger import SHOP_NOTE, shop_note_entries
+
+    if sheet_document != note_document:
+        raise ValueError("a shop note may only answer a sheet stored on its own document")
+    entries = shop_note_entries(note, sheet=sheet)
+    decision = entries[0]["provenance"]["decision"]
+    before = [r for r in stored if r["provenance"].get("decision") == decision]
+    said = next((r["payload"] for r in before if r["payload"].get("kind") == SHOP_NOTE), None)
+    if said is not None and said != entries[0]["payload"]:
+        raise ValueError(f"{decision} is already recorded, saying something else")
+    key = lambda e: (e["payload"].get("kind"), e["payload"].get("name"))  # noqa: E731
+    seen, out = {key(r) for r in before}, []
+    for e in entries:  # a cutter ticked twice is acquired once
+        if key(e) not in seen:
+            seen.add(key(e))
+            out.append(e)
+    return out
+
+
+def sheet_id_for(event_key: str) -> str:
+    """The sheet id for a review event: the same on a retry, so a retried review can't announce a second sheet
+    (Codex, PR #40). The link's HMAC is the capability, so the id needn't be secret."""
+    import hashlib
+
+    return hashlib.sha256(event_key.encode()).hexdigest()[:32]
+
+
+def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, reply: str, *,
+                    model: ChatModel | None = None, deadline: float | None = None,
+                    back_chamfer: list[dict] = (),
+                    issue_shop: ShopProfile | None = None) -> tuple[list[dict] | None, list[str], int]:
+    """ADR 0012, first half of a reply turn: (rules, the issue groups a reply may decide, setups now).
+
+    The groups are the issues code finds on this version, so a rule can only be about a face the review could
+    have raised. `rules` is None when the agent is off or the read fell back; the job then answers with
+    `nothing_read`, never a guessed rule. `issue_shop`: the shop as it was when the review ran, so a cutter
+    bought since doesn't hide the issue the designer is answering (Codex, PR #38). `setups` is today's.
+    """
+    from anville.agent.reply import read_reply
+    from anville.agent.review import find_issues
+    from anville.geometry import min_setups
+
+    part = PartFacts.from_dict(facts)
+    access = [BackChamferAccess.from_dict(a) for a in back_chamfer]
+    plan = min_setups(part, shop, back_chamfer=access)
+    then = plan if issue_shop is None else min_setups(part, issue_shop, back_chamfer=access)
+    issues = find_issues(part, then)
+    raised = {i.face_group: i.kind for i in issues}
+    groups = list(dict.fromkeys(i.face_group for i in issues))
+    if env.get("ANVILLE_AGENT", "on") != "on":
+        return None, groups, plan.count
+    try:
+        model = model or OpenAICompatModel.from_env(env, "open")
+        found, _ = read_reply(model, reply, raised, emit=emit, deadline=deadline)
+    except Exception as e:  # a reader bug must not cost the designer an answer
+        emit("error", "Reading the reply failed", stage="read_reply", error=repr(e)[:300])
+        return None, groups, plan.count
+    emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None)
+    return found, groups, plan.count

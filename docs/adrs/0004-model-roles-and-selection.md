@@ -1,6 +1,7 @@
 # ADR 0004: Model roles, providers, and how a model is chosen per role
 
-- **Status:** Proposed
+- **Status:** Accepted (Rayyan Aquino, 2026-10-30, by delegated review: still within the system's shape)
+- **Settled since:** reply parsing is Muse Spark Open (ADR 0012); Fireworks is a second host (ADR 0011). The fix compiler waits on RFC 0005.
 - **Date:** 2026-10-26
 - **Supersedes:** locked decision 5 (model roles) in the project brief, in part. "Muse Code writes the fix" is replaced, because Muse Code is a subscription product and not a callable model.
 - **Depends on:** ADR 0003
