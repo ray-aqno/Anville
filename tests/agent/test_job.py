@@ -167,6 +167,125 @@ def test_part_b_says_it_plans_with_the_cutter_the_shop_bought(shop):
     assert comment.splitlines()[-1] == "It plans with the 910480 the shop bought on 2026-10-26."
 
 
+# --- The setup sheet goes to the shop, and the shop's note comes back (demo gaps 2 and 3) ---------------------
+
+def _decide_buy(part_a, shop, chamfer, catalog_access):
+    from tests.agent.test_review import BUY
+
+    model = Scripted(plan(*requests_for(chamfer)),
+                     decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}))
+    return agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
+                         back_chamfer=[a.to_dict() for a in catalog_access])
+
+
+def test_the_review_says_which_catalog_cutter_it_decided_to_buy(part_a, shop, chamfer, catalog_access):
+    _, stats = _decide_buy(part_a, shop, chamfer, catalog_access)
+    assert stats["buying"] == ["910480"]
+    model = Scripted(plan(*requests_for(chamfer)), decide(propose_route()))
+    _, stats = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None, model=model,
+                             back_chamfer=[a.to_dict() for a in catalog_access])
+    assert stats["buying"] == []
+
+
+def test_the_sheet_plans_with_the_cutter_being_bought_and_marks_it_unowned(part_a, shop, catalog_access):
+    """The traveler's 'arrived' box is what turns the purchase into a tool_acquired row."""
+    from anville.agent.job import sheet_for
+
+    access = [a.to_dict() for a in catalog_access]
+    bought = sheet_for(part_a.to_dict(), shop, access, buying=["910480"])
+    rows = [t for s in bought["setups"] for t in s["tools"]]
+    assert len(bought["setups"]) == 1
+    assert [t["owned"] for t in rows if t["name"] == "910480"] == [False]
+    assert len(sheet_for(part_a.to_dict(), shop, access, buying=[])["setups"]) == 2
+
+
+def test_a_shop_note_is_written_once_even_when_the_job_retries(part_a, shop, catalog_access):
+    from anville.agent.job import shop_note_writes, sheet_for
+
+    sheet = sheet_for(part_a.to_dict(), shop, [a.to_dict() for a in catalog_access], buying=["910480"])
+    note = {"event": "shop.note", "note_id": "n1", "sheet_id": "s1", "outcome": "as_planned",
+            "tools_arrived": ["910480"], "tags": [], "setups_run": 1, "note_text": ""}
+    first = shop_note_writes(note, sheet, stored=[])
+    assert [e["payload"]["kind"] for e in first] == ["shop_note", "tool_acquired"]
+    stored = [{"id": i, **e} for i, e in enumerate(first, 1)]
+    assert shop_note_writes(note, sheet, stored=stored) == []
+    # and what it wrote is what the next review learns from
+    owns, learned = review_shop(stored)
+    assert "910480" in {t.name for t in owns.back_chamfer_tools} and "910480" in learned
+
+
+def test_a_cutter_the_shop_already_owns_is_not_being_bought():
+    from types import SimpleNamespace as NS
+
+    from anville.agent.job import buying_from
+
+    opt = lambda owned: NS(kind="add_tool", params={"type": "back_chamfer", "name": "910480", "owned": owned})  # noqa: E731
+    pick = [NS(action="propose", option_key="k")]
+    assert buying_from(NS(decisions=pick, options={"k": opt(False)})) == ["910480"]
+    assert buying_from(NS(decisions=pick, options={"k": opt(True)})) == []
+    assert buying_from(NS(decisions=[NS(action="quiet", option_key="k")], options={"k": opt(False)})) == []
+
+
+# --- Codex, PR #40 ------------------------------------------------------------------------------------------
+
+def _note(**kw):
+    return {"event": "shop.note", "note_id": "n1", "sheet_id": "s1", "outcome": "as_planned",
+            "tools_arrived": [], "tags": [], "setups_run": 1, "note_text": "", **kw}
+
+
+def _bought_sheet(part_a, shop, catalog_access):
+    from anville.agent.job import sheet_for
+
+    return sheet_for(part_a.to_dict(), shop, [a.to_dict() for a in catalog_access], buying=["910480"])
+
+
+def test_a_note_may_only_answer_a_sheet_on_its_own_document(part_a, shop, catalog_access):
+    import pytest
+
+    from anville.agent.job import shop_note_writes
+
+    with pytest.raises(ValueError, match="document"):
+        shop_note_writes(_note(), _bought_sheet(part_a, shop, catalog_access), stored=[],
+                         sheet_document="doc-A", note_document="doc-B")
+
+
+def test_a_replayed_note_id_cant_change_what_the_shop_reported(part_a, shop, catalog_access):
+    """P1: a replay adding an arrival would have written tool_acquired under a note that reported none."""
+    import pytest
+
+    from anville.agent.job import shop_note_writes
+
+    sheet = _bought_sheet(part_a, shop, catalog_access)
+    stored = [{"id": i, **e} for i, e in enumerate(shop_note_writes(_note(), sheet, stored=[]), 1)]
+    with pytest.raises(ValueError, match="already recorded"):
+        shop_note_writes(_note(tools_arrived=["910480"]), sheet, stored=stored)
+
+
+def test_a_job_that_died_mid_write_finishes_the_same_note(part_a, shop, catalog_access):
+    from anville.agent.job import shop_note_writes
+
+    sheet, note = _bought_sheet(part_a, shop, catalog_access), _note(tools_arrived=["910480"])
+    first = shop_note_writes(note, sheet, stored=[])
+    rest = shop_note_writes(note, sheet, stored=[{"id": 1, **first[0]}])  # only the shop_note row landed
+    assert [e["payload"]["kind"] for e in rest] == ["tool_acquired"]
+
+
+def test_a_cutter_ticked_twice_is_acquired_once(part_a, shop, catalog_access):
+    from anville.agent.job import shop_note_writes
+
+    writes = shop_note_writes(_note(tools_arrived=["910480", "910480"]), _bought_sheet(part_a, shop, catalog_access),
+                              stored=[])
+    assert [e["payload"]["kind"] for e in writes] == ["shop_note", "tool_acquired"]
+
+
+def test_a_retried_review_reuses_its_sheet_id():
+    from anville.agent.job import sheet_id_for
+
+    assert sheet_id_for("version:v1") == sheet_id_for("version:v1") != sheet_id_for("version:v2")
+    import re
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sheet_id_for("version:v1"))  # panel's sheet-id pattern
+
+
 def test_a_reply_turn_reads_rules_against_the_issues_code_found(part_a, shop, chamfer):
     """ADR 0012: the review's issue groups are what a reply may decide about."""
     from anville.agent.job import read_reply_turn
