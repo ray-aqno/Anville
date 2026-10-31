@@ -168,3 +168,11 @@ def test_unknown_intent_with_the_gate_open_always_asks():
     stated = unknown(propose(BUY))
     stated.intents = {"G3": NS(status="stated")}
     assert score.intent_asked(stated, "G3") is None
+
+
+def test_on_a_freed_face_the_ranked_lead_may_be_the_part_edit():
+    """ADR 0010 Amendment 1 (2026-10-31): a freed face's removal is ranked with the shop fixes, so the lead is
+    scored on either side. On code that ranks only shop fixes, a part-side lead still isn't scored."""
+    assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": REMOVE}, freed={"I1"})
+    assert not score.ranked_lead(result(propose(BUY)), "G3", {"I1": REMOVE}, freed={"I1"})
+    assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": BUY}) is None
