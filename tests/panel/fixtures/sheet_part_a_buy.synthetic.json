@@ -1,0 +1,141 @@
+{
+ "note": "SYNTHETIC part (tests/geometry/parts.py demo_bracket, built during the event); sheet computed by anville.shop.sheet.setup_sheet. After the 'buy 910480' decision: the cutter row is owned: false.",
+ "sheet_id": "sheet-part-a-buy",
+ "document_id": "dSYN",
+ "sheet": {
+  "schema": "anville.setup_sheet/1",
+  "part": {
+   "source_sha256": "028628eeb687fb9ee03b4fa3d768a15e0f35f0a9c7691dc4eb37102aa74315e2",
+   "stock_mm": [
+    100.0,
+    60.0,
+    20.0
+   ]
+  },
+  "shop": null,
+  "axes": 3,
+  "setups": [
+   {
+    "number": 1,
+    "directions": [
+     "+Z"
+    ],
+    "orientation": "top up, as modelled",
+    "workholding": {
+     "type": "vise_soft_jaws",
+     "vise_in": 6.0,
+     "jaw_material": "aluminum",
+     "relieved": true,
+     "grip_faces": [
+      "-X",
+      "+X"
+     ],
+     "reliefs": [
+      {
+       "jaw": "-X jaw",
+       "origin_mm": [
+        -13.7,
+        -12.207,
+        -2.007
+       ],
+       "size_mm": [
+        13.7,
+        14.7,
+        22.007
+       ],
+       "grip_kept": 0.958
+      },
+      {
+       "jaw": "+X jaw",
+       "origin_mm": [
+        100.0,
+        -12.207,
+        -2.007
+       ],
+       "size_mm": [
+        13.7,
+        14.7,
+        22.007
+       ],
+       "grip_kept": 0.958
+      }
+     ],
+     "parallels": {
+      "height_mm": 12.7,
+      "width_mm": 3.2,
+      "setback_mm": 7.35,
+      "from_side": "chamfered"
+     },
+     "status": "stated in the shop profile; not confirmed by the shop's machinist (RFC 0002 \u00a73)"
+    },
+    "tools": [
+     {
+      "name": "910480",
+      "type": "back_chamfer",
+      "angle_deg": 45.0,
+      "head_diameter_mm": 12.7,
+      "neck_diameter_mm": 8.05,
+      "neck_length_mm": 63.5,
+      "length_of_cut_mm": 2.24,
+      "owned": false,
+      "faces": [
+       3
+      ],
+      "groups": [
+       "G3"
+      ]
+     },
+     {
+      "name": "EM12",
+      "type": "endmill",
+      "diameter_mm": 12.0,
+      "reach_mm": 48.0,
+      "owned": true,
+      "faces": [
+       6,
+       10,
+       11,
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       19
+      ],
+      "groups": [
+       "G6",
+       "G10",
+       "G12"
+      ]
+     },
+     {
+      "name": "EM6",
+      "type": "endmill",
+      "diameter_mm": 6.0,
+      "reach_mm": 24.0,
+      "owned": true,
+      "faces": [
+       9,
+       18
+      ],
+      "groups": [
+       "G9",
+       "G11"
+      ]
+     }
+    ],
+    "notes": [
+     "Cut the jaw reliefs before loading the part: pockets below, in part coordinates.",
+     "Machinist: verify the back-chamfer toolpath at the machine. The clearances are nominal, from catalog sizes (RFC 0002 \u00a72).",
+     "If the part is held any other way, the chamfer can't be finished from the top: flip it instead."
+    ]
+   }
+  ],
+  "unreachable": [],
+  "notes": [
+   "Predicted from the CAD model's measured faces; not yet run on the machine."
+  ],
+  "basis": "predicted"
+ }
+}

@@ -1,0 +1,47 @@
+/* The traveler: phone-first, read at the machine. Same tokens as the panel, bigger type and tap targets. */
+:root { --design: #1d4ed8; --shop: #c2410c; --anville: #1d2433; --done: #2f7d4f; --fallback: #b7791f;
+  --muted: #6b7383; --line: #e3e6ec; --bg: #ffffff; --soft: #f6f7f9; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--anville);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 16px 16px 40px; }
+header { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; font-size: 18px; }
+.badge { display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px; font-size: 13px;
+  font-weight: 600; color: var(--fallback); background: #fdf3e2; }
+.meta { margin-top: 6px; color: var(--muted); font-size: 14px; }
+.basis { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.setup { padding: 14px 0; border-bottom: 1px solid var(--line); }
+h2 { margin: 0 0 6px; font-size: 20px; }
+h2 .dirs { font-size: 14px; font-weight: 500; color: var(--muted); }
+h3 { margin: 12px 0 4px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--shop); }
+.hold { margin: 0; }
+.status { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+ul { margin: 0; padding: 0; list-style: none; }
+.reliefs li, .notes li { padding: 4px 0 4px 12px; border-left: 3px solid var(--line); margin: 4px 0; font-size: 15px; }
+.notes li { border-left-color: var(--fallback); }
+.tool { padding: 8px 10px; margin: 6px 0; background: var(--soft); border-radius: 8px; }
+.tool .row { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.tool .small { font-size: 14px; color: var(--muted); margin-top: 2px; }
+.buy { color: var(--shop); font-weight: 600; }
+.arrived { display: inline-flex; align-items: center; gap: 6px; color: var(--anville); min-height: 36px; }
+.arrived input, .tag input { width: 20px; height: 20px; }
+.why { font-size: 14px; color: var(--done); margin-top: 2px; }
+form.note { margin-top: 18px; }
+.actions { display: grid; gap: 10px; }
+button { font: inherit; font-weight: 600; min-height: 52px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--soft); color: var(--anville); padding: 10px 14px; cursor: pointer; }
+button.ok { background: var(--done); color: #fff; border-color: var(--done); }
+button.send { width: 100%; margin-top: 10px; background: var(--shop); color: #fff; border-color: var(--shop); }
+button:disabled { opacity: .6; cursor: default; }
+fieldset { margin: 12px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+legend { font-weight: 600; padding: 0 4px; }
+.tags { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.tag { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+.runs { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.runs input { width: 72px; min-height: 40px; font: inherit; padding: 4px 8px; }
+textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.sent { min-height: 1.4em; margin: 12px 0 0; font-weight: 600; }
+form.done .actions, form.done fieldset { display: none; }
+form.done .sent { color: var(--done); }
+@media (max-width: 360px) { .tags { grid-template-columns: 1fr; } }

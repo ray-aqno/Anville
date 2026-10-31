@@ -192,3 +192,36 @@ Drafted by the panel lane against `anville/panel/DESIGN.md`. Main agreed the pan
 **Consequences.**
 - **Easier:** both lanes build against named fields, and the panel degrades to "—" while main adds them one at a time.
 - **Harder:** a seven-field extension that the panel's synthetic fixtures must track until a real trace dump replaces them.
+
+## Amendment 3 (Accepted, Rayyan Aquino, 2026-10-30): the traveler's endpoints
+
+**Context.** Amendment 2 left the setup sheet page (P2) for a later amendment. This is that amendment. The note shape was agreed with the shop lane on 2026-10-30 (`anville/panel/DESIGN.md` §4.8), and main stores sheets and turns notes into ledger entries.
+
+**1. Endpoints** (`anville/panel/sheet.py`, a second router: `make_sheet_router(read_sheet, writer, *, panel_secret)`):
+
+| Method | Path | Behaviour |
+|---|---|---|
+| GET | `/sheet/{sheet_id}?s=` | Renders the stored `anville.setup_sheet/1` as one phone-first HTML page, labelled **Predicted** while `basis` is `predicted`. Each tool row with `"owned": false` gets an "Arrived" checkbox. Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`, because the link carries the capability |
+| POST | `/api/shop-note?s=` `{request_id, sheet_id, outcome, tools_arrived?, tags?, setups_run?, note_text?}` | Records a `shop.note` event keyed `shop:<request_id>`, on the sheet's document. Returns 202 `{"event_id"}`, or 200 with the same body on a duplicate |
+
+- `read_sheet(sheet_id) -> (document_id, sheet) | None`. Main backs it with sheets stored as events keyed `sheet:<id>` (the existing `event` store op).
+- The stored note is `{event: "shop.note", note_id (= request_id), sheet_id, part, outcome, tools_arrived, tags, setups_run, note_text, received_at}`. `part` is copied from the stored sheet's `part.source_sha256`. A client that sends `part` gets a 422.
+
+**2. Auth.**
+- `s = HMAC-SHA256(ANVILLE_PANEL_TOKEN, "sheet:" + sheet_id)`, as lowercase hex. `anville.panel.sheet_sig` computes it for the link main posts in the comment.
+- `sheet_id` must match `[A-Za-z0-9_-]{1,64}`.
+- The signature is checked in constant time **before** any store read. A bad signature, another sheet's signature, or an unknown sheet returns an empty 404. On a POST this happens before body validation, so a bad link never learns the route from a 422.
+- `/api/shop-note` is the one `/api/*` route that takes `s` instead of `t` (Amendment 2 §4).
+
+**3. Validation** (the shop lane's `shop_note_entries` rules, so a bad note is a 422 here, not a refusal in the ledger handler):
+- Strict types, unknown fields refused.
+- `outcome` is `as_planned` or `different`. A `different` note needs non-blank `note_text` (at most 1000 characters, stored verbatim).
+- `tools_arrived` is at most 20 names, each a tool row on this sheet with `"owned": false`.
+- `tags` is a subset of `tool_arrived`, `workholding_changed`, `extra_setup`, `outsourced_op`.
+- `setups_run` is an int from 1 to 99, or null.
+- A missing or null optional field takes its default (`[]`, `[]`, null, `""`).
+
+**Consequences.**
+- **Easier:** the machinist's answer reaches the ledger with no account and no app. The link alone is enough, and it opens exactly one sheet.
+- **Harder:** anyone holding a sheet link can post notes to that sheet until the panel secret is rotated. Rotating the secret also breaks every sheet link already posted.
+- **Revisit:** whether a note should expire with the sheet, after a newer version's sheet replaces it.
