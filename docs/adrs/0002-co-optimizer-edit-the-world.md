@@ -71,7 +71,7 @@ Constraints on the design: setup count is computed from geometry, never guessed 
 
 ## Amendment 2 (Proposed, 2026-10-30): a protected face's removal may be shown as the declined alternative
 
-**Context.** Rayyan chose demo beat (c) on 2026-10-30. Geometry's RFC 0005 found that on Parts A and B the only part edit that lowers setups is removing the bottom chamfer, and that chamfer's intent is stated (weld clearance). Amendment 1 says such an edit is "rejected before scoring", so it can never be built or shown. Beat (c) needs it to be shown, honestly, as the alternative the designer declines: "or remove the chamfer: 1 setup, but it loses weld clearance".
+**Context.** Rayyan chose demo beat (c) on 2026-10-30. As Amendment 1 already found (PR #8, `evaluate_edits`), and RFC 0005 restates, the only part edit on Parts A and B that lowers setups is removing the bottom chamfer, and that chamfer's intent is stated (weld clearance). Amendment 1 says such an edit is "rejected before scoring", so it can never be built or shown. Beat (c) needs it to be shown, honestly, as the alternative the designer declines: "or remove the chamfer: 1 setup, but it loses weld clearance".
 
 **Decision.**
 1. **Never recommended, never merged.** An edit on a protected group still can't lead, can't be proposed, and is never applied to the designer's workspace. Decide's protected-face filter (ADR 0009 §4) is unchanged.
