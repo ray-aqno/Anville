@@ -42,6 +42,13 @@ CASES = {
     "free_no_preference": ("G3 can change if it saves money.", [("G3", "may_change", None)]),
     # A preference on a kept face: prefer is only allowed on may_change, so the right reading is keep alone.
     "keep_with_preference": ("Keep G3. If anything, buy the cutter.", [("G3", "keep", None)]),
+    # Held out (2026-10-31): the reader's instructions now name "not needed / it can go / isn't critical" as
+    # permission, so these word it differently, to tell a learned rule from learned phrases.
+    "held_out_permission": ("That chamfer on G3 is optional.", [("G3", "may_change", None)]),
+    "held_out_any_fix": ("Fine to change G3 however works best for the shop.", [("G3", "may_change", None)]),
+    "held_out_request_part": ("Get rid of G3.", [("G3", "may_change", "part_edit")]),
+    "held_out_request_shop": ("G3 is optional, but leave the model alone and sort it out with tooling.",
+                              [("G3", "may_change", "shop_fix")]),
     "decides_nothing": ("Thanks, I'll look at this Monday.", []),
     # A face group the review didn't raise: no rule can be recorded for it.
     "unraised_group": ("G7 isn't needed either.", []),
