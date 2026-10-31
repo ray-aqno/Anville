@@ -5,6 +5,7 @@ description = "Closes the design loop between engineers and the shop floor."
 requires-python = ">=3.12"
 dependencies = [
     "cadquery-ocp-novtk==8.0.1.1.0",
+    "meta-sam-parser==0.1.0",
 ]
 
 [dependency-groups]
