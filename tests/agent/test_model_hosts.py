@@ -68,3 +68,34 @@ def test_the_trace_records_fireworks_when_it_serves():
     m = FailoverModel([hosted("api.fireworks.ai", rules(keep())), hosted("model-x.api.baseten.co")])
     _, run = read_reply(m, REPLY, RAISED, emit=lambda *a, **k: None)
     assert [u["host"] for u in run.usage] == ["api.fireworks.ai"]
+
+
+def test_the_backup_host_gets_only_the_time_left(monkeypatch):
+    import anville.agent.model as model_mod
+    clock = iter([100.0, 130.0])  # Fireworks used 30 of the 50 s budget before failing
+    monkeypatch.setattr(model_mod.time, "monotonic", lambda: next(clock))
+    fw = hosted("api.fireworks.ai", ModelUnavailable("no complete reply within 30 s"))
+    bt = hosted("model-x.api.baseten.co", rules(keep()))
+    FailoverModel([fw, bt]).call([], [], timeout_s=50)
+    assert fw.timeouts == [50] and bt.timeouts == [20]
+
+
+def test_no_time_left_means_no_backup_call(monkeypatch):
+    import anville.agent.model as model_mod
+    clock = iter([100.0, 150.0])
+    monkeypatch.setattr(model_mod.time, "monotonic", lambda: next(clock))
+    bt = hosted("model-x.api.baseten.co", rules(keep()))
+    with pytest.raises(ModelUnavailable, match="slow"):
+        FailoverModel([hosted("api.fireworks.ai", ModelUnavailable("slow")), bt]).call([], [], timeout_s=50)
+    assert bt.sent == []
+
+
+def test_the_reply_turn_reports_the_host_that_read_the_reply(part_a, shop, chamfer):
+    from anville.agent.job import read_reply_turn
+    events = []
+    m = FailoverModel([hosted("api.fireworks.ai", ModelUnavailable("HTTP 503")),
+                       hosted("model-x.api.baseten.co", rules(keep("weld clearance", group=chamfer)))])
+    read_reply_turn(part_a.to_dict(), shop, {}, lambda kind, msg, **f: events.append((msg, f)),
+                    "That chamfer is weld clearance, keep it.", model=m)
+    read = [f for msg, f in events if msg == "Reply read"]
+    assert read and read[0]["host"] == "model-x.api.baseten.co" and read[0]["calls"][0]["host"] == read[0]["host"]

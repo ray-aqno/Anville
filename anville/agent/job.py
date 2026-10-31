@@ -194,9 +194,12 @@ def read_reply_turn(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit
         return None, groups, plan.count
     try:
         model = model or OpenAICompatModel.from_env(env, "reply")  # Fireworks first (ADR 0011 Amendment 1)
-        found, _ = read_reply(model, reply, raised, emit=emit, deadline=deadline)
+        found, run = read_reply(model, reply, raised, emit=emit, deadline=deadline)
     except Exception as e:  # a reader bug must not cost the designer an answer
         emit("error", "Reading the reply failed", stage="read_reply", error=repr(e)[:300])
         return None, groups, plan.count
-    emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None)
+    # The host that actually read the reply, after any failover (ADR 0011 Amendment 1; Codex, PR #47).
+    calls = list(run.usage)
+    emit("decision", "Reply read", stage="read_reply", rules=found or [], fallback=found is None,
+         host=calls[-1].get("host") if calls else None, calls=calls)
     return found, groups, plan.count

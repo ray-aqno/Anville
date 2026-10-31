@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -161,11 +162,17 @@ class FailoverModel:
         self.name = models[0].name
         self.host = models[0].host
 
-    def call(self, messages: list[dict], tools: list[dict], **kw) -> Reply:
-        for m in self.models:
+    def call(self, messages: list[dict], tools: list[dict], *, timeout_s: float | None = None, **kw) -> Reply:
+        # One budget for the whole call: a backup host gets only the time the first left (Codex, PR #47),
+        # so a failover can't run past the job's deadline for posting.
+        started = time.monotonic() if timeout_s is not None else None
+        for i, m in enumerate(self.models):
+            left = None if started is None else timeout_s - (time.monotonic() - started if i else 0)
+            if left is not None and left <= 1:
+                break
             self.host = m.host
             try:
-                return m.call(messages, tools, **kw)
+                return m.call(messages, tools, timeout_s=left, **kw)
             except ModelUnavailable as e:
                 error = e
         raise error
