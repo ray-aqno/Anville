@@ -139,3 +139,17 @@ Labels: **verified** means checked today against main (`f1b5496`) or the live Fi
   - Two hosts in the re-plan path.
   - A reply read on Fireworks misses Baseten's prompt cache (negligible for one call).
   - The reader's behaviour on Fireworks has to pass its own probe, since the same weights on a different serving stack can parse tools differently (ADR 0011, Trade-offs).
+
+### Probe result (2026-10-31, run on Rayyan's go: "you're going to test and all of our costs should be under $1")
+- **Fireworks** (`accounts/fireworks/models/muse-spark-open`, the real `read_reply`; 31 calls):
+
+  | Case | Result |
+  |---|---|
+  | `keep` ("Required: it's the weld clearance.") | **10/10** |
+  | `may_change` ("Not needed, it can go.") | **10/10** |
+  | no rules ("Thanks, looks good.") | **7/10**: 3 misses, each reading "looks good" as `keep` on G3 |
+
+  - **Cost:** $0.126 at list price, from each response's usage (no cache discount assumed). The first call took 1,160 tokens in and 254 out (about $0.0025); calls took 1.2–17.8 s.
+- **Baseten baseline,** same reader, the no-rules case only: **9/10**, with 1 identical miss.
+- **Reading:** the over-read happens on both hosts. At n=10, 3/10 and 1/10 can't be told apart, so this is a weakness in the reader (a generic approval quoted as a decision), not a host difference. The bar of at least 9/10 per case is **not met** on Fireworks.
+- **Next:** tighten the reader so a reply that only approves or thanks decides nothing (the prompt, the validator, or both; agent lane). Then re-run the no-rules case on both hosts: about $0.04 per 10 on Fireworks. Until the bar is met, the reader stays on Baseten (§3).
