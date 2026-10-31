@@ -15,9 +15,9 @@ VID = "v7aaaaaa0001"
 def reader(store=None, calls=None):
     store = {VID: PNG} if store is None else store
 
-    def read(version_id):
+    def read(version_id, document_id=None):
         if calls is not None:
-            calls.append(version_id)
+            calls.append(version_id if document_id is None else (version_id, document_id))
         return store.get(version_id)
     return read
 
@@ -30,6 +30,14 @@ def test_the_panel_gets_the_picture_by_token():
     r = panel(reader()).get(f"/panel/render/{VID}?documentId={DOC}&t={SECRET}")
     assert r.status_code == 200 and r.content == PNG
     assert r.headers["content-type"] == "image/png" and r.headers["cache-control"] == "no-store"
+
+
+def test_the_panel_asks_for_the_picture_of_its_own_document():
+    """Codex, PR #51: main checks the version belongs to that document, so an allowed document can't fetch
+    another document's render."""
+    calls = []
+    panel(reader(calls=calls)).get(f"/panel/render/{VID}?documentId={DOC}&t={SECRET}")
+    assert calls == [(VID, DOC)]
 
 
 def test_a_wrong_token_or_document_reads_nothing():

@@ -28,7 +28,8 @@ from anville.connectors.onshape.events import token_matches
 
 Reader = Callable[[str, int, int], list[dict]]  # trace_after(document_id, after, limit), oldest first
 Writer = Callable[..., bool]                     # record(key, document_id, payload): False on a duplicate key
-RenderReader = Callable[[str], "bytes | None"]   # version_id -> the flagged face's PNG, or None (Amendment 4)
+RenderReader = Callable[..., "bytes | None"]   # (version_id, document_id=None) -> the flagged face's PNG, or None
+# (Amendment 4). The panel passes its document so main can check the version belongs to it (Codex, PR #51).
 
 STATIC = Path(__file__).parent / "static"
 ASSETS = frozenset({"panel.js", "panel.css", "reduce.js", "pace.js", "view.js", "sheet.js", "sheet.css"})
@@ -89,7 +90,7 @@ def make_router(reader: Reader, writer: Writer | None, *, panel_secret: str, all
         # The flagged face's picture (ADR 0007 Amendment 4); it lands after the comment, so a 404 means "not yet".
         if not allowed(t, documentId) or read_render is None or not VERSION_ID.fullmatch(version_id):
             return Response(status_code=404)
-        png = await asyncio.to_thread(read_render, version_id)
+        png = await asyncio.to_thread(read_render, version_id, documentId)  # main checks they belong together
         if not png:
             return Response(status_code=404)
         return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})

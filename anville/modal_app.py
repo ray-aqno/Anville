@@ -83,6 +83,11 @@ REAPER_PERIOD_MIN = 5
 RECEIVED_GRACE_S = 60
 UNCONFIRMED_POST_S = 120
 
+# Background tasks append to the review's run from their own containers; their seq starts high so the run's
+# events stay distinct by task. The store orders by cursor, so seq only labels.
+BACKGROUND_SEQ = {"anchor": 1000, "branch": 2000}
+
+
 def _shop_scope() -> str:
     """The shop ledger scope for the current recording take (`modal run anville/modal_app.py::new_take`)."""
     from anville.agent.job import shop_scope
@@ -271,9 +276,15 @@ def web():
         from anville.panel import make_router
 
         # No writer yet: asks get 501 until panel.ask is handled (ADR 0012's loop; Codex, PR #34).
-        def read_render(version_id: str) -> bytes | None:  # SAM's picture of the flagged face (ADR 0007 Am. 4)
+        def read_render(version_id: str, document_id: str | None = None) -> bytes | None:  # ADR 0007 Am. 4
+            # SAM's picture of the flagged face. From the panel, only for a version of that document (Codex,
+            # PR #51); the sheet passes no document, since its version comes from its own signed sheet.
             if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", version_id or ""):
                 return None
+            if document_id is not None:
+                ev = StoreSvc().call.remote("event", f"version:{version_id}")
+                if ev is None or ev.document_id != document_id:
+                    return None
             data.reload()  # written by anchor_task's container
             path = Path(f"/data/render/{version_id}.png")
             return path.read_bytes() if path.exists() else None
@@ -660,13 +671,13 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
 
             groups = flagged_groups(result["facts"], review_shop(ledger)[0], result["back_chamfer"])
             if groups:
-                anchor_task.spawn(did, vid, eid, groups[0])
+                anchor_task.spawn(did, vid, eid, groups[0], trace.run_id)
         except Exception as e:  # a picture must never cost the review
             _log("anchor_spawn_failed", error=repr(e)[:300])
         if os.environ.get("ANVILLE_FIX_BRANCH", "off") == "on":
             # A branch export takes ~51 s (RFC 0005, live), so the branch runs on its own once the review is up
             # and answers in its thread. It holds no document claim: a designer's reply isn't kept waiting.
-            fix_branch_task.spawn(ev.key, did, vid, eid, comment["id"])
+            fix_branch_task.spawn(ev.key, did, vid, eid, comment["id"], trace.run_id)
     trace.add("run_finished", "Review finished")
     trace.flush()
 
@@ -685,7 +696,7 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
 
 
 @app.function(image=geo_image, secrets=secrets, volumes={"/data": data}, timeout=120)
-def anchor_task(did: str, vid: str, eid: str, group: str) -> None:
+def anchor_task(did: str, vid: str, eid: str, group: str, run_id: str) -> None:
     """SAM 3.1 outlines the face the review flagged; the PNG goes to the panel and the setup sheet (ADR 0007
     Amendment 4). Code picks and renders the group; SAM confirms the outline or is shown to disagree."""
     from anville.geometry import PartFacts
@@ -693,9 +704,10 @@ def anchor_task(did: str, vid: str, eid: str, group: str) -> None:
 
     data.reload()
     store = StoreSvc()
-    trace = _Trace(store, did, f"{vid[:8]}-a", vid)
-    trace.element_id = eid
-    trace.add("run_started", "Pointing at the flagged face")
+    # Into the review's own run, after its events (Codex, PR #51): a run of its own would take the panel's
+    # latest slot from the review. No run_started/run_finished, which belong to the review.
+    trace = _Trace(store, did, run_id, vid)
+    trace.element_id, trace.seq = eid, BACKGROUND_SEQ["anchor"]
     sam = SamClient.from_env(os.environ)
     if sam is not None:
         trace.add("tool_call", "Model called", stage="anchor", model=sam.model, host=sam.host)
@@ -703,19 +715,18 @@ def anchor_task(did: str, vid: str, eid: str, group: str) -> None:
     facts = PartFacts.from_dict(json.loads(Path(f"/data/facts/{vid}.json").read_text()))
     a = anchor(f"/data/step/{vid}.step", facts, group, sam=sam)
     if a is None:
-        trace.add("run_finished", "The flagged face isn't visible from any view")
+        trace.add("decision", "The flagged face isn't visible from any view", stage="anchor", group=group)
     else:
         Path("/data/render").mkdir(parents=True, exist_ok=True)
         Path(f"/data/render/{vid}.png").write_bytes(a.png)
         data.commit()
         trace.add("tool_result", "Face anchored", **a.record, version_id=vid)
-        trace.add("run_finished", "Face anchored")
     trace.flush()
     _log("anchor", **(a.record if a else {"group": group, "visible": False}))
 
 
 @app.function(image=image, secrets=secrets, volumes={"/data": data}, timeout=300)
-def fix_branch_task(key: str, did: str, vid: str, eid: str, root: str) -> None:
+def fix_branch_task(key: str, did: str, vid: str, eid: str, root: str, run_id: str) -> None:
     """Demo beat (c): the removal built on an anville/alt branch, measured, and answered under the review
     (RFC 0005; ADR 0002 Amendment 2). Once per review: a second spawn for the same review does nothing."""
     from anville.agent.job import fix_branch, flushing_at_stage_changes, review_shop, with_credits
@@ -724,9 +735,8 @@ def fix_branch_task(key: str, did: str, vid: str, eid: str, root: str) -> None:
         return
     state[f"branch:{key}"] = time.time()
     store = StoreSvc()
-    trace = _Trace(store, did, f"{vid[:8]}-b", vid)
-    trace.element_id = eid
-    trace.add("run_started", "Building the alternative on a branch")
+    trace = _Trace(store, did, run_id, vid)  # the review's run, as for anchor_task
+    trace.element_id, trace.seq = eid, BACKGROUND_SEQ["branch"]
     ledger = _shop_ledger(store)
     result = analyze.remote(vid, ledger)  # the review's STEP is on the volume: no second export
     shop, _ = review_shop(ledger)
@@ -751,8 +761,8 @@ def fix_branch_task(key: str, did: str, vid: str, eid: str, root: str) -> None:
             "documentId": did, "parentId": root, "message": with_credits(line, branch.get("usage", []))})
         state[f"self:{posted['id']}"] = time.time()
         store.call.remote("complete_post", key, "branch", posted["id"])
-        trace.add("comment_posted", "Answered in the thread", comment_id=posted["id"], posted_as=identity)
-    trace.add("run_finished", "Branch finished")
+        trace.add("comment_posted", "Branch result posted in the thread", comment_id=posted["id"],
+                  posted_as=identity)
     trace.flush()
     _log("fix_branch", **{k: v for k, v in branch.items() if k != "usage"}, calls_today=client.calls_today())
 
