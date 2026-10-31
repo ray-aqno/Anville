@@ -1068,3 +1068,26 @@ def test_a_replaced_question_reaches_the_panel_and_no_prose_rests_on_it(part_a, 
     sent = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"]
     assert sent[0]["cites"]["decision:I1"] == {"action": "propose", "option_key": BUY}  # no question to lean on
     assert sent[1]["role"] == "question" and sent[1]["text"] == mine
+
+
+def test_a_sentence_brings_the_source_of_every_number_it_uses():
+    """Models lane, 2026-10-31: 32 of 54 verifier drops disputed a number code had filled, because the sentence
+    cited decision:I1 and not the option the slot came from."""
+    from anville.agent.review import slot_source
+
+    nodes = {"plan": {}, "issue:I1": {}, f"option:{BUY}": {}, "option:route_machine/5": {}}
+    assert slot_source(f"option.{BUY}.setups_after", nodes) == f"option:{BUY}"
+    assert slot_source("option.route_machine/5.payback_lo", nodes) == "option:route_machine/5"
+    assert slot_source("issue.I1.directions", nodes) == "issue:I1"
+    assert slot_source("plan.setups", nodes) == "plan"
+    assert slot_source("option.nope.setups_after", nodes) is None
+
+
+def test_the_verifier_sees_the_option_behind_a_filled_number(part_a, costed, chamfer, catalog_access):
+    line = {"text": f"Buying the cutter takes it to {{{{option.{BUY}.setups_after}}}} setup(s).", "role": "action",
+            "cites": ["decision:I1"]}
+    verifier = Scripted(verdicts(True), name="verifier")
+    run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(), comment=[line])),
+               verifier=verifier, back_chamfer=catalog_access)
+    sent = json.loads(verifier.sent[0][0][1]["content"].split("\n", 3)[-1])["sentences"]
+    assert sent[0]["cites"][f"option:{BUY}"]["setups_after"] == 1

@@ -218,6 +218,16 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
     return values
 
 
+def slot_source(slot: str, nodes: dict) -> str | None:
+    """The node a slot's value comes from: option.<key>.<field> -> option:<key>, issue.<id>.<field> -> issue:<id>,
+    plan.<field> -> plan. Option keys contain dots and slashes, so the field is the last segment."""
+    head, _, rest = slot.partition(".")
+    if head == "plan":
+        return "plan" if "plan" in nodes else None
+    node = f"{head}:{rest.rsplit('.', 1)[0]}" if "." in rest else None
+    return node if node in nodes else None
+
+
 def fill_slots(text: str, values: dict[str, str], option_keys: list[str]) -> tuple[str | None, str]:
     """Fill {{slots}}; reject unknown slots and any digit the model wrote itself (locked decision 3)."""
     unknown = [s for s in _SLOT.findall(text) if s.strip() not in values]
@@ -707,6 +717,10 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
     items = []
     for i, sent in enumerate(checked):
         cited = {c: nodes[c] for c in sent["cites"]}
+        for slot in _SLOT.findall(sent["text"]):  # a filled number brings its source, so it can't be disputed for
+            src = slot_source(slot.strip(), nodes)  # lack of a citation (models lane, 2026-10-31: 32 of 54 drops)
+            if src and src not in cited:
+                cited[src] = nodes[src]
         for c in sent["cites"]:
             if c.startswith("decision:"):
                 d = decided_by[c.split(":", 1)[1]]
