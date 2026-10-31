@@ -71,7 +71,8 @@ class Branch:
     workspace_id: str | None = None
     feature_id: str | None = None
     feature_name: str | None = None
-    extra_faces: int = 0           # faces the feature creates beyond the group's: suppression removes them too
+    extra_faces: int = 0           # faces the feature creates beyond the group's: any refuses the branch
+    kept_for: str | None = None    # why the designer keeps the group (its stated intent), for the line
     patch_by: str | None = None    # model | code
     reason: str | None = None      # why it fell back, or why code wrote the patch
     usage: list[dict] = field(default_factory=list)
@@ -79,9 +80,11 @@ class Branch:
 
     def line(self) -> str:
         """The comment's line. Code writes it; every number is a field above."""
-        if self.status == "measured":
+        if self.status == "measured":  # ADR 0002 Amendment 2: the declined alternative, with its cost
+            kept = f": {self.kept_for}" if self.kept_for else ""
             return (f"Branch {self.name}: removing {self.group} measured {self.measured} setup(s) "
-                    f"(predicted {self.predicted}). Not merged: {self.url}")
+                    f"(predicted {self.predicted}). Shown as the alternative, not merged: {self.group} stays as "
+                    f"designed{kept}. {self.url}")
         return (f"Removing {self.group} would take it to {self.predicted} setup(s): predicted from the geometry; "
                 "Anville couldn't measure it on a branch this time.")
 
@@ -111,14 +114,15 @@ class Refused(Exception):
 def build_branch(client, facts: PartFacts, *, did: str, vid: str, eid: str, run: str, group: str,
                  faces: list[int], predicted: int, measure: Callable[[bytes], int], emit: Emit,
                  model: ChatModel | None = None, deadline: float | None = None,
-                 wait: Callable | None = None, base_url: str = "https://cad.onshape.com") -> Branch:
+                 wait: Callable | None = None, base_url: str = "https://cad.onshape.com",
+                 kept_for: str | None = None) -> Branch:
     """Remove `group` (its feature's `faces`, as evaluate_edits removed them) on a new branch and re-count.
 
     `measure(step_bytes) -> setups` re-extracts the branch's STEP with the review's shop. `wait(client, tid)`
     returns the finished translation; the default polls. Never raises: a failure is a `predicted` Branch.
     """
     api = _Counted(client)
-    out = Branch(status="predicted", group=group, predicted=predicted, name=f"anville/alt-{run}")
+    out = Branch(status="predicted", group=group, predicted=predicted, name=f"anville/alt-{run}", kept_for=kept_for)
     try:
         _build(api, facts, out, did=did, vid=vid, eid=eid, faces=faces, measure=measure, emit=emit,
                model=model, deadline=deadline, wait=wait or _poll, base_url=base_url)
@@ -201,7 +205,8 @@ def parse_mapping(response) -> list[dict]:
     for fid, created in result.items():
         for f in created or []:
             c = f.get("c") if isinstance(f, dict) else None
-            if isinstance(f.get("area"), (int, float)) and isinstance(c, list) and len(c) == 3:
+            ok = isinstance(f, dict) and isinstance(f.get("id"), str) and f["id"]  # no identity, no match (Codex)
+            if ok and isinstance(f.get("area"), (int, float)) and isinstance(c, list) and len(c) == 3:
                 faces.append({"feature": str(fid), "id": str(f.get("id")), "area": float(f["area"]),
                               "c": [float(x) for x in c]})
     return faces
@@ -226,9 +231,13 @@ def feature_for(facts: PartFacts, faces: list[int], theirs: list[dict], out: Bra
         out.reason = f"the group's faces come from {len(owners)} features ({', '.join(sorted(owners))})"
         return None
     fid = owners.pop()
-    # Faces the feature creates that we don't remove: matched ones of ours outside `faces`.
-    out.extra_faces = sum(1 for f, r in rows.items() if r["verdict"] == "match" and f not in faces
-                          and creator[r["id"]] == fid)
+    # Suppression removes every face the feature created; the prediction removed only `faces` (Codex, PR #48).
+    ours = {rows[f]["id"] for f in faces}
+    out.extra_faces = sum(1 for t in theirs if t["feature"] == fid and t["id"] not in ours)
+    if out.extra_faces:
+        out.reason = (f"the feature that created {out.group} also creates {out.extra_faces} other face(s): "
+                      "suppressing it would remove more than was predicted")
+        return None
     return fid
 
 

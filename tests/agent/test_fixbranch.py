@@ -135,8 +135,9 @@ def test_the_branch_suppresses_the_chamfer_and_measures_it(part_a, removal, owne
     assert b.calls == 8 and len(api.calls) == 8  # RFC 0005: 7-8 calls (two polls here)
     assert api.calls[0] == ("POST", "/documents/d/d1/workspaces", {"name": "anville/alt-r7", "versionId": "v1"})
     assert all("/w/w-alt/" in p for m, p, _ in api.calls[1:5])  # every edit is on the branch, never main
-    assert b.line() == (f"Branch anville/alt-r7: removing {removal.face_group} measured 1 setup(s) (predicted 1). "
-                        "Not merged: https://cad.onshape.com/documents/d1/w/w-alt/e/e1")
+    g = removal.face_group
+    assert b.line() == (f"Branch anville/alt-r7: removing {g} measured 1 setup(s) (predicted 1). Shown as the "
+                        f"alternative, not merged: {g} stays as designed. https://cad.onshape.com/documents/d1/w/w-alt/e/e1")
 
 
 def test_the_requests_have_the_live_proofs_shapes(part_a, removal, owners):
@@ -299,3 +300,59 @@ def test_demo_a_v1_maps_g11_to_the_weld_chamfer(shop):
     b = Branch(status="predicted", group="G11", predicted=1)
     assert feature_for(facts, option.removed_faces, theirs, b) == CHAMFER_FEATURE["featureId"]
     assert CHAMFER_FEATURE["name"] == "Weld clearance chamfer" and b.extra_faces == 0
+
+
+# --- Codex review of PR #48 ---
+
+
+def test_a_feature_that_also_makes_other_faces_is_refused(part_a, removal, owners):
+    """Suppressing it would remove more than the prediction did (and maybe a protected face)."""
+    other = next(f.id for f in part_a.faces if f.id not in removal.removed_faces)
+    api = FakeOnshape(part_a, {**owners, other: "Fchamfer"})
+    b = _build(part_a, removal, api)
+    assert b.status == "predicted" and "1 other face" in b.reason
+    assert not [p for m, p, _ in api.calls if "/features/featureid/" in p]
+
+
+def test_the_line_says_it_is_the_declined_alternative(part_a, removal, owners):
+    b = _build(part_a, removal, FakeOnshape(part_a, owners))
+    assert "Shown as the alternative, not merged" in b.line()
+    b.kept_for = "weld clearance"
+    assert f"{removal.face_group} stays as designed: weld clearance." in b.line()
+
+
+def test_a_face_without_an_id_is_dropped():
+    raw = {"Fx": [{"area": 10.0, "c": [0, 0, 0]}, {"id": "JHa", "area": 10.0, "c": [0, 0, 0]}]}
+    assert [f["id"] for f in parse_mapping({"result": _fs(raw)})] == ["JHa"]
+
+
+def test_measured_comes_from_re_extracting_the_branch_step(owners, removal):
+    """The live branch's STEP (chamfer suppressed on DEMO A), re-extracted with the review's shop: 1 setup."""
+    from anville.agent.job import review_shop
+    from anville.geometry import extract
+
+    shop, _ = review_shop([])
+    step = (Path(__file__).parent / "data" / "onshape_demo_a_branch.step").read_bytes()
+    v1 = extract(Path(__file__).parent / "data" / "onshape_demo_a_v1.step")
+    option = removal_alternative(v1.to_dict(), shop)
+
+    def measure(data, tmp=Path(__file__).parent / "data" / "onshape_demo_a_branch.step"):
+        assert data == step
+        return min_setups(extract(tmp), shop).count
+
+    class LiveShapes(FakeOnshape):
+        def get(self, path, **kw):
+            return step if "/externaldata/" in path else super().get(path, **kw)
+
+        def post(self, path, body=None, **kw):
+            if path.endswith("/featurescript"):
+                self.calls.append(("POST", path, body))
+                return {"result": LIVE["featurescript_result"]}
+            return super().post(path, body, **kw)
+
+    api = LiveShapes(v1, {f.id: "unused" for f in v1.faces})
+    api.features = [CHAMFER_FEATURE]
+    b = build_branch(api, v1, did="d1", vid="v1", eid="e1", run="r7", group=option.face_group,
+                     faces=option.removed_faces, predicted=option.after.setups, measure=measure,
+                     emit=lambda *a, **k: None, wait=_wait)
+    assert (b.status, b.feature_name, b.predicted, b.measured) == ("measured", "Weld clearance chamfer", 1, 1)

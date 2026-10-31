@@ -222,11 +222,12 @@ def removal_alternative(facts: dict, shop: ShopProfile, back_chamfer: list[dict]
 
 def fix_branch(client, facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: Emit, *, did: str, vid: str,
                eid: str, run: str, measure, back_chamfer: list[dict] = (), model: ChatModel | None = None,
-               deadline: float | None = None, wait=None) -> tuple[str | None, dict]:
+               deadline: float | None = None, wait=None, kept_for: str | None = None) -> tuple[str | None, dict]:
     """Demo beat (c): build the removal on an `anville/alt-<run>` branch and measure it (RFC 0005; ADR 0002
     Amendment 2). Returns (the thread reply's line, stats for the trace); (None, stats) when it's off or
     nothing applies. `ANVILLE_FIX_BRANCH=on` turns it on. Muse Wonder writes the patch when MODEL_API_KEY is
-    set; code's patch otherwise. `measure(step_bytes) -> setups` re-extracts with the review's shop.
+    set; code's patch otherwise. `measure(step_bytes) -> setups` re-extracts with the review's shop. `kept_for`:
+    the group's stated intent, which the line gives as the alternative's cost (ADR 0002 Amendment 2).
 
     It costs about 8 Onshape calls and a workspace export (51 s, live), so run it after the review is posted.
     """
@@ -244,7 +245,7 @@ def fix_branch(client, facts: dict, shop: ShopProfile, env: Mapping[str, str], e
         branch = build_branch(client, PartFacts.from_dict(facts), did=did, vid=vid, eid=eid, run=run,
                               group=option.face_group, faces=option.removed_faces, predicted=option.after.setups,
                               measure=measure, emit=emit, model=model, deadline=deadline, wait=wait,
-                              base_url=env.get("ONSHAPE_BASE_URL") or "https://cad.onshape.com")
+                              base_url=env.get("ONSHAPE_BASE_URL") or "https://cad.onshape.com", kept_for=kept_for)
     except Exception as e:  # a branch bug must not cost the designer anything already posted
         error = repr(e)[:300]
         emit("error", "Fix branch failed", stage="fix_branch", error=error)
