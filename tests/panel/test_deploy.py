@@ -29,3 +29,10 @@ def test_the_deploy_helpers_import_without_fastapi():
     code = ("import sys; sys.modules['fastapi'] = None; import anville.deploy; "
             "assert 'anville.panel' not in sys.modules")
     assert subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0
+
+
+def test_the_panel_token_is_never_the_oauth_admin_token():
+    """Codex, PR #34: the panel token rides in URLs, and /oauth/start accepts the admin token."""
+    env = {"ANVILLE_WEBHOOK_SECRET": "w", "ANVILLE_OAUTH_ADMIN_TOKEN": "a"}
+    assert panel_secret({**env, "ANVILLE_PANEL_TOKEN": "a"}) is None
+    assert panel_secret({**env, "ANVILLE_PANEL_TOKEN": "p"}) == "p"

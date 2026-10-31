@@ -246,9 +246,9 @@ def web():
     if secret:
         from anville.panel import make_router
 
+        # No writer yet: asks get 501 until panel.ask is handled (ADR 0012's loop; Codex, PR #34).
         api.include_router(make_router(
-            lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n),
-            lambda key, doc, payload: StoreSvc().call.remote("record", key, doc, payload),
+            lambda d, a, n: StoreSvc().call.remote("trace_after", d, a, n), None,
             panel_secret=secret, allowed_docs=_allowed))
     else:
         _log("panel_unmounted", reason="ANVILLE_PANEL_TOKEN is unset or equals the webhook secret")

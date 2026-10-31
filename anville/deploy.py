@@ -18,7 +18,8 @@ def image_ignore(path: Path) -> bool:
 
 def panel_secret(env: Mapping[str, str]) -> str | None:
     """The panel token, or None to leave the panel unmounted. Unset must not crash web(): the webhook
-    endpoint lives there too. Equal to the webhook secret is refused, since that one sits in the webhook URL
-    (the same rule as the OAuth admin token)."""
+    endpoint lives there too. The panel token rides in URLs, so it can't equal the webhook secret (in the
+    webhook URL) or the OAuth admin token (which /oauth/start accepts; Codex, PR #34)."""
     token = env.get("ANVILLE_PANEL_TOKEN", "")
-    return token if token and token != env.get("ANVILLE_WEBHOOK_SECRET") else None
+    taken = {env.get("ANVILLE_WEBHOOK_SECRET"), env.get("ANVILLE_OAUTH_ADMIN_TOKEN")}
+    return token if token and token not in taken else None
