@@ -393,7 +393,8 @@ def _on_shop_note(store, ev) -> None:
         return
     try:
         entries = shop_note_writes(note, sheet.payload, stored=store.call.remote("read_ledger", "shop_outcome",
-                                                                                 SHOP_SCOPE))
+                                                                                 SHOP_SCOPE),
+                                   sheet_document=sheet.document_id, note_document=ev.document_id)
     except ValueError as e:  # the panel validates first; a note that still fails costs only itself
         _log("shop_note_rejected", key=ev.key, error=str(e)[:300])
         return
@@ -402,18 +403,16 @@ def _on_shop_note(store, ev) -> None:
     _log("shop_note_recorded", key=ev.key, kinds=[e["payload"]["kind"] for e in entries])
 
 
-def _store_sheet(store, did: str, vid: str, facts: dict, back_chamfer: list[dict], ledger: list[dict],
+def _store_sheet(store, key: str, did: str, vid: str, facts: dict, back_chamfer: list[dict], ledger: list[dict],
                  buying: list[str], trace: "_Trace") -> str | None:
     """The setup sheet the shop runs, stored for the traveler as event sheet:<id>. A sheet failure costs only the
     sheet, never the review."""
-    import uuid
-
-    from anville.agent.job import review_shop, sheet_for
+    from anville.agent.job import review_shop, sheet_for, sheet_id_for
 
     try:
         shop, learned = review_shop(ledger)
         sheet = sheet_for(facts, shop, back_chamfer, buying=buying, provenance=learned)
-        sid = uuid.uuid4().hex  # the link's HMAC is the capability, so the id needn't mean anything
+        sid = sheet_id_for(key)  # a retry keeps the first sheet: record ignores the duplicate key
         store.call.remote("record", f"sheet:{sid}", did, {**sheet, "version_id": vid}, settled=True)
     except Exception as e:
         _log("sheet_failed", error=repr(e)[:300])
@@ -478,7 +477,7 @@ def _review(store, ev, trace: "_Trace", timing: dict, deadline: float) -> None:
               unreachable=len(plan["unreachable"]), faces=result["faces"], extract_s=result["extract_s"])
     message = (_agent_comment(result["facts"], result["back_chamfer"], ledger, trace, timing, deadline)
                or _review_message(vid, plan))
-    timing["sheet_id"] = _store_sheet(store, did, vid, result["facts"], result["back_chamfer"], ledger,
+    timing["sheet_id"] = _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"], ledger,
                                       timing.get("buying") or [], trace)
     timing["reviewed_at"] = time.time()
 

@@ -224,3 +224,63 @@ def test_a_cutter_the_shop_already_owns_is_not_being_bought():
     assert buying_from(NS(decisions=pick, options={"k": opt(False)})) == ["910480"]
     assert buying_from(NS(decisions=pick, options={"k": opt(True)})) == []
     assert buying_from(NS(decisions=[NS(action="quiet", option_key="k")], options={"k": opt(False)})) == []
+
+
+# --- Codex, PR #40 ------------------------------------------------------------------------------------------
+
+def _note(**kw):
+    return {"event": "shop.note", "note_id": "n1", "sheet_id": "s1", "outcome": "as_planned",
+            "tools_arrived": [], "tags": [], "setups_run": 1, "note_text": "", **kw}
+
+
+def _bought_sheet(part_a, shop, catalog_access):
+    from anville.agent.job import sheet_for
+
+    return sheet_for(part_a.to_dict(), shop, [a.to_dict() for a in catalog_access], buying=["910480"])
+
+
+def test_a_note_may_only_answer_a_sheet_on_its_own_document(part_a, shop, catalog_access):
+    import pytest
+
+    from anville.agent.job import shop_note_writes
+
+    with pytest.raises(ValueError, match="document"):
+        shop_note_writes(_note(), _bought_sheet(part_a, shop, catalog_access), stored=[],
+                         sheet_document="doc-A", note_document="doc-B")
+
+
+def test_a_replayed_note_id_cant_change_what_the_shop_reported(part_a, shop, catalog_access):
+    """P1: a replay adding an arrival would have written tool_acquired under a note that reported none."""
+    import pytest
+
+    from anville.agent.job import shop_note_writes
+
+    sheet = _bought_sheet(part_a, shop, catalog_access)
+    stored = [{"id": i, **e} for i, e in enumerate(shop_note_writes(_note(), sheet, stored=[]), 1)]
+    with pytest.raises(ValueError, match="already recorded"):
+        shop_note_writes(_note(tools_arrived=["910480"]), sheet, stored=stored)
+
+
+def test_a_job_that_died_mid_write_finishes_the_same_note(part_a, shop, catalog_access):
+    from anville.agent.job import shop_note_writes
+
+    sheet, note = _bought_sheet(part_a, shop, catalog_access), _note(tools_arrived=["910480"])
+    first = shop_note_writes(note, sheet, stored=[])
+    rest = shop_note_writes(note, sheet, stored=[{"id": 1, **first[0]}])  # only the shop_note row landed
+    assert [e["payload"]["kind"] for e in rest] == ["tool_acquired"]
+
+
+def test_a_cutter_ticked_twice_is_acquired_once(part_a, shop, catalog_access):
+    from anville.agent.job import shop_note_writes
+
+    writes = shop_note_writes(_note(tools_arrived=["910480", "910480"]), _bought_sheet(part_a, shop, catalog_access),
+                              stored=[])
+    assert [e["payload"]["kind"] for e in writes] == ["shop_note", "tool_acquired"]
+
+
+def test_a_retried_review_reuses_its_sheet_id():
+    from anville.agent.job import sheet_id_for
+
+    assert sheet_id_for("version:v1") == sheet_id_for("version:v1") != sheet_id_for("version:v2")
+    import re
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sheet_id_for("version:v1"))  # panel's sheet-id pattern

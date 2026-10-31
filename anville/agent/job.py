@@ -128,11 +128,33 @@ def sheet_for(facts: dict, shop: ShopProfile, back_chamfer: list[dict], *, buyin
     return setup_sheet(part, shop, plan, back_chamfer=access, provenance=provenance, buying=tuple(buying))
 
 
-def shop_note_writes(note: dict, sheet: dict, *, stored: list[dict]) -> list[dict]:
-    """A shop note's ledger entries not already written: by the note they came from and their kind, so a retried
-    job writes nothing twice."""
-    from anville.shop.ledger import shop_note_entries
+def shop_note_writes(note: dict, sheet: dict, *, stored: list[dict], sheet_document: str | None = None,
+                     note_document: str | None = None) -> list[dict]:
+    """A shop note's ledger entries not already written, so a retried job writes nothing twice and finishes what a
+    job that died mid-write began. A note may answer only a sheet on its own document, and a note id already
+    recorded can't come back saying something else (Codex, PR #40)."""
+    from anville.shop.ledger import SHOP_NOTE, shop_note_entries
 
-    seen = {(r["provenance"].get("decision"), r["payload"].get("kind")) for r in stored}
-    return [e for e in shop_note_entries(note, sheet=sheet)
-            if (e["provenance"]["decision"], e["payload"]["kind"]) not in seen]
+    if sheet_document != note_document:
+        raise ValueError("a shop note may only answer a sheet stored on its own document")
+    entries = shop_note_entries(note, sheet=sheet)
+    decision = entries[0]["provenance"]["decision"]
+    before = [r for r in stored if r["provenance"].get("decision") == decision]
+    said = next((r["payload"] for r in before if r["payload"].get("kind") == SHOP_NOTE), None)
+    if said is not None and said != entries[0]["payload"]:
+        raise ValueError(f"{decision} is already recorded, saying something else")
+    key = lambda e: (e["payload"].get("kind"), e["payload"].get("name"))  # noqa: E731
+    seen, out = {key(r) for r in before}, []
+    for e in entries:  # a cutter ticked twice is acquired once
+        if key(e) not in seen:
+            seen.add(key(e))
+            out.append(e)
+    return out
+
+
+def sheet_id_for(event_key: str) -> str:
+    """The sheet id for a review event: the same on a retry, so a retried review can't announce a second sheet
+    (Codex, PR #40). The link's HMAC is the capability, so the id needn't be secret."""
+    import hashlib
+
+    return hashlib.sha256(event_key.encode()).hexdigest()[:32]
