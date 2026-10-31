@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Callable
 
 from anville.agent.model import ChatModel, ModelUnavailable
@@ -555,6 +555,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         sentences = []
     else:
         decisions, sentences = decided
+    decisions = _with_intent_questions(decisions, by_id, intents, gates)
     for d in decisions:
         emit("decision", "Decision made", stage="decide", issue_id=d.issue_id, action=d.action,
              option_key=d.option_key, question=d.question, reason=d.reason)  # trace and panel
@@ -801,6 +802,26 @@ def payback_line(key: str, payback: tuple, mid: int | None) -> str:
 
 
 # --- fixed-script steps ------------------------------------------------------------
+
+
+def _with_intent_questions(decisions: list[Decision], by_id: dict[str, Issue], intents: dict[str, Intent],
+                           gates: dict[str, bool]) -> list[Decision]:
+    """Rayyan's ruling (a), 2026-10-30: where a face's purpose is unknown and the answer could change the plan,
+    the proposal always carries the intent question, so the comment invites the reply the re-plan needs (the model
+    asked in 1 of 20 live-path runs). A question the model wrote and the checks passed is kept. One question per
+    fix: a part-wide fix covering several issues asks once."""
+    out, asked = [], set()
+    for d in decisions:
+        g = by_id[d.issue_id].face_group
+        open_question = d.action == "propose" and gates.get(d.issue_id) and intents[g].status == "unknown"
+        if d.question and d.action == "propose" and d.option_key in asked:
+            d = replace(d, question=None)  # already asked about this fix
+        elif open_question and not d.question and d.option_key not in asked:
+            d = replace(d, question=f"Is {g} required as modelled?")
+        if d.question and d.action == "propose":
+            asked.add(d.option_key)
+        out.append(d)
+    return out
 
 
 def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option], ranking=None) -> Decision:

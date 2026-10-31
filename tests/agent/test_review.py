@@ -903,3 +903,44 @@ def test_each_issue_is_ranked_over_its_own_fixes(part_a, costed, chamfer, catalo
     (ranked,) = [d for t, d in events if t == "Fixes ranked"]
     assert ranked["issue_id"] == "I1" and ranked["lead"] == BUY and ranked["basis"] == "mid_range"
     assert set(ranked["top"]) == {BUY, ROUTE}
+
+
+# --- Rayyan's ruling (a), 2026-10-30: the intent question is always attached where it could change the plan ---
+
+
+def _buy(question=None):
+    d = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    return {**d, "question": question} if question else d
+
+
+def test_code_attaches_the_intent_question_when_the_model_leaves_it_out(part_a, costed, chamfer, catalog_access):
+    """Gate on #37: on the live (unknown-intent) path the model asked in 1 of 20 runs, so the comment never invited
+    the reply the re-plan beat needs."""
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy())), back_chamfer=catalog_access)
+    lines = r.comment.splitlines()
+    assert r.decisions[0].question == f"Is {chamfer} required as modelled?"
+    assert f"If {chamfer} isn't needed, removing {chamfer} also takes it to 1 setup(s)." in lines
+    assert lines[-1].endswith("The answer could change the best plan.")
+
+
+def test_a_valid_model_question_is_kept(part_a, costed, chamfer, catalog_access):
+    mine = f"Does the weld fixture need {chamfer}?"
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine))),
+                   back_chamfer=catalog_access)
+    assert r.decisions[0].question == mine
+
+
+def test_no_question_is_attached_when_intent_is_stated(part_a, costed, chamfer, catalog_access):
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy())),
+                   back_chamfer=catalog_access, stated={chamfer: "Weld clearance chamfer"})
+    assert r.decisions[0].question is None
+
+
+def test_one_fix_covering_two_issues_asks_once(shop, tmp_path):
+    """The ruling's one intent question: two_pockets' fallback asked about G8 and again about G10."""
+    from tests.geometry.parts import PARTS, write_step
+
+    facts = extract(write_step(PARTS["two_pockets"](), tmp_path / "p.step"))
+    r = run_review(facts, shop, None)
+    assert sum(d.question is not None for d in r.decisions) == 1
+    assert sum("required as modelled?" in line for line in r.comment.splitlines()) == 1
