@@ -11,6 +11,9 @@ header { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   font-weight: 600; color: var(--fallback); background: #fdf3e2; }
 .meta { margin-top: 6px; color: var(--muted); font-size: 14px; }
 .basis { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.face { margin: 14px 0 0; }
+.face img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.face figcaption { margin-top: 6px; font-size: 14px; color: var(--muted); }
 .setup { padding: 14px 0; border-bottom: 1px solid var(--line); }
 h2 { margin: 0 0 6px; font-size: 20px; }
 h2 .dirs { font-size: 14px; font-weight: 500; color: var(--muted); }
