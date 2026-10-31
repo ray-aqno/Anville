@@ -1,0 +1,110 @@
+{
+ "what": "a_reply_not_needed on #41 (feat/rank-freed-part-edits: every part-edit kind requested for a freed face)",
+ "repo_sha": "77c5073",
+ "n": 10,
+ "spent_usd": 0.3855,
+ "summary": {
+  "a_reply_not_needed": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "plan_changing_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.3855,
+   "latency_p50_s": 20.65,
+   "latency_max_s": 25.1,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1924.5,
+     "max": 2884
+    },
+    "decide": {
+     "p50": 585.5,
+     "max": 920
+    },
+    "verify": {
+     "p50": 1179,
+     "max": 2440
+    }
+   },
+   "rejections": {
+    "no_tool_call": 2
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 10,
+    "part:remove_feature/G3": 10
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "part:remove_feature/G3": 10
+   },
+   "model_sentences": 20,
+   "sentences_checked": 60,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 22
+   },
+   "retries": {
+    "decide": 2
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "0/10"
+  }
+ },
+ "note": "Removal led turn 2 in 10/10 (8/10 before)."
+}

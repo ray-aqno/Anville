@@ -176,3 +176,15 @@ def test_on_a_freed_face_the_ranked_lead_may_be_the_part_edit():
     assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": REMOVE}, freed={"I1"})
     assert not score.ranked_lead(result(propose(BUY)), "G3", {"I1": REMOVE}, freed={"I1"})
     assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": BUY}) is None
+
+
+def test_a_reply_is_read_right_only_when_rule_and_preference_both_match():
+    """#38's read_reply: code checks a quote is real, not that it supports the rule (Codex). Scored by label."""
+    keep = [{"face_group": "G3", "rule": "keep", "quote": "keep it"}]
+    assert score.reply_read_right(keep, [("G3", "keep", None)])
+    assert not score.reply_read_right(keep, [("G3", "may_change", None)])  # real quote, wrong rule
+    buy = [{"face_group": "G3", "rule": "may_change", "quote": "can go", "prefer": "shop_fix", "prefer_quote": "buy"}]
+    assert score.reply_read_right(buy, [("G3", "may_change", "shop_fix")])
+    assert not score.reply_read_right(buy, [("G3", "may_change", None)])  # a preference the reply didn't state
+    assert score.reply_read_right([], [])  # a reply that decides nothing
+    assert not score.reply_read_right(None, [])  # the stage fell back

@@ -172,3 +172,12 @@ def question_names_no_fix(question: str | None, catalog: tuple[str, ...], group:
         return None
     words = question.lower()
     return group in question and not any(k.replace("_", " ") in words or k in words for k in catalog)
+
+
+def reply_read_right(found: list[dict] | None, expected: list[tuple[str, str, str | None]]) -> bool:
+    """#38's read_reply: the rules read match the label exactly, preference included. Code already checks
+    each quote is the designer's own words; it can't check the words support the rule, so this does, by label.
+    A fallback (None) is a miss."""
+    if found is None:
+        return False
+    return sorted((r["face_group"], r["rule"], r.get("prefer")) for r in found) == sorted(expected)
