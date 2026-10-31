@@ -62,3 +62,18 @@ def test_ask_auth_is_an_empty_404():
 def test_a_bad_token_with_a_bad_body_is_still_404_not_422():
     assert client_for([]).post("/api/ask?t=bad", json={"documentId": DOC, "request_id": "x"}).status_code == 404
     assert client_for([]).post("/api/ask?t=bad", content=b"not json").status_code == 404
+
+
+def test_without_a_writer_asks_are_refused_not_accepted():
+    """Codex, PR #34 (P1): mounted with no panel.ask handler, a 202 promised an answer nobody would give."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from anville.panel import make_router
+    from tests.panel.conftest import DOC, SECRET, list_reader
+
+    app = FastAPI()
+    app.include_router(make_router(list_reader([]), None, panel_secret=SECRET, allowed_docs=lambda: {DOC}))
+    c = TestClient(app)
+    assert c.post(f"/api/ask?t={SECRET}", json=body()).status_code == 501
+    assert c.post("/api/ask?t=wrong", json=body()).status_code == 404  # auth still first
