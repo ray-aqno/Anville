@@ -491,7 +491,12 @@ def _store_sheet(store, key: str, did: str, vid: str, facts: dict, back_chamfer:
     except Exception as e:
         _log("sheet_failed", error=repr(e)[:300])
         return None
-    trace.add("tool_result", "Setup sheet ready", sheet_id=sid, setups=len(sheet["setups"]), buying=buying)
+    from anville.deploy import sheet_link
+
+    # The same signed link the comment carries, for the panel's "Open setup sheet" (ADR 0007 Amendment 5): the
+    # trace is read per document, so a panel only sees its own sheets' links. None without a panel token.
+    trace.add("tool_result", "Setup sheet ready", sheet_id=sid, setups=len(sheet["setups"]), buying=buying,
+              sheet_url=sheet_link(os.environ, sid))
     return sid
 
 
