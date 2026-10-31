@@ -1024,3 +1024,22 @@ def test_an_explicit_side_with_no_fix_falls_back_to_the_other_side():
     assert (d.action, d.option_key) == ("propose", "route_machine/5")
     helps = NS(key="remove_feature/G3", side="part", face_group="G3", changes_plan=True)
     assert _fallback_decision(issue, False, [shop_fix, helps], prefer="part_edit").option_key == "remove_feature/G3"
+
+
+# --- Models lane, 2026-10-31: cost claims had no node to cite, so the verifier dropped all of them -------------
+
+
+def test_the_ranking_and_each_options_price_are_citable(part_a, costed, chamfer, catalog_access):
+    """Decide saw cost_ranking and paybacks, but a sentence about them could cite only option nodes with setup
+    counts, so the verifier found 'no cited node supports' every cost claim (21 of 26 drops)."""
+    cost_line = {"text": "Of the fixes that work whatever G3 is for, buying the cutter costs the least at "
+                         "mid-range shop rates.", "role": "context", "cites": ["cost:I1"]}
+    buy = {"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"}
+    model = Scripted(plan(*requests_for(chamfer)), decide(buy, comment=[cost_line]))
+    verifier = Scripted(verdicts(True), name="verifier")
+    run_review(part_a, costed, model, verifier=verifier, back_chamfer=catalog_access)
+    extra = lambda m, i: json.loads(m.sent[i][0][1]["content"].split("\n", 3)[-1].split("\n\nYour previous")[0])  # noqa: E731
+    cites = extra(verifier, 0)["sentences"][0]["cites"]
+    assert cites["cost:I1"]["lead"] == BUY and cites["cost:I1"]["basis"] == "mid_range"
+    assert "midpoint" in cites["cost:I1"]["means"]
+    assert "cost:I1" in extra(model, 1)["nodes"]

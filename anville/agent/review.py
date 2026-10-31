@@ -497,7 +497,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 if v is not None:
                     values[f"option.{key}.{name}"] = str(v)
     keys = list(options)
-    nodes = comment_nodes(plan, chosen, intents, options)
+    nodes = comment_nodes(plan, chosen, intents, options, priced=priced, ranked=ranked)
 
     def v_decide(a):
         out = []
@@ -558,7 +558,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable,
                 "changes_plan": o.changes_plan} for k, o in options.items()]
     decided = run.ask("decide", "Decide each selected issue, then write the comment for the designer. Put node "
-                      "ids only in `cites` (cite decision:<issue_id> for your own decisions), never in the text. "
+                      "ids only in `cites` (cite decision:<issue_id> for your own decisions, and cost:<issue_id> "
+                      "for a claim about cost), never in the text. "
                       "Use only these slots for numbers. A sentence proposing a fix states its result with "
                       "that option's setups_after slot, e.g. \"Removing G3 takes it to "
                       "{{option.remove_feature/G3.setups_after}} setup(s).\"",
@@ -602,9 +603,21 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 # --- the comment as grounded nodes ---------------------------------------------------
 
 
+BASIS_MEANS = {  # what a ranking basis lets a sentence claim (ADR 0010); the verifier judges cost prose by it
+    "dominates": "the lead costs less than every other ranked fix at every input in the shop's ranges",
+    "mid_range": "the lead costs least with every ranged shop input at its midpoint; another ranked fix costs less "
+                 "at some inputs, so it is not the cheapest everywhere",
+    "tie": "no ranked fix costs less than the others at every input or at the midpoints",
+    "sole": "it is the only ranked fix that makes the whole part",
+    "none": "no ranked fix makes the whole part",
+}
+
+
 def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Intent],
-                  options: dict[str, Option]) -> dict[str, dict]:
-    """What a sentence may cite: id -> the fact it stands for (decision nodes are added per decision)."""
+                  options: dict[str, Option], *, priced: dict | None = None,
+                  ranked: dict | None = None) -> dict[str, dict]:
+    """What a sentence may cite: id -> the fact it stands for (decision nodes are added per decision). Prices
+    and the cost ranking are citable too, so a cost claim can be verified (models lane, 2026-10-31)."""
     nodes = {"plan": {"setups": plan.count, "unreachable": len(plan.unreachable)}}
     for i in chosen:
         nodes[f"issue:{i.id}"] = {"kind": i.kind, "face_group": i.face_group, **i.detail}
@@ -614,6 +627,13 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
     for k, o in options.items():
         nodes[f"option:{k}"] = {"side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
                                 "setups_after": o.after.setups, "unreachable_after": o.after.unreachable}
+        price = (priced or {}).get(k)
+        if price:
+            nodes[f"option:{k}"].update({f: price.get(f) for f in ("one_time", "payback", "payback_mid", "unpriced",
+                                                                   "placeholder")})
+    for issue_id, r in (ranked or {}).items():
+        nodes[f"cost:{issue_id}"] = {"top": list(r.top), "lead": r.lead, "basis": r.basis,
+                                     "means": BASIS_MEANS.get(r.basis, "")}
     return nodes
 
 
