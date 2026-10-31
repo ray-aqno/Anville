@@ -70,7 +70,7 @@ def test_each_group_reads_as_built_or_none(name, facts):
 def test_demo_a_v1_reads_the_same_although_centred_on_the_origin():
     """DEMO A v1, the STEP production reviewed: Rayyan modelled it centred (x −50..50, y −30..30), so the
     sides come from the part's bbox. G11 is the weld chamfer, on the bottom front edge."""
-    f = extract(Path(__file__).parent / "data" / "onshape_demo_a_v1.step")
+    f = extract(Path(__file__).parents[1] / "agent" / "data" / "onshape_demo_a_v1.step")
     assert f.bbox[0][0] < -49 and f.bbox[0][1] < -29
     got = {g: describe_group(f, g) for g in f.labelled_groups()}
     assert got["G11"] == "the 1.5 mm chamfer on the bottom front edge"
