@@ -85,3 +85,71 @@
   - **After probe 3:** if Fireworks passes at parity, consider B for the demo.
   - **If `reasoning_effort` is ignored on Fireworks:** record it, and recheck Decide's token cap.
   - **If the credits don't land:** this ADR stays Proposed, and §3.6 stands.
+
+## Amendment 1: Fireworks reads the designer's reply (2026-10-31)
+
+- **Status:** Accepted (Rayyan Aquino, 2026-10-31: "I'll accept those fireworks amendments and keys").
+- **Lands in:** `docs/adrs/0011-fireworks-host-for-spark-open.md`, appended below the existing text. Nothing above it changes.
+
+Labels: **verified** means checked today against main (`f1b5496`) or the live Fireworks page, with the source given. **Inference** means reasoned but not checked.
+
+### Context
+- **Failover alone never appears on camera.** Rayyan's directive (2026-10-31) is that every demo beat must be built and seen live before the Sunday noon freeze. Under ADR 0011's option A, Fireworks serves a call only when Baseten fails. So in a good take, Fireworks does nothing visible, and the only way to show it would be to stage an outage.
+- **Fireworks serves the same model** (verified, fireworks.ai/models/fireworks/muse-spark-open, 2026-10-31):
+  - `accounts/fireworks/models/muse-spark-open`, serverless on US-only capacity;
+  - tool calling, image input (text output only);
+  - a context of 1040k;
+  - $1.25 / $0.15 / $4.25 per 1M tokens (input / cached / output);
+  - the page doesn't mention reasoning effort.
+- **Other Meta models on Fireworks** (verified, Fireworks blog and model pages):
+  - Muse Glimmer 30B is listed, but its model page marks serverless "Not Supported" and being discontinued.
+  - Llama 3.3 70B's serverless endpoints were removed on 2026-05-14.
+  - I found no Muse Code page.
+  So Muse Spark Open is the one model we use that Fireworks hosts.
+- **The reply reader is its own model call** (verified):
+  - `read_reply` (`anville/agent/reply.py`) makes one Muse Spark Open call per designer reply, through `OpenAICompatModel.from_env(env, "open")` (`job.py:196`).
+  - Code accepts a rule only for a face group the review raised, and only with a quote copied from the reply.
+  - On any exception the designer still gets an answer (`job.py:198–200`).
+  - It runs at 1:05–1:12 in the demo script, in every take.
+- **No live-model eval of `read_reply`** (verified): `scripts/evals/gate.py` puts reply rules in directly (`gate.py:140`) and never calls the reader.
+
+### Decision
+1. **Fireworks is the primary host for the reply reader;** Baseten is its failover. ADR 0011's Plan/Decide failover (Baseten primary, Fireworks backup) stays as accepted.
+2. **`from_env(env, "reply")`** returns hosts in the order Fireworks, then Baseten, when `FIREWORKS_API_KEY` is set. Otherwise it falls back to today's `"open"` (Baseten only), so nothing breaks without the key.
+   - `job.py:196` asks for `"reply"` instead of `"open"`.
+   - The usage record carries the serving host, as §2 already specifies. So the trace and the panel chip read "Muse Spark Open · Fireworks" on the re-plan.
+3. **Gate before it counts as working:** a `read_reply` probe on Fireworks, run only on Rayyan's go.
+   - **Cases:** n=10 each of three replies: "Required: it's the weld clearance." (expect `keep`), "Not needed, it can go." (expect `may_change`, no `prefer`), and "Thanks, looks good." (expect no rules).
+   - **Pass:** at least 9 of 10 per case, with every quote copied exactly.
+   - **Cost (inference):** about 30 small calls, well under $1.
+   - If it fails, the reader stays on Baseten and the demo drops Fireworks: no staged role.
+4. **The trigger is the same as ADR 0011 §5:** no code until the key is in `.env`. The amendment itself can be accepted before then.
+
+### Why the reply reader, not the alternatives
+| Option | On camera in a good take? | Risk to the review |
+|---|---|---|
+| **Reply reader on Fireworks (chosen)** | Yes: every take, at 1:05 | Low: one bounded call; failover to Baseten; code checks every rule |
+| ADR 0011 option A only (failover) | No, unless an outage is staged | None |
+| Option B (Decide on Fireworks) | Yes | Higher: the main review's Decide depends on a host that hasn't passed the gate, and `reasoning_effort` isn't confirmed there (ADR 0011 §4.2) |
+| Option D (vision on the render) | Yes | New work: the render isn't wired in, and it overlaps the rejected ADR 0005 |
+
+### Consequences
+- **Easier:** Fireworks does real work in every take, visible in the trace and the panel. It's also a distinct role, reading the designer, not just the same call on another host.
+- **Harder:**
+  - Two hosts in the re-plan path.
+  - A reply read on Fireworks misses Baseten's prompt cache (negligible for one call).
+  - The reader's behaviour on Fireworks has to pass its own probe, since the same weights on a different serving stack can parse tools differently (ADR 0011, Trade-offs).
+
+### Probe result (2026-10-31, run on Rayyan's go: "you're going to test and all of our costs should be under $1")
+- **Fireworks** (`accounts/fireworks/models/muse-spark-open`, the real `read_reply`; 31 calls):
+
+  | Case | Result |
+  |---|---|
+  | `keep` ("Required: it's the weld clearance.") | **10/10** |
+  | `may_change` ("Not needed, it can go.") | **10/10** |
+  | no rules ("Thanks, looks good.") | **7/10**: 3 misses, each reading "looks good" as `keep` on G3 |
+
+  - **Cost:** $0.126 at list price, from each response's usage (no cache discount assumed). The first call took 1,160 tokens in and 254 out (about $0.0025); calls took 1.2–17.8 s.
+- **Baseten baseline,** same reader, the no-rules case only: **9/10**, with 1 identical miss.
+- **Reading:** the over-read happens on both hosts. At n=10, 3/10 and 1/10 can't be told apart, so this is a weakness in the reader (a generic approval quoted as a decision), not a host difference. The bar of at least 9/10 per case is **not met** on Fireworks.
+- **Next:** tighten the reader so a reply that only approves or thanks decides nothing (the prompt, the validator, or both; agent lane). Then re-run the no-rules case on both hosts: about $0.04 per 10 on Fireworks. Until the bar is met, the reader stays on Baseten (§3).

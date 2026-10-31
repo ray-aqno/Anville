@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -18,6 +19,8 @@ from typing import Mapping, Protocol
 
 MIN_MAX_TOKENS = 4096
 META_API = "https://api.meta.ai/v1"
+FIREWORKS_API = "https://api.fireworks.ai/inference/v1"  # prior: Fireworks' OpenAI-compatible base URL
+FIREWORKS_SPARK_OPEN = "accounts/fireworks/models/muse-spark-open"  # fireworks.ai model page, 2026-10-31
 
 
 @dataclass
@@ -85,11 +88,19 @@ class OpenAICompatModel:
         self._timeout = timeout_s
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str], which: str = "open") -> "OpenAICompatModel":
-        """`open`: Muse Spark Open on Baseten. `spark`: muse-spark-1.3 on the Meta Model API, at low effort."""
+    def from_env(cls, env: Mapping[str, str], which: str = "open") -> "OpenAICompatModel | FailoverModel":
+        """`open`: Muse Spark Open on Baseten. `spark`: muse-spark-1.3 on the Meta Model API, at low effort.
+        `reply`: Muse Spark Open for the reply reader, on Fireworks then Baseten (ADR 0011 Amendment 1);
+        Baseten alone without a Fireworks key."""
         if which == "open":
             return cls(env["MUSE_SPARK_OPEN_BASE_URL"], env["MUSE_SPARK_OPEN_API_KEY"],
                        env["MUSE_SPARK_OPEN_MODEL_ID"])
+        if which == "reply":
+            if not env.get("FIREWORKS_API_KEY"):
+                return cls.from_env(env, "open")
+            fireworks = cls(env.get("FIREWORKS_BASE_URL", FIREWORKS_API), env["FIREWORKS_API_KEY"],
+                            env.get("FIREWORKS_MODEL_ID", FIREWORKS_SPARK_OPEN))
+            return FailoverModel([fireworks, cls.from_env(env, "open")])
         if which == "spark":
             return cls(META_API, env["MODEL_API_KEY"], env["MUSE_SPARK_MODEL_ID"], reasoning_effort="low")
         raise ValueError(f"unknown model {which!r}")
@@ -140,3 +151,28 @@ class OpenAICompatModel:
         if "error" in box:
             raise box["error"]
         return box["raw"]
+
+
+class FailoverModel:
+    """The same model on several hosts, tried in order on each call (ADR 0011). `host` names the host that
+    served the last call, so the trace credits the sponsor that did the work, not the one tried first."""
+
+    def __init__(self, models: list):
+        self.models = models
+        self.name = models[0].name
+        self.host = models[0].host
+
+    def call(self, messages: list[dict], tools: list[dict], *, timeout_s: float | None = None, **kw) -> Reply:
+        # One budget for the whole call: a backup host gets only the time the first left (Codex, PR #47),
+        # so a failover can't run past the job's deadline for posting.
+        started = time.monotonic() if timeout_s is not None else None
+        for i, m in enumerate(self.models):
+            left = None if started is None else timeout_s - (time.monotonic() - started if i else 0)
+            if left is not None and left <= 1:
+                break
+            self.host = m.host
+            try:
+                return m.call(messages, tools, timeout_s=left, **kw)
+            except ModelUnavailable as e:
+                error = e
+        raise error
