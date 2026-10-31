@@ -328,3 +328,12 @@ def test_a_reply_turn_reads_the_groups_the_review_raised_not_todays(part_a, shop
     found, groups, _ = read_reply_turn(part_a.to_dict(), owns, {}, lambda *a, **k: None, "weld clearance, keep it",
                                        model=Scripted(rules(keep)), issue_shop=shop)
     assert groups == [chamfer] and found == [keep]
+
+
+def test_each_take_starts_a_fresh_shop_ledger():
+    """Shop lane, 2026-10-31: after take 1 the shop owns the 910480, so every later take of Part A came up as
+    1 setup. A take names its own ledger scope; with none set it's the demo shop's."""
+    from anville.agent.job import shop_scope
+
+    assert shop_scope(None) == shop_scope("") == SHOP_SCOPE
+    assert shop_scope("take-2") == f"{SHOP_SCOPE}:take-2" != shop_scope("take-3")

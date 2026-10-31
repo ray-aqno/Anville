@@ -81,13 +81,33 @@ REAPER_PERIOD_MIN = 5
 RECEIVED_GRACE_S = 60
 UNCONFIRMED_POST_S = 120
 
+def _shop_scope() -> str:
+    """The shop ledger scope for the current recording take (`modal run anville/modal_app.py::new_take`)."""
+    from anville.agent.job import shop_scope
+
+    try:
+        return shop_scope(state.get("take"))
+    except Exception as e:  # a state read failure falls back to the demo shop's own ledger
+        _log("take_unread", error=repr(e)[:300])
+        return shop_scope(None)
+
+
+@app.local_entrypoint()
+def new_take(name: str = "") -> None:
+    """Start a recording take: from here on the shop ledger reads and writes a fresh scope, so the shop owns only
+    what it owned at the start (shop lane, 2026-10-31). Nothing is deleted; `--name off` returns to the shared one."""
+    take = "" if name == "off" else (name or time.strftime("take-%Y%m%d-%H%M%S"))
+    state["take"] = take
+    from anville.agent.job import shop_scope
+
+    print(f"shop ledger scope: {shop_scope(take)}")
+
+
 def _shop_ledger(store) -> list[dict]:
     """The shop's learned outcomes (S8): what it bought since. A ledger failure costs only the
     learning, never the review."""
-    from anville.agent.job import SHOP_SCOPE
-
     try:
-        return store.call.remote("read_ledger", "shop_outcome", SHOP_SCOPE)
+        return store.call.remote("read_ledger", "shop_outcome", _shop_scope())
     except Exception as e:
         _log("shop_ledger_failed", error=repr(e)[:300])
         return []
@@ -400,7 +420,7 @@ def handle_event(key: str) -> None:
 def _on_shop_note(store, ev) -> None:
     """A machinist's note from the traveler (ADR 0007 Amendment 3) goes to the shop ledger, so the next review
     starts from it: a cutter ticked as arrived becomes one the shop owns (demo gaps 2 and 3)."""
-    from anville.agent.job import SHOP_SCOPE, shop_note_writes
+    from anville.agent.job import shop_note_writes
 
     note = ev.payload
     sheet = store.call.remote("event", f"sheet:{note.get('sheet_id')}")
@@ -409,13 +429,13 @@ def _on_shop_note(store, ev) -> None:
         return
     try:
         entries = shop_note_writes(note, sheet.payload, stored=store.call.remote("read_ledger", "shop_outcome",
-                                                                                 SHOP_SCOPE),
+                                                                                 _shop_scope()),
                                    sheet_document=sheet.document_id, note_document=ev.document_id)
     except ValueError as e:  # the panel validates first; a note that still fails costs only itself
         _log("shop_note_rejected", key=ev.key, error=str(e)[:300])
         return
     for entry in entries:
-        store.call.remote("append_ledger", "shop_outcome", SHOP_SCOPE, entry["payload"], entry["provenance"])
+        store.call.remote("append_ledger", "shop_outcome", _shop_scope(), entry["payload"], entry["provenance"])
     _log("shop_note_recorded", key=ev.key, kinds=[e["payload"]["kind"] for e in entries])
 
 

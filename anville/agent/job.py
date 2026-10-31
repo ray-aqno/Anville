@@ -17,6 +17,12 @@ from anville.geometry.access import BackChamferAccess
 
 # The demo shop's ledger scope (the shop lane writes its tool_acquired rows here).
 SHOP_SCOPE = "shop:dll"
+
+
+def shop_scope(take: str | None) -> str:
+    """The shop ledger's scope for a recording take: each take starts from the shop as it was, so Part A shows
+    2 setups again (the ledger is append-only, and nothing is deleted to reset it)."""
+    return f"{SHOP_SCOPE}:{take}" if take else SHOP_SCOPE
 # Placeholder end mills until the shop-profile format is decided (CLAUDE.md §4); same as the geometry tests.
 DEFAULT_TOOLS = (("EM12", 12.0, 4.0), ("EM6", 6.0, 4.0), ("EM3", 3.0, 4.0))
 
