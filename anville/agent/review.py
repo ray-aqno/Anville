@@ -590,7 +590,19 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
              reason=err or "", text=fill_slots(sent["text"], values, keys)[0] or sent["text"])  # the panel shows it
         if not err:
             checked.append(sent)
-    verified = verify_sentences(run, verifier, checked, decided_by, nodes, values, keys, base, emit)
+    # A question the model wrote is prose too: verified like a sentence, or code's own question goes instead
+    # (shop lane, 2026-10-31: it was published after only a slot check).
+    asked = [{"text": d.question, "role": "question", "issue_id": d.issue_id,
+              "cites": [f"issue:{d.issue_id}", f"intent:{by_id[d.issue_id].face_group}"]}
+             for d in decisions if d.question and d.question != _intent_question(by_id[d.issue_id].face_group)]
+    verified = verify_sentences(run, verifier, checked + asked, decided_by, nodes, values, keys, base, emit)
+    supported = {s["issue_id"] for s in verified if s.get("role") == "question"}
+    verified = [s for s in verified if s.get("role") != "question"]
+    for i, d in enumerate(decisions):
+        if d.question and any(a["issue_id"] == d.issue_id for a in asked) and d.issue_id not in supported:
+            decisions[i] = replace(d, question=_intent_question(by_id[d.issue_id].face_group))
+            emit("decision", "Question replaced", stage="verify", issue_id=d.issue_id, question=decisions[i].question)
+    decided_by = {d.issue_id: d for d in decisions}
     comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
                                              estimates, rivals), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
@@ -850,6 +862,10 @@ def payback_line(key: str, payback: tuple, mid: int | None) -> str:
 
 
 # --- fixed-script steps ------------------------------------------------------------
+
+
+def _intent_question(group: str) -> str:
+    return f"Is {group} required as modelled?"
 
 
 def _with_intent_questions(decisions: list[Decision], by_id: dict[str, Issue], intents: dict[str, Intent],

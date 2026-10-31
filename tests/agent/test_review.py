@@ -265,7 +265,8 @@ def test_a_question_where_the_gate_forbids_it_is_rejected(part_a, shop, chamfer)
 
 
 def test_an_unknown_intent_is_flagged_and_a_fix_proposed_in_one_comment(part_a, shop, chamfer):
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with(f"Is the chamfer on {chamfer} needed?")))
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with(f"Is the chamfer on {chamfer} needed?")),
+                   verifier=Scripted(verdicts(True), name="verifier"))
     assert r.fallbacks == [] and [(d.action, d.option_key) for d in r.decisions] == [("propose", ROUTE)]
     lines = r.comment.splitlines()
     assert any(line.startswith(f"{chamfer}: Sending it to an outside 5-axis shop takes it from 2 to 1 setup(s).") for line in lines)
@@ -276,7 +277,7 @@ def test_an_unknown_intent_is_flagged_and_a_fix_proposed_in_one_comment(part_a, 
 def test_ask_only_is_rejected_and_the_retry_must_propose(part_a, shop, chamfer):
     ask_only = decide({"issue_id": "I1", "action": "ask", "question": "Is it needed?", "reason": "x"})
     events = []
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_only, ask_with("Is it needed?")),
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_only, ask_with("Is it needed?")), verifier=Scripted(verdicts(True), name="verifier"),
                    emit=lambda kind, title, **d: events.append((kind, d)))
     assert r.fallbacks == [] and r.decisions[0].action == "propose" and r.decisions[0].question == "Is it needed?"
     assert any("propose" in d.get("reason", "") for kind, d in events if kind == "error" and d.get("stage") == "decide")
@@ -299,7 +300,7 @@ def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, 
     model = Scripted(plan(*requests_for(chamfer)), decide(
         {"issue_id": "I1", "action": "propose", "option_key": ROUTE, "reason": "x", "question": "Is it needed?"},
         comment=said))
-    r = run_review(part_a, shop, model, verifier=Scripted(verdicts(True), name="verifier"))
+    r = run_review(part_a, shop, model, verifier=Scripted(verdicts(True, True), name="verifier"))  # sentence, question
     assert "Routing to a five-axis takes the part to 1 setup." in r.comment
     assert r.comment.splitlines()[-1].endswith("Is it needed? The answer could change the best plan.")
     assert "Sending it to an outside 5-axis shop takes it from" not in r.comment  # the verified sentence replaces the rendered line
@@ -307,7 +308,8 @@ def test_a_verified_proposal_sentence_still_gets_the_question_from_code(part_a, 
 
 def test_an_accepted_question_with_a_slot_is_filled_when_rendered(part_a, shop, chamfer):
     r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)),
-                                          ask_with(f"Is {chamfer} worth {{{{plan.setups}}}} setups?")))
+                                          ask_with(f"Is {chamfer} worth {{{{plan.setups}}}} setups?")),
+                   verifier=Scripted(verdicts(True), name="verifier"))
     assert f"Is {chamfer} worth 2 setups?" in r.comment
 
 
@@ -579,7 +581,7 @@ def test_with_unknown_intent_a_lead_with_removal_is_rejected_for_a_shop_side_fix
 
 
 def test_removal_appears_only_as_codes_conditional_line_next_to_the_question(part_a, shop, chamfer):
-    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with("Is it needed?")))
+    r = run_review(part_a, shop, Scripted(plan(*requests_for(chamfer)), ask_with("Is it needed?")), verifier=Scripted(verdicts(True), name="verifier"))
     lines = r.comment.splitlines()
     assert lines[-2:] == [f"If {chamfer} isn't needed, removing {chamfer} also takes it to 1 setup(s).",
                           f"{chamfer}'s purpose isn't on record. Is it needed? The answer could change the best plan."]
@@ -594,7 +596,7 @@ def test_model_prose_cannot_offer_the_removal_when_intent_is_unknown(part_a, sho
         comment=sneaky))
     verifier = Scripted(verdicts(True), name="verifier")
     r = run_review(part_a, shop, model, verifier=verifier)
-    assert "Removing it would also work." not in r.comment and verifier.sent == []  # rejected before the verifier
+    assert "Removing it would also work." not in r.comment and "Removing it" not in str(verifier.sent)  # rejected first
 
 
 def test_a_free_face_may_still_lead_with_removal(part_a, shop, chamfer):
@@ -923,11 +925,17 @@ def test_code_attaches_the_intent_question_when_the_model_leaves_it_out(part_a, 
     assert lines[-1].endswith("The answer could change the best plan.")
 
 
-def test_a_valid_model_question_is_kept(part_a, costed, chamfer, catalog_access):
+def test_a_model_question_is_kept_only_if_the_verifier_supports_it(part_a, costed, chamfer, catalog_access):
+    """Shop lane, 2026-10-31: the model's question went out after only a slot check, so "no model prose without
+    a verifier" was false for the ask line. Now it is verified like a sentence; otherwise code's question goes."""
     mine = f"Does the weld fixture need {chamfer}?"
-    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine))),
-                   back_chamfer=catalog_access)
-    assert r.decisions[0].question == mine
+    for verifier, expected in ((Scripted(verdicts(True), name="verifier"), mine),
+                               (Scripted(verdicts(False), name="verifier"), f"Is {chamfer} required as modelled?"),
+                               (None, f"Is {chamfer} required as modelled?")):
+        r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), decide(_buy(mine))),
+                       verifier=verifier, back_chamfer=catalog_access)
+        assert r.decisions[0].question == expected
+        assert sum("modelled?" in line or mine in line for line in r.comment.splitlines()) == 1
 
 
 def test_no_question_is_attached_when_intent_is_stated(part_a, costed, chamfer, catalog_access):
