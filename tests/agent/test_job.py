@@ -165,3 +165,47 @@ def test_part_b_says_it_plans_with_the_cutter_the_shop_bought(shop):
                                back_chamfer=[a.to_dict() for a in access], learned=learned)
     assert "1 setup" in comment
     assert comment.splitlines()[-1] == "It plans with the 910480 the shop bought on 2026-10-26."
+
+
+def test_a_reply_turn_reads_rules_against_the_issues_code_found(part_a, shop, chamfer):
+    """ADR 0012: the review's issue groups are what a reply may decide about."""
+    from anville.agent.job import read_reply_turn
+    from tests.agent.test_reply import rules
+
+    keep = {"face_group": chamfer, "rule": "keep", "quote": "weld clearance"}
+    found, groups, setups = read_reply_turn(part_a.to_dict(), shop, {}, lambda *a, **k: None,
+                                            "That chamfer is weld clearance, keep it.", model=Scripted(rules(keep)))
+    assert found == [keep] and groups == [chamfer] and setups == 2
+
+
+def test_a_reply_turn_with_the_agent_off_reads_nothing(part_a, shop):
+    from anville.agent.job import read_reply_turn
+
+    found, _, _ = read_reply_turn(part_a.to_dict(), shop, {"ANVILLE_AGENT": "off"}, lambda *a, **k: None, "keep it")
+    assert found is None
+
+
+def test_agent_comment_passes_the_constraints_to_the_review(part_a, shop, chamfer):
+    keep = {"id": 1, "face_group": chamfer, "rule": "keep", "reason": "weld clearance"}
+    from tests.agent.test_review import call
+
+    wrong = call("not_a_stage")  # both stages fall back to the fixed script, which still reads the constraints
+    comment, _ = agent_comment(part_a.to_dict(), shop, {}, lambda *a, **k: None,
+                               model=Scripted(wrong, wrong, wrong, wrong), constraints=[keep])
+    assert "weld clearance" in comment  # the kept chamfer's reason reaches the rendered line
+
+
+def test_a_reply_turn_reads_the_groups_the_review_raised_not_todays(part_a, shop, chamfer):
+    """Codex, PR #38 (P1): after the shop buys the cutter, today's plan has no G3 issue, but the designer is
+    answering the review that raised it."""
+    from dataclasses import replace
+
+    from anville.agent.job import read_reply_turn
+    from anville.geometry import BACK_CHAMFER_CATALOG
+    from tests.agent.test_reply import rules
+
+    owns = replace(shop, back_chamfer_tools=list(BACK_CHAMFER_CATALOG))
+    keep = {"face_group": chamfer, "rule": "keep", "quote": "weld clearance"}
+    found, groups, _ = read_reply_turn(part_a.to_dict(), owns, {}, lambda *a, **k: None, "weld clearance, keep it",
+                                       model=Scripted(rules(keep)), issue_shop=shop)
+    assert groups == [chamfer] and found == [keep]
