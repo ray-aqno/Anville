@@ -140,3 +140,23 @@ def test_an_invented_preference_is_refused(part_a, shop, chamfer):
     for bad in (made_up, no_quote, on_keep):
         found, run = read_reply(Scripted(rules(bad), rules(bad)), reply, {chamfer: "x"}, emit=lambda *a, **k: None)
         assert found is None and run.fallbacks == ["read_reply"], bad
+
+
+def test_thanks_or_approval_alone_is_not_a_rule():
+    """Fireworks probe (ADR 0011 Amendment 1): "Thanks, looks good." was read as keep G3, quoting "looks good"."""
+    model = Scripted(rules(keep("looks good")), rules())
+    found, _ = read_reply(model, "Thanks, looks good.", RAISED, emit=lambda *a, **k: None)
+    assert found == []
+    assert "decides nothing about a face" in model.sent[1][0][1]["content"]
+
+
+def test_a_reason_that_happens_to_say_good_is_still_a_rule():
+    found, _ = read_reply(Scripted(rules(keep("keep G3, the weld needs it"))), "Looks good, but keep G3, the weld needs it.",
+                          RAISED, emit=lambda *a, **k: None)
+    assert found and found[0]["rule"] == "keep"
+
+
+def test_the_instructions_say_approval_decides_nothing():
+    model = Scripted(rules())
+    read_reply(model, "Thanks!", RAISED, emit=lambda *a, **k: None)
+    assert "looks good" in model.sent[0][0][1]["content"]

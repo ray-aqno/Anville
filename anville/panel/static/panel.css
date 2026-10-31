@@ -66,6 +66,9 @@ s { text-decoration-thickness: 1.5px; }
 .verdicts li { padding: 2px 0; }
 .placeholders { margin-top: 4px; font-size: 12px; color: var(--fallback); }
 .learned { margin: 0 12px 10px; font-size: 13px; color: var(--done); }
+.face { margin: 0 14px 12px; }
+.face img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); }
+.face figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .sheet { width: 100%; margin-top: 10px; padding: 9px; border: 0; border-radius: 7px; background: var(--anville); color: #fff; font: inherit; font-weight: 600; }
 .sheet:disabled { opacity: .45; }
 

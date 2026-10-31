@@ -1,6 +1,7 @@
 """The traveler (DESIGN.md §4.8, P2): the machinist's phone page for one setup sheet, and their note back.
 
     GET  /sheet/{sheet_id}?s=   the stored `anville.setup_sheet/1`, rendered as one HTML page
+    GET  /sheet/{sheet_id}/render?s=   the flagged face's picture for the sheet's version (ADR 0007 Amendment 4)
     POST /api/shop-note?s=      the machinist's note, as a `shop.note` event keyed shop:<request_id>
 
 Auth is a per-sheet capability, s = HMAC(panel_secret, "sheet:" + sheet_id), not the panel token: the link sits
@@ -23,7 +24,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from anville.panel.router import Writer
+from anville.panel.router import VERSION_ID, RenderReader, Writer
 
 SheetReader = Callable[[str], "tuple[str, dict] | None"]  # sheet_id -> (document_id, sheet), or None
 SHEET_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -69,9 +70,17 @@ def _problems(note: ShopNote, sheet: dict) -> list[str]:
 
 
 def make_sheet_router(read_sheet: SheetReader, writer: Writer, *, panel_secret: str,
-                      clock: Callable[[], float] = time.time) -> APIRouter:
-    """The traveler's routes. `read_sheet` and `writer` are main's store calls; both run off the event loop."""
+                      clock: Callable[[], float] = time.time, read_render: RenderReader | None = None) -> APIRouter:
+    """The traveler's routes. `read_sheet`, `writer` and `read_render` are main's store calls; all run off the
+    event loop."""
     router = APIRouter()
+
+    async def picture(sheet: dict) -> bytes | None:
+        # The picture is per version: the sheet carries its version_id (main adds it when storing the sheet).
+        vid = sheet.get("version_id")
+        if read_render is None or not isinstance(vid, str) or not VERSION_ID.fullmatch(vid):
+            return None
+        return await asyncio.to_thread(read_render, vid)
 
     def signed(sheet_id, s) -> bool:
         # The signature is checked before any store read, so a guessed link costs nothing.
@@ -83,7 +92,16 @@ def make_sheet_router(read_sheet: SheetReader, writer: Writer, *, panel_secret: 
         found = await asyncio.to_thread(read_sheet, sheet_id) if signed(sheet_id, s) else None
         if found is None:
             return Response(status_code=404)
-        return HTMLResponse(render_sheet(found[1], sheet_id, s), headers=PRIVATE)
+        shown = await picture(found[1]) is not None
+        return HTMLResponse(render_sheet(found[1], sheet_id, s, picture=shown), headers=PRIVATE)
+
+    @router.get("/sheet/{sheet_id}/render")
+    async def sheet_render(sheet_id: str, s: str | None = None):
+        found = await asyncio.to_thread(read_sheet, sheet_id) if signed(sheet_id, s) else None
+        png = await picture(found[1]) if found is not None else None
+        if not png:
+            return Response(status_code=404)
+        return Response(png, media_type="image/png", headers=PRIVATE)
 
     @router.post("/api/shop-note")
     async def shop_note(request: Request, s: str | None = None):
@@ -175,7 +193,7 @@ def _setup(s: dict, total: int) -> str:
             f'<h3>Tools</h3><ul class="tools">{"".join(_tool(t) for t in s.get("tools") or [])}</ul></section>')
 
 
-def render_sheet(sheet: dict, sheet_id: str, sig: str) -> str:
+def render_sheet(sheet: dict, sheet_id: str, sig: str, *, picture: bool = False) -> str:
     setups = sheet.get("setups") or []
     part = sheet.get("part") or {}
     predicted = sheet.get("basis") == "predicted"
@@ -191,6 +209,8 @@ def render_sheet(sheet: dict, sheet_id: str, sig: str) -> str:
 <div class="meta">Stock {_mm(part.get("stock_mm"))} · part {escape(str(part.get("source_sha256", ""))[:8])}
 {f' · {escape(str(sheet["shop"]))}' if sheet.get("shop") else ''} · {len(setups)} setup{'s' if len(setups) != 1 else ''}</div>
 {''.join(f'<p class="basis">{escape(str(n))}</p>' for n in sheet.get("notes") or [])}</header>
+{f'<figure class="face"><img src="/sheet/{escape(sheet_id)}/render?s={escape(sig)}" alt="The flagged face, highlighted">'
+ '<figcaption>The face Anville flagged, in orange, as in the review.</figcaption></figure>' if picture else ''}
 {''.join(_setup(s, len(setups)) for s in setups)}
 {f'<section class="setup"><h2>Not cut by this plan</h2><ul class="notes">{unreachable}</ul></section>' if unreachable else ''}
 <form class="note" onsubmit="return false">
