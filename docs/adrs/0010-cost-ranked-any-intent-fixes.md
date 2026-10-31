@@ -51,3 +51,24 @@ ADR 0009 Amendment 1 §4 makes a fix valid under any intent lead when intent is 
 - **Harder:** with placeholder ranges, dominance rarely bites, so most leads come from the tie-break, which rests on midpoints. The "depends" line has to carry that, and a tie-break lead can change when an input range moves.
 - **Cost:** pairwise dominance costs (number of fixes)² × corners × quantities in evaluations. On Part A that's 2 × 1,024 × 3, measured at 0.02 s with `_terms` precomputed per corner.
 - **Revisit** when RFC 0002 Q2 or Q3 is answered (real times or an outside quote); when a stated quantity becomes a computed input (S5); or if a third any-intent fix kind is added.
+
+## Amendment 1 (Accepted by Rayyan Aquino, 2026-10-31): a freed face's part edits are ranked too, unless the designer says which fix
+
+**Context.** The #37 gate's "not needed" turn proposed buying the $243 910480 in 10 of 10 runs, and the free removal in 0. The trend was 4/9, 4/10, 1/10, then 0/10. Two things kept the removal out:
+- The ranking took only shop-side fixes.
+- Even when given the removal, a fix that leaves a cost unpriced may never outrank one that doesn't, and a part edit always leaves "the designer's time to make and check the CAD edit" unpriced.
+
+Rayyan, 2026-10-31: "Ranking is good, unless the designer is clearly explicit."
+
+**Decision.**
+1. **Freed faces add their part edits to the ranking.** Once a ledger constraint says a face may change (ADR 0012), its plan-changing part edits are ranked with the issue's shop-side fixes.
+2. **The designer's edit time is waived for that ranking.** They volunteered the change, so their own time no longer counts against the edit. Any other unpriced cost still does.
+3. **An explicit request for one kind of fix wins.** If the same reply explicitly asks for a shop fix or a part edit, only that side is ranked, and Decide and the fallback lead with it. `read_reply` records it as `prefer` with its own quote, grounded like every rule (the words must be copied from the reply), and only on a `may_change` rule.
+
+**Consequences.**
+- **On Part A after "not needed":**
+  - The removal is cheaper than buying at every corner.
+  - Routing out costs less at some input extremes, so the removal leads by the mid-range tie-break.
+  - The comment names the route as its rival ("costs less at some inputs").
+- **Harder:** a reply now carries two grounded claims, a rule and an optional preference, and each is checked separately.
+- **Unchanged:** a kept or stated face is never edited (ADR 0002 Amendment 2's declined alternative excepted). An unknown face still leads with a shop-side fix.

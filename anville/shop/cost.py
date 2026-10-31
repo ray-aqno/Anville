@@ -28,6 +28,8 @@ CURRENT = "current"
 PART_EDITS = ("set_min_radius", "set_depth", "remove_feature")
 TOOLS = ("long_reach_price",)  # with every "tool_price.<name>": bought tools, shared by Scenarios.tool_parts
 JAWS = ("jaw_blank", "jaw_machining")  # each part's own relieved jaws, wherever its plan back-chamfers
+# A part edit's one unpriced cost; the designer can volunteer it (ADR 0010 Amendment 1).
+DESIGNER_TIME = "the designer's time to make and check the CAD edit"
 TOL = 1e-9  # dollars
 
 
@@ -115,7 +117,7 @@ def _route(o: Option, costs: ShopCosts, cutters: set[str], on_cutter: set[int]) 
     complete = o.after.unreachable == 0
     if o.kind in PART_EDITS:
         return Route(o.key, "part", o.after.setups, complete, "mill", _jaws(faces), len(faces),
-                     unpriced=["the designer's time to make and check the CAD edit"])
+                     unpriced=[DESIGNER_TIME])
     if o.kind == "route_machine":
         return Route(o.key, "outsource", o.after.setups, complete, "outsource", [], 0,
                      unpriced=["lead time to and from the outside shop"])

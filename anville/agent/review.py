@@ -52,6 +52,7 @@ class Intent:
     status: str        # protected | free | unknown
     reason: str = ""
     source: str = ""   # cad_feature_name | drawing | ledger:<id>
+    prefer: str = ""   # on a freed face, the side the designer explicitly asked for: shop_fix | part_edit | ""
 
 
 @dataclass
@@ -124,7 +125,8 @@ def tag_intents(issues: list[Issue], stated: dict[str, str] | None = None,
         for c in constraints:  # the newest constraint for the group wins
             if c.get("face_group") == g:
                 status = "protected" if c.get("rule") == "keep" else "free"
-                intent = Intent(status, c.get("reason", ""), f"ledger:{c.get('id', '?')}")
+                intent = Intent(status, c.get("reason", ""), f"ledger:{c.get('id', '?')}",
+                                c.get("prefer", "") if status == "free" else "")
         out[g] = intent
     return out
 
@@ -449,7 +451,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
         emit("option", "Option scored", stage="plan", key=o.key, name=name, edit_kind=o.kind, params=dict(o.params),
              side=o.side, setups_before=o.before.setups, setups_after=o.after.setups,
              changes_plan=o.changes_plan, **priced.get(o.key, {}))
-    ranked = _rank(costed, shop, chosen, options, emit)
+    ranked, considered = _rank(costed, shop, chosen, options, emit, intents)
     # A lead that wins only on the tie-break must not read as the cheapest (ADR 0010 §5): code names its rivals.
     rivals = {r.lead: [k for k in r.top if k != r.lead] for r in ranked.values() if r.lead and r.basis == "mid_range"}
 
@@ -515,11 +517,15 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 if not options[key].changes_plan:  # eval gate, PR #23: "takes it from 1 to 1 setup(s)"
                     return None, f"{key} changes nothing: propose an option whose changes_plan is true, or stay quiet"
                 rank = ranked.get(issue.id)
-                if rank and options[key].side == "shop" and rank.lead and key != rank.lead:
+                if rank and key in considered[issue.id] and rank.lead and key != rank.lead:
                     return None, (f"{rank.lead} costs less at mid-range inputs and is in the top tier for "
                                   f"{issue.face_group}: lead with it (ADR 0010)")
-                if rank and options[key].side == "shop" and not rank.lead and key not in rank.top:
+                if rank and key in considered[issue.id] and not rank.lead and key not in rank.top:
                     return None, f"{key} costs more than {rank.top} at every input: lead with one of those (ADR 0010)"
+                prefer = intents[issue.face_group].prefer
+                if {"shop_fix": "part", "part_edit": "shop"}.get(prefer) == options[key].side:
+                    return None, (f"the designer explicitly asked for a {prefer.replace('_', ' ')} on "
+                                  f"{issue.face_group}: lead with one")
                 if key in barred.get(issue.id, ()):
                     return None, (f"{issue.face_group}'s purpose is unknown: lead with a fix that works whatever it's "
                                   f"for (a shop-side option); a part edit appears only as code's conditional line")
@@ -554,7 +560,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                              "offered_options": offered, "rejected_requests": rejected,
                              "nodes": sorted(nodes), "slots": sorted(values)}, DECIDE_TOOL, v_decide)
     if decided is None:
-        decisions = [_fallback_decision(by_id[i], gates[i], list(options.values()), ranked.get(i)) for i in selected]
+        decisions = [_fallback_decision(by_id[i], gates[i], list(options.values()), ranked.get(i), considered.get(i, ()),
+                                        intents[by_id[i].face_group].prefer) for i in selected]
         sentences = []
     else:
         decisions, sentences = decided
@@ -763,29 +770,38 @@ def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[s
             for r in result.routes if r.key in options}, result)
 
 
-def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Option], emit: Emit) -> dict:
-    """ADR 0010: per issue, its plan-changing shop-side fixes ranked by cost (dominance at every corner and
-    quantity, then the mid-range tie-break Rayyan chose, 2026-10-30). Each issue over its own fixes, so a
-    cutter for one face never leads for another. A ranking bug costs only the ranking, never the review."""
+def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Option], emit: Emit,
+          intents: dict[str, Intent] | None = None) -> tuple[dict, dict]:
+    """ADR 0010: per issue, its plan-changing fixes ranked by cost (dominance at every corner and quantity, then
+    the mid-range tie-break Rayyan chose, 2026-10-30). Each issue over its own fixes, so a cutter for one face
+    never leads for another. Shop-side fixes always; once the designer has freed the face, its part edits too,
+    with their own edit time waived (Amendment 1, Rayyan 2026-10-31), unless the designer explicitly asked for
+    one side. A ranking bug costs only the ranking, never the review. Returns (rankings, keys ranked) per issue."""
     if result is None:
-        return {}
+        return {}, {}
     from anville.shop import rank_fixes
+    from anville.shop.cost import DESIGNER_TIME
 
-    out = {}
+    out, considered = {}, {}
     for issue in issues:
+        intent = (intents or {}).get(issue.face_group)
+        freed = intent is not None and intent.status == "free"
+        prefer = intent.prefer if freed else ""
         keys = [k for k, o in options.items()  # best_option order: `top` keeps it, the fallback relies on it
-                if o.changes_plan and o.side == "shop" and o.face_group in (None, issue.face_group)]
+                if o.changes_plan and (
+                    (o.side == "shop" and o.face_group in (None, issue.face_group) and prefer != "part_edit")
+                    or (freed and o.side == "part" and o.face_group == issue.face_group and prefer != "shop_fix"))]
         if not keys:
             continue
         try:
-            ranking = rank_fixes(result, shop, keys)
+            ranking = rank_fixes(result, shop, keys, waived={DESIGNER_TIME} if freed else set())
         except Exception as e:
             emit("error", "Ranking failed; any shop fix may lead", stage="plan", issue_id=issue.id, error=repr(e)[:300])
             continue
-        out[issue.id] = ranking
+        out[issue.id], considered[issue.id] = ranking, keys
         emit("decision", "Fixes ranked", stage="plan", issue_id=issue.id, top=list(ranking.top), lead=ranking.lead,
-             basis=ranking.basis)
-    return out
+             basis=ranking.basis, freed=freed, prefer=prefer or None)
+    return out, considered
 
 
 def payback_line(key: str, payback: tuple, mid: int | None) -> str:
@@ -827,11 +843,13 @@ def _with_intent_questions(decisions: list[Decision], by_id: dict[str, Issue], i
     return out
 
 
-def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option], ranking=None) -> Decision:
-    mine = [o for o in options if o.face_group in (None, issue.face_group)]
-    if ranking and ranking.top:  # ADR 0010: the ranked lead, else the first of the top tier, leads on the shop side
+def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option], ranking=None,
+                       considered=(), prefer: str = "") -> Decision:
+    unwanted = {"shop_fix": "part", "part_edit": "shop"}.get(prefer)  # the designer said which side, explicitly
+    mine = [o for o in options if o.face_group in (None, issue.face_group) and o.side != unwanted]
+    if ranking and ranking.top:  # ADR 0010: the ranked lead, else the first of the top tier, leads among the ranked
         first = ranking.lead or ranking.top[0]
-        mine = sorted(mine, key=lambda o: o.side == "shop" and o.key != first)
+        mine = sorted(mine, key=lambda o: o.key in considered and o.key != first)
     if may_ask:
         # Intent unknown: propose the fix that assumes nothing about the feature (shop side, when one
         # exists) and ask about the part edit the answer could unlock. Never ask alone.
