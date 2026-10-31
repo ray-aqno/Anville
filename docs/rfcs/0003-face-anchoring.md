@@ -46,7 +46,7 @@ So the question is: given a version's STEP file and its PartFacts, which Onshape
 
 **C. Compute PartFacts from Onshape directly** (tessellation or `bodydetails`), skipping STEP. Rejected: it breaks the CAD-agnostic core and loses exact OCCT geometry.
 
-**D. Anchor to the document and point with a render** (SAM, ADR 0005). The current fallback, and what an ambiguous face gets under A.
+**D. Anchor to the document and point with a render** (RFC 0004). The current fallback, and what an ambiguous face gets under A.
 
 ## Proposed design (if A holds)
 
@@ -64,7 +64,7 @@ So the question is: given a version's STEP file and its PartFacts, which Onshape
 4. **Panel (main):** "Show in model" sends **every matched face of the group** in one `requestSelectionHighlight` (a list is verified).
    - The panel views the workspace, not the version, so the IDs go through `idtranslations` first (ADR 0007's existing path) whenever the workspace microversion differs.
    - A face that doesn't translate isn't highlighted, and the panel says so.
-5. **Fallback, always visible:** a flag whose faces don't match is posted on the document. It says which face it means, in words and by its group label, and the SAM render points at it (ADR 0005).
+5. **Fallback, always visible:** a flag whose faces don't match is posted on the document. It says which face it means, in words and by its group label, and the RFC 0004 render points at it (`marker`: a ring on a hole, an arrow on a chamfer).
 
 ## Probe (main runs it; 1 call)
 
