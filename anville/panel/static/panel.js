@@ -10,13 +10,14 @@ const doc = params.get("documentId");
 const t = params.get("t");
 const url = (path, extra = {}) => `${path}?${new URLSearchParams({ documentId: doc, t, ...extra })}`;
 const app = document.getElementById("app");
+const renderUrl = (vid) => url(`/panel/render/${encodeURIComponent(vid)}`);  // the flagged face's picture
 
 let state = initialState();
 let replay = null;  // {runId, state}: an earlier run being replayed; null shows the live state
 
 function draw() {
   const view = replay ? replay.state : state;
-  patch(renderHTML(view, replay?.runId ?? null)
+  patch(renderHTML(view, replay?.runId ?? null, { renderUrl })
     + (replay ? `<button class="back" data-section="back" data-live>Back to live</button>` : ""));
 }
 
