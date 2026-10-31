@@ -29,7 +29,7 @@ Reader = Callable[[str, int, int], list[dict]]  # trace_after(document_id, after
 Writer = Callable[..., bool]                     # record(key, document_id, payload): False on a duplicate key
 
 STATIC = Path(__file__).parent / "static"
-ASSETS = frozenset({"panel.js", "panel.css", "reduce.js", "pace.js", "view.js"})
+ASSETS = frozenset({"panel.js", "panel.css", "reduce.js", "pace.js", "view.js", "sheet.js", "sheet.css"})
 MEDIA = {".js": "text/javascript", ".css": "text/css"}
 RUNS_KEPT = 5
 PAGE = 500

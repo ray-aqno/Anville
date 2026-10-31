@@ -1,0 +1,123 @@
+{
+ "note": "SYNTHETIC part (tests/geometry/parts.py demo_bracket, built during the event); sheet computed by anville.shop.sheet.setup_sheet. The current two-setup flip plan.",
+ "sheet_id": "sheet-part-a-flip",
+ "document_id": "dSYN",
+ "sheet": {
+  "schema": "anville.setup_sheet/1",
+  "part": {
+   "source_sha256": "028628eeb687fb9ee03b4fa3d768a15e0f35f0a9c7691dc4eb37102aa74315e2",
+   "stock_mm": [
+    100.0,
+    60.0,
+    20.0
+   ]
+  },
+  "shop": null,
+  "axes": 3,
+  "setups": [
+   {
+    "number": 1,
+    "directions": [
+     "+Z"
+    ],
+    "orientation": "top up, as modelled",
+    "workholding": {
+     "type": "vise_soft_jaws",
+     "vise_in": 6.0,
+     "jaw_material": "aluminum",
+     "relieved": false,
+     "grip_faces": null,
+     "reliefs": [],
+     "parallels": {
+      "height_mm": 12.7,
+      "width_mm": 3.2
+     },
+     "status": "stated in the shop profile; not confirmed by the shop's machinist (RFC 0002 \u00a73)"
+    },
+    "tools": [
+     {
+      "name": "EM12",
+      "type": "endmill",
+      "diameter_mm": 12.0,
+      "reach_mm": 48.0,
+      "owned": true,
+      "faces": [
+       6,
+       10,
+       11,
+       12,
+       13,
+       14,
+       15,
+       16,
+       17,
+       19
+      ],
+      "groups": [
+       "G6",
+       "G10",
+       "G12"
+      ]
+     },
+     {
+      "name": "EM6",
+      "type": "endmill",
+      "diameter_mm": 6.0,
+      "reach_mm": 24.0,
+      "owned": true,
+      "faces": [
+       9,
+       18
+      ],
+      "groups": [
+       "G9",
+       "G11"
+      ]
+     }
+    ],
+    "notes": []
+   },
+   {
+    "number": 2,
+    "directions": [
+     "-Z"
+    ],
+    "orientation": "flipped: bottom up",
+    "workholding": {
+     "type": "vise_soft_jaws",
+     "vise_in": 6.0,
+     "jaw_material": "aluminum",
+     "relieved": false,
+     "grip_faces": null,
+     "reliefs": [],
+     "parallels": {
+      "height_mm": 12.7,
+      "width_mm": 3.2
+     },
+     "status": "stated in the shop profile; not confirmed by the shop's machinist (RFC 0002 \u00a73)"
+    },
+    "tools": [
+     {
+      "name": "EM12",
+      "type": "endmill",
+      "diameter_mm": 12.0,
+      "reach_mm": 48.0,
+      "owned": true,
+      "faces": [
+       3
+      ],
+      "groups": [
+       "G3"
+      ]
+     }
+    ],
+    "notes": []
+   }
+  ],
+  "unreachable": [],
+  "notes": [
+   "Predicted from the CAD model's measured faces; not yet run on the machine."
+  ],
+  "basis": "predicted"
+ }
+}
