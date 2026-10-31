@@ -281,3 +281,21 @@ def test_the_job_has_nothing_to_build_on_a_one_setup_part(part_a, shop, removal)
     line, stats = fix_branch(None, one.to_dict(), shop, {"ANVILLE_FIX_BRANCH": "on"}, lambda *a, **k: None,
                              did="d", vid="v", eid="e", run="r", measure=lambda s: 1)
     assert (line, stats) == (None, {"fix_branch": "nothing to build"})
+
+
+def test_demo_a_v1_maps_g11_to_the_weld_chamfer(shop):
+    """Real data, no calls: the exact STEP production reviewed (DEMO A v1) against the live FeatureScript
+    result. Every face matches, and the removal's group maps to the weld chamfer, with no other face."""
+    from anville.connectors.onshape.fixbranch import Branch, feature_for
+    from anville.geometry import extract
+    from anville.geometry.anchor import frame_offset, match_centroids
+
+    facts = extract(Path(__file__).parent / "data" / "onshape_demo_a_v1.step")
+    theirs = parse_mapping({"result": LIVE["featurescript_result"]})
+    option = removal_alternative(facts.to_dict(), shop)
+    assert (option.face_group, option.before.setups, option.after.setups) == ("G11", 2, 1)
+    rows = match_centroids(facts, theirs, frame_offset(facts, theirs)[0])
+    assert all(r["verdict"] == "match" for r in rows.values()) and len(rows) == 19
+    b = Branch(status="predicted", group="G11", predicted=1)
+    assert feature_for(facts, option.removed_faces, theirs, b) == CHAMFER_FEATURE["featureId"]
+    assert CHAMFER_FEATURE["name"] == "Weld clearance chamfer" and b.extra_faces == 0
