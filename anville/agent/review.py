@@ -313,6 +313,7 @@ DECIDE_TOOL = _tool(
     "`ask` with a question and no option: code then states the part edit as a conditional. Then write the "
     "comment the designer will read: sentences that each cite the nodes they rest on. You may state a fix's "
     "payback (its whole range, with its payback slots) and name a rival fix (cite it with the cost ranking); "
+    "a rival named with the ranking is said to come out ahead at some shop rates; "
     "a lead the ranking gives at mid-range is said to lead at mid-range shop rates, never cheapest, cheaper or "
     "lowest-cost. Name a fix with its {{option.<key>.fix}} slot, never a part number, an option key or a "
     "paraphrase. The slot fills with a phrase such as 'buying the cutter', so make it the subject that opens the "
@@ -816,8 +817,8 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     # Code is the backstop, not the author (Rayyan, 2026-10-31): verified prose that used all of a fix's payback
     # slots already stated it, and a sentence citing a rival with the cost ranking already named that rival.
     used = {m.strip() for s in verified for m in _SLOT.findall(s["text"])}
-    # A rival is named only by a sentence that compares it (cites the ranking and says who comes out ahead),
-    # not by a mention (Codex, PR review).
+    # A rival is named only by a sentence that cites the ranking and says the rival wins at some inputs: a
+    # mention, or "we lead, ahead of X", leaves out the caveat code's line carries (Codex, PR review).
     ranked = [s for s in verified if any(c.startswith("cost:") for c in s["cites"]) and _COMPARES.search(s["text"])]
     named = ({c.split(":", 1)[1] for s in ranked for c in s["cites"] if c.startswith("option:")}
              | {m.strip()[len("option."):-len(".fix")] for s in ranked for m in _SLOT.findall(s["text"])
@@ -921,7 +922,7 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
     return out, considered
 
 
-_COMPARES = re.compile(r"\b(ahead|leads?|costs? less|come out)\b", re.I)
+_COMPARES = re.compile(r"\bat some (inputs|shop rates|rates)\b", re.I)  # the rival's side of the ranking
 
 
 def payback_covered(key: str, payback: tuple, mid: int | None, used: set[str]) -> bool:

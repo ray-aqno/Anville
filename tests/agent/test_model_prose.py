@@ -214,11 +214,19 @@ def test_the_model_names_a_fix_in_codes_own_words_through_a_slot(part_a, costed,
 def test_a_rival_named_through_its_fix_slot_covers_codes_rival_line(part_a, costed, chamfer, catalog_access):
     """Live, 2026-10-31: "... leads at mid-range shop rates over sending it to an outside 5-axis shop", and code
     still added "Sending it to an outside 5-axis shop costs less at some inputs.": the rival twice."""
-    ranked = {"text": f"It leads at mid-range shop rates, ahead of {{{{option.{ROUTE}.fix}}}}.", "role": "reason",
+    ranked = {"text": f"{{{{option.{ROUTE}.fix}}}} can come out ahead at some shop rates.", "role": "reason",
               "cites": ["decision:I1", "cost:I1"]}
     r = review_with(part_a, costed, chamfer, catalog_access, [ranked])
-    assert "ahead of sending it to an outside 5-axis shop" in r.comment
+    assert "Sending it to an outside 5-axis shop can come out ahead at some shop rates." in r.comment.splitlines()
     assert "costs less at some inputs." not in r.comment
+
+
+def test_a_lead_ahead_of_a_rival_doesnt_say_the_rival_wins_elsewhere(part_a, costed, chamfer, catalog_access):
+    """Codex, second pass: "leads at mid-range rates, ahead of X" never says X costs less at some inputs."""
+    lead = {"text": f"It leads at mid-range shop rates, ahead of {{{{option.{ROUTE}.fix}}}}.", "role": "reason",
+            "cites": ["decision:I1", "cost:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), lead])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
 
 
 def test_a_payback_that_never_pays_off_somewhere_is_always_codes_line():
