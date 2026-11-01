@@ -84,11 +84,12 @@ Rayyan, 2026-10-31: "Ranking is good, unless the designer is clearly explicit."
 - Rayyan, 2026-10-31: "constrain the accuracy, not the wording."
 
 **Decision.**
-1. **The model may state dollars and paybacks, only through code-filled slots** (`option.<key>.payback_lo|mid|hi`, `option.<key>.cost_lo|hi`, `costs.quantity`). A digit the model writes is still rejected (locked decision 3). §5's wording limits still hold: a tie-break lead is never "cheapest" or "recommended".
-2. **Code's payback line is a backstop.** It is left out only when verified prose used every payback slot that line would use.
-   - The range is what says the payback depends on inputs, so prose that gives only the midpoint doesn't cover it.
-   - A "doesn't pay off" verdict has no slots, so it is always code's line.
-3. **Code's rival line is a backstop.** It is left out only when a verified sentence cites that rival's option node together with `cost:<issue>`, so the verifier judged the comparison against the basis's `means`.
+1. **The model may state dollars and paybacks, and name fixes, only through code-filled slots** (a fix's name is `option.<key>.fix`, code's own phrase such as "buying the 910480 back-chamfer cutter"); the dollar slots are `option.<key>.payback_lo|mid|hi`, `option.<key>.cost_lo|hi` and `costs.quantity`. A digit the model writes is still rejected (locked decision 3). §5's wording limits still hold: a tie-break lead is never "cheapest" or "recommended".
+2. **Code's payback line is a backstop.** It is left out only when one verified sentence says the tool pays off (or back) and uses all three payback slots: low, mid and high.
+   - The range is what says the payback depends on inputs, so prose that gives only the midpoint, or lists the numbers without the claim, doesn't cover it.
+   - A range with a "never" end (it never pays off at the worst or mid-range inputs) is always code's line: that verdict has no slot.
+3. **Code's rival line is a backstop.** It is left out only when a verified sentence cites `cost:<issue>`, opens with the rival's own `{{option.<key>.fix}}` slot, and says the rival comes out ahead (or costs less) at some inputs. A mention, or "ours leads, ahead of X", leaves out the caveat, so code's line stays.
+   - These coverage tests are code patterns, not meaning: the verifier judges whether a sentence is supported, not whether it carries every caveat. The patterns are tight (four Codex passes on PR review), so a miss errs toward code repeating a caveat, not dropping one.
 4. **Only verified prose covers.** A sentence the check or the verifier drops covers nothing, and code's line goes out.
 5. **Unchanged:**
    - the conditional removal line stays code's (ADR 0009 Amendment 1: a part edit on a face of unknown purpose appears only there);
