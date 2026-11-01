@@ -379,6 +379,7 @@ def extract(step_path: str | Path) -> PartFacts:
             radius=round(cyl.Radius(), 4) if cyl else None,
             concave_radius=round(concave[0], 4) if concave else None,
             concave_axis=concave[1] if concave else None,
+            box=[[round(c, 4) for c in flo], [round(c, 4) for c in fhi]],
         ))
     edges = _edges(shape, fmap)
     stock = {f.id for f in faces if f.stock}
