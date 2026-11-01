@@ -75,12 +75,13 @@ def make_sheet_router(read_sheet: SheetReader, writer: Writer, *, panel_secret: 
     event loop."""
     router = APIRouter()
 
-    async def picture(sheet: dict) -> bytes | None:
+    def has_picture(sheet: dict) -> bool:
         # The picture is per version: the sheet carries its version_id (main adds it when storing the sheet).
         vid = sheet.get("version_id")
-        if read_render is None or not isinstance(vid, str) or not VERSION_ID.fullmatch(vid):
-            return None
-        return await asyncio.to_thread(read_render, vid)
+        return read_render is not None and isinstance(vid, str) and bool(VERSION_ID.fullmatch(vid))
+
+    async def picture(sheet: dict) -> bytes | None:
+        return await asyncio.to_thread(read_render, sheet["version_id"]) if has_picture(sheet) else None
 
     def signed(sheet_id, s) -> bool:
         # The signature is checked before any store read, so a guessed link costs nothing.
@@ -92,8 +93,9 @@ def make_sheet_router(read_sheet: SheetReader, writer: Writer, *, panel_secret: 
         found = await asyncio.to_thread(read_sheet, sheet_id) if signed(sheet_id, s) else None
         if found is None:
             return Response(status_code=404)
-        shown = await picture(found[1]) is not None
-        return HTMLResponse(render_sheet(found[1], sheet_id, s, picture=shown), headers=PRIVATE)
+        # SAM's picture lands after the comment: a sheet opened first gets a hidden slot sheet.js fills (Codex, #51).
+        state = ("shown" if await picture(found[1]) is not None else "pending") if has_picture(found[1]) else None
+        return HTMLResponse(render_sheet(found[1], sheet_id, s, picture=state), headers=PRIVATE)
 
     @router.get("/sheet/{sheet_id}/render")
     async def sheet_render(sheet_id: str, s: str | None = None):
@@ -193,7 +195,17 @@ def _setup(s: dict, total: int) -> str:
             f'<h3>Tools</h3><ul class="tools">{"".join(_tool(t) for t in s.get("tools") or [])}</ul></section>')
 
 
-def render_sheet(sheet: dict, sheet_id: str, sig: str, *, picture: bool = False) -> str:
+def _figure(url: str, picture: str | None) -> str:
+    """The flagged face: shown when its picture exists, else a hidden slot sheet.js fills when it lands."""
+    if picture is None:
+        return ""
+    cap = "<figcaption>The face Anville flagged, in orange, as in the review.</figcaption>"
+    if picture == "shown":
+        return f'<figure class="face"><img src="{escape(url)}" alt="The flagged face, highlighted">{cap}</figure>'
+    return f'<figure class="face" hidden data-render="{escape(url)}"><img alt="The flagged face, highlighted">{cap}</figure>'
+
+
+def render_sheet(sheet: dict, sheet_id: str, sig: str, *, picture: Literal["shown", "pending"] | None = None) -> str:
     setups = sheet.get("setups") or []
     part = sheet.get("part") or {}
     predicted = sheet.get("basis") == "predicted"
@@ -209,8 +221,7 @@ def render_sheet(sheet: dict, sheet_id: str, sig: str, *, picture: bool = False)
 <div class="meta">Stock {_mm(part.get("stock_mm"))} · part {escape(str(part.get("source_sha256", ""))[:8])}
 {f' · {escape(str(sheet["shop"]))}' if sheet.get("shop") else ''} · {len(setups)} setup{'s' if len(setups) != 1 else ''}</div>
 {''.join(f'<p class="basis">{escape(str(n))}</p>' for n in sheet.get("notes") or [])}</header>
-{f'<figure class="face"><img src="/sheet/{escape(sheet_id)}/render?s={escape(sig)}" alt="The flagged face, highlighted">'
- '<figcaption>The face Anville flagged, in orange, as in the review.</figcaption></figure>' if picture else ''}
+{_figure(f"/sheet/{sheet_id}/render?s={sig}", picture)}
 {''.join(_setup(s, len(setups)) for s in setups)}
 {f'<section class="setup"><h2>Not cut by this plan</h2><ul class="notes">{unreachable}</ul></section>' if unreachable else ''}
 <form class="note" onsubmit="return false">

@@ -77,7 +77,27 @@ def test_the_sheet_shows_the_flagged_face_when_its_picture_exists():
     html = sheet_client().get(f"/sheet/{SID}?s={SIG}").text
     assert f'<img src="/sheet/{SID}/render?s={SIG}"' in html
     assert html.index('class="face"') < html.index('class="setup"')  # the picture before the setups
-    assert 'class="face"' not in sheet_client(store={}).get(f"/sheet/{SID}?s={SIG}").text
+
+
+def test_a_sheet_opened_before_sam_finishes_keeps_a_hidden_slot_that_sheet_js_fills():
+    # Codex P2 (PR #51): the picture lands after the comment, so a sheet opened first never showed it.
+    html = sheet_client(store={}).get(f"/sheet/{SID}?s={SIG}").text
+    assert f'<figure class="face" hidden data-render="/sheet/{SID}/render?s={SIG}">' in html
+    assert "<img " in html and "<img src=" not in html  # sheet.js sets src; no request until then
+    assert html.index('class="face"') < html.index('class="setup"')
+
+
+def test_no_slot_without_a_picture_route_or_a_version():
+    assert 'class="face"' not in client_no_render().get(f"/sheet/{SID}?s={SIG}").text
+    no_vid = {sid: (doc, sheet) for sid, (doc, sheet) in SHEETS.items()}
+    assert 'class="face"' not in sheet_client(store={}, sheets=no_vid).get(f"/sheet/{SID}?s={SIG}").text
+
+
+def client_no_render():
+    with_vid = {sid: (doc, {**sheet, "version_id": VID}) for sid, (doc, sheet) in SHEETS.items()}
+    app = FastAPI()
+    app.include_router(make_sheet_router(with_vid.get, RecordingWriter(), panel_secret=SECRET))
+    return TestClient(app)
 
 
 def test_the_sheets_picture_comes_from_its_own_version():

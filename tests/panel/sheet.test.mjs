@@ -1,7 +1,7 @@
 // The traveler's note (DESIGN.md §4.8): what the page sends for each button, before any network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { notePayload, requestFor } from "../../anville/panel/static/sheet.js";
+import { notePayload, requestFor, watchPicture } from "../../anville/panel/static/sheet.js";
 
 const base = { sheetId: "sheet-part-a-buy", requestId: "11111111-1111-4111-8111-111111111111" };
 
@@ -38,4 +38,32 @@ test("a retry reuses the request id only while the note is unchanged (Codex P2: 
   assert.equal(first.id, "id-1");
   assert.equal(requestFor(first, { ...note }, () => ids.shift()).id, "id-1");             // same note: same id
   assert.equal(requestFor(first, { ...note, text: "flipped twice" }, () => ids.shift()).id, "id-2");  // edited: new id
+});
+
+// A sheet opened before SAM finishes (Codex P2, PR #51): the hidden slot asks again every few seconds, for a while.
+function fakeSlot(results) {
+  const img = { src: "", onload: null, onerror: null };
+  const figure = { hidden: true, dataset: { render: "/sheet/s1/render?s=abc" }, querySelector: () => img };
+  const waits = [];
+  const wait = (fn, ms) => { waits.push(ms); fn(); };
+  let n = 0;
+  Object.defineProperty(img, "src", { set(v) { this._src = v; this.srcs = [...(this.srcs ?? []), v];
+    (results[n++] ?? false) ? this.onload() : this.onerror(); }, get() { return this._src; } });
+  return { img, figure, waits, wait };
+}
+
+test("the sheet's picture slot retries until the picture lands, then shows it", () => {
+  const { img, figure, waits, wait } = fakeSlot([false, false, true]);
+  watchPicture(figure, { every: 5000, tries: 12, wait });
+  assert.equal(figure.hidden, false);
+  assert.deepEqual(img.srcs, ["/sheet/s1/render?s=abc&try=1", "/sheet/s1/render?s=abc&try=2", "/sheet/s1/render?s=abc&try=3"]);
+  assert.deepEqual(waits, [5000, 5000]);
+});
+
+test("the sheet's picture slot gives up quietly after its tries", () => {
+  const { img, figure, waits, wait } = fakeSlot([]);
+  watchPicture(figure, { every: 5000, tries: 12, wait });
+  assert.equal(figure.hidden, true);
+  assert.equal(img.srcs.length, 12);
+  assert.equal(waits.length, 11);
 });
