@@ -201,6 +201,16 @@ _INTERNAL = re.compile(r"\b(?:issue|intent|option|decision):|\b(?:intent|option|
 _ALLOWED_DIGITS = re.compile(r"\b[GI]\d+\b|\b[35]-axis\b|[+-][XYZ]\b")
 
 
+def describe_group(facts: PartFacts, group: str) -> str | None:
+    """A code-measured phrase for a face group ("the 1.5 mm chamfer on the bottom front edge"), so prose can name
+    the face the way a designer would. From geometry's describe_group once it lands; None until then."""
+    try:
+        from anville.geometry import describe_group as measured
+        return measured(facts, group)
+    except Exception:  # not landed yet, or a geometry error (unknown label): the face goes undescribed,
+        return None    # the review still posts (geometry lane, 2026-10-31)
+
+
 def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option],
                 intents: dict[str, "Intent"] | None = None) -> dict[str, str]:
     values = {"plan.setups": str(plan.count), "plan.unreachable": str(len(plan.unreachable))}
@@ -214,6 +224,7 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
         values[f"option.{key}.setups_after"] = str(o.after.setups)
         if o.kind == "add_tool":  # tool names carry digits: they reach the designer through a slot
             values[f"option.{key}.tool"] = str(o.params.get("name", key))
+        values[f"option.{key}.fix"] = _fix(key, o)  # the fix in code's words, so prose names it exactly
         values[f"option.{key}.unreachable_before"] = str(o.before.unreachable)
         values[f"option.{key}.unreachable_after"] = str(o.after.unreachable)
     return values
@@ -240,7 +251,10 @@ def fill_slots(text: str, values: dict[str, str], option_keys: list[str]) -> tup
     bare = _ALLOWED_DIGITS.sub("", bare)
     if re.search(r"\d", bare):
         return None, "numbers must come from slots; the text contains a number written by the model"
-    return _SLOT.sub(lambda m: values[m.group(1).strip()], text), ""
+    def fill(line: str) -> str:  # a phrase opening a line: "the left Ø8.5 through hole" -> "The left ..."
+        out = _SLOT.sub(lambda m: values[m.group(1).strip()], line)
+        return out[:1].upper() + out[1:] if line.startswith("{{") else out
+    return "\n".join(fill(line) for line in text.split("\n")), ""  # a whole comment is filled at once
 
 
 # --- model stages --------------------------------------------------------------
@@ -291,12 +305,23 @@ _SENTENCE = _obj(["text", "role", "cites"], {
     "cites": {"type": "array", "minItems": 1, "items": {"type": "string"}}})
 DECIDE_TOOL = _tool(
     "decide", "For each selected issue, propose an offered option that changes the plan, or stay quiet. Where "
-    "ask_allowed is true, a proposal may also carry a `question` for the designer: the comment flags the issue "
-    "and suggests the fix in one reply, without waiting for an answer. Only for an issue listed in `ask_only` "
+    "ask_allowed is true and the face's purpose is unknown, give the proposal a `question`, in your own words, "
+    "asking the designer what the face is for or whether it is needed as modelled. Ask about its purpose only: "
+    "never name an edit such as removing it, since code states the part edit beside your question. The comment "
+    "flags the issue and suggests the fix in one reply, without waiting for an answer. Only for an issue listed in `ask_only` "
     "(no shop-side fix exists, and the only fix is a part edit on a face whose purpose is unknown), choose "
     "`ask` with a question and no option: code then states the part edit as a conditional. Then write the "
-    "comment the designer will read: sentences that each cite the nodes they rest on. Questions are written "
-    "only in `decisions`; code places them.",
+    "comment the designer will read: sentences that each cite the nodes they rest on. You may state a fix's "
+    "payback (its whole range, with its payback slots) and name a rival fix (cite it with the cost ranking); "
+    "a rival named with the ranking gets its own sentence opening with its fix slot, saying it can come out "
+    "ahead at some shop rates; "
+    "a lead the ranking gives at mid-range is said to lead at mid-range shop rates, never cheapest, cheaper or "
+    "lowest-cost. Name a fix with its {{option.<key>.fix}} slot, never a part number, an option key or a "
+    "paraphrase. The slot fills with a phrase such as 'buying the cutter', so make it the subject that opens the "
+    "sentence: '{{option.<key>.fix}} takes it to {{option.<key>.setups_after}} setup(s).' Put no verb before it "
+    "(not 'Use', 'Fix with' or 'Proposing') and don't repeat the tool after it. "
+    "Code states whatever your verified sentences leave out. Questions are written only in `decisions`; code "
+    "places them.",
     _obj(["decisions", "comment"], {
         "decisions": {"type": "array", "items": _obj(
             ["issue_id", "action", "reason"],
@@ -492,6 +517,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
+    where = {i.id: w for i in chosen if (w := describe_group(facts, i.face_group))}
+    values.update({f"issue.{i}.where": w for i, w in where.items()})  # digits in it reach prose through the slot
     estimates = {}  # conditional part edit -> its cost slot, where only a part edit helps (ruling, lane 3)
     if priced:
         q = max(shop.costs.scenarios.quantities)
@@ -512,6 +539,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                     values[f"option.{key}.{name}"] = str(v)
     keys = list(options)
     nodes = comment_nodes(plan, chosen, intents, options, priced=priced, ranked=ranked)
+    for i, w in where.items():  # the verifier sees what the slot says
+        nodes[f"issue:{i}"]["where"] = w
     if "costs.quantity" in values:  # the quantity code prices at, so a sentence using it can be verified
         nodes["costs"] = {"quantity": int(values["costs.quantity"]), "note": "the part count the costs are given at"}
 
@@ -656,8 +685,9 @@ def comment_nodes(plan: SetupPlan, chosen: list[Issue], intents: dict[str, Inten
     for g, t in intents.items():
         nodes[f"intent:{g}"] = {"status": t.status, "reason": t.reason}
     for k, o in options.items():
-        nodes[f"option:{k}"] = {"side": o.side, "face_group": o.face_group, "setups_before": o.before.setups,
-                                "setups_after": o.after.setups, "unreachable_after": o.after.unreachable}
+        nodes[f"option:{k}"] = {"fix": _fix(k, o), "side": o.side, "face_group": o.face_group,
+                                "setups_before": o.before.setups, "setups_after": o.after.setups,
+                                "unreachable_after": o.after.unreachable}  # fix: code's name, so prose using it verifies
         if o.params.get("direction"):  # where the fix works from (models lane: prose put the cutter on -Z)
             nodes[f"option:{k}"]["works_from"] = o.params["direction"]
         price = (priced or {}).get(k)
@@ -736,6 +766,12 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
                 # No question here: it is verified on its own and may be replaced, so prose can't rest on it
                 # (Codex, PR #45).
                 cited[c] = {"action": d.action, "option_key": d.option_key}
+                if d.option_key and f"option:{d.option_key}" in nodes:  # the decided fix comes with its decision
+                    cited.setdefault(f"option:{d.option_key}", nodes[f"option:{d.option_key}"])
+        if sent["role"] == "question":  # ruling (a): the question rides on the proposal; it needs no ask
+            d = decided_by[sent["issue_id"]]
+            cited[f"decision:{d.issue_id}"] = {"action": d.action, "option_key": d.option_key,
+                                               "carries_this_question": True}
         items.append({"index": i, "text": fill_slots(sent["text"], values, keys)[0], "role": sent["role"],
                       "cites": cited})
 
@@ -748,9 +784,12 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
         if sorted(verdicts) != list(range(len(items))):
             return None, f"give one verdict per sentence index 0..{len(items) - 1}"
         return verdicts, ""
-    decisions_view = [{"issue_id": d.issue_id, "action": d.action, "option_key": d.option_key}
-                      for d in decided_by.values()]
-    verdicts = run.ask("verify", "Judge each sentence strictly against its cited nodes and the accepted decisions.",
+    decisions_view = [{"issue_id": d.issue_id, "action": d.action, "option_key": d.option_key,
+                       **({"carries_question": True} if d.question else {})} for d in decided_by.values()]
+    verdicts = run.ask("verify", "Judge each sentence strictly against its cited nodes and the accepted decisions. "
+                       "A proposal on a face whose purpose is unknown may carry one question asking what the face "
+                       "is for or whether it is needed as modelled (carries_question): such a question is part of "
+                       "that accepted decision, not a request for an edit.",
                        base, {"accepted_decisions": decisions_view, "sentences": items}, VERIFY_TOOL, v_verify,
                        model=verifier)
     if verdicts is None:  # can't verify: publish no model prose
@@ -776,6 +815,13 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     proposal they belong to (flag, then suggest)."""
     covered = {c.split(":", 1)[1] for s in verified if s["role"] == "action"
                for c in s["cites"] if c.startswith("decision:")}
+    # Code is the backstop, not the author (Rayyan, 2026-10-31): verified prose that used all of a fix's payback
+    # slots already stated it, and a sentence citing a rival with the cost ranking already named that rival.
+    # A rival is named only by a sentence about it: citing the ranking, opening with the rival's own name slot,
+    # and saying it comes out ahead at some inputs. A mention, or "we lead, ahead of X", leaves out the caveat
+    # code's line carries (Codex, PR review, three passes).
+    named = {m.group(1) for s in verified if any(c.startswith("cost:") for c in s["cites"])
+             and (m := _RIVAL_WINS.match(s["text"]))}
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
@@ -787,9 +833,12 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
             lines.append(render_line(d, by_id, intents, options))
         if d.action == "propose":
             said.add(d.option_key)
-        if d.action == "propose" and d.option_key in (paybacks or {}):  # dollars are stated by code only
-            lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
+        if d.action == "propose" and d.option_key in (paybacks or {}):
+            if not payback_covered(d.option_key, *paybacks[d.option_key], [s["text"] for s in verified]):
+                lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
         for r in (rivals or {}).get(d.option_key, []) if d.action == "propose" else []:  # ADR 0010 §5
+            if r in named:
+                continue
             name = _name(options[r])
             lines.append(f"{name[0].upper()}{name[1:]} costs less at some inputs.")
         if d.question:
@@ -870,6 +919,23 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
         emit("decision", "Fixes ranked", stage="plan", issue_id=issue.id, top=list(ranking.top), lead=ranking.lead,
              basis=ranking.basis, freed=freed, prefer=prefer or None)
     return out, considered
+
+
+# The rival wins somewhere, said of the rival itself: its name slot opens the sentence and the claim follows it
+# in the same clause ("{{option.R.fix}} can come out ahead at some shop rates").
+_RIVAL_WINS = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
+                         r"[^;{]*?\bat some (inputs|shop rates|rates)\b", re.I)
+_PAYS = re.compile(r"\bpays? (off|back)\b", re.I)  # the claim, not the label "payback"
+
+
+def payback_covered(key: str, payback: tuple, mid: int | None, sentences: list[str]) -> bool:
+    """Verified prose already stated the payback: every end of the range pays off (a "never" is code's to say),
+    and one sentence says it pays off with all three slots, since the range is what says it depends on inputs
+    (ADR 0010 §5)."""
+    if None in (*payback, mid):
+        return False
+    slots = {f"option.{key}.payback_{f}" for f in ("lo", "mid", "hi")}
+    return any(_PAYS.search(t) and slots <= {m.strip() for m in _SLOT.findall(t)} for t in sentences)
 
 
 def payback_line(key: str, payback: tuple, mid: int | None) -> str:
@@ -959,6 +1025,11 @@ def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent]
             line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {g} stays as designed."
         return line
     return f"{g}: no change proposed."
+
+
+def _fix(key: str, o: Option) -> str:
+    """_name with its tool slot filled: "buying the 910480 back-chamfer cutter"."""
+    return _name(o).replace(f"{{{{option.{key}.tool}}}}", str(o.params.get("name", key)))
 
 
 def _name(o: Option) -> str:

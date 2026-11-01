@@ -211,6 +211,7 @@ def credits_line(calls: list[dict], fallbacks=()) -> str:
     parts = [f"{role} " + ", ".join(f"{m} ({', '.join(h)})" for m, h in models.items())
              for role, models in by_role.items()]
     seconds = max(1, round(sum(c.get("latency_s") or 0 for c in calls)))
-    parts += [f"{len(calls)} model calls", f"{seconds} s"] + [f"{s} fell back to code" for s in fallbacks]
+    count = f"{len(calls)} model call" + ("" if len(calls) == 1 else "s")
+    parts += [count, f"{seconds} s"] + [f"{s} fell back to code" for s in fallbacks]
     line = " · ".join(parts)
     return line[0].upper() + line[1:]

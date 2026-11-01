@@ -150,3 +150,14 @@ def question_names_no_fix(question: str | None, catalog: tuple[str, ...], group:
         return None
     words = question.lower()
     return group in question and not any(k.replace("_", " ") in words or k in words for k in catalog)
+
+
+# Lines code adds to every comment by design, not review content: they count in neither total.
+_NOT_REVIEW = ("Setup sheet for the shop:", "Reviewed by ", "Reply read by ")
+
+
+def model_line_share(comment: str, model_lines: int) -> tuple[int, int]:
+    """The prose metric (Rayyan, 2026-10-31: "constrain the accuracy, not the wording"): (lines the model wrote,
+    review lines). `model_lines` comes from the trace ("Comment assembled" carries model_sentences)."""
+    lines = [ln for ln in comment.splitlines() if ln.strip() and not ln.startswith(_NOT_REVIEW)]
+    return model_lines, len(lines)
