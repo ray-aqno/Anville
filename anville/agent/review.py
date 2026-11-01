@@ -569,7 +569,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 if rank and key in considered[issue.id] and rank.lead and key != rank.lead:
                     return None, (f"{rank.lead} costs less at mid-range inputs and is in the top tier for "
                                   f"{issue.face_group}: lead with it (ADR 0010)")
-                if rank and key in considered[issue.id] and not rank.lead and key not in rank.top:
+                # An empty top tier (no complete fix) ranks nothing, so nothing is outranked (smoke, 2026-11-01).
+                if rank and key in considered[issue.id] and not rank.lead and rank.top and key not in rank.top:
                     return None, f"{key} costs more than {rank.top} at every input: lead with one of those (ADR 0010)"
                 prefer = intents[issue.face_group].prefer
                 unwanted = {"shop_fix": "part", "part_edit": "shop"}.get(prefer)

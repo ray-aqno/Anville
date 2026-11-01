@@ -73,7 +73,7 @@ Rayyan, 2026-10-31: "Ranking is good, unless the designer is clearly explicit."
 - **Harder:** a reply now carries two grounded claims, a rule and an optional preference, and each is checked separately.
 - **Unchanged:** a kept or stated face is never edited (ADR 0002 Amendment 2's declined alternative excepted). An unknown face still leads with a shop-side fix.
 
-## Amendment 2 (Proposed, 2026-10-31): dollars may be the model's words, as code-filled slots; code's cost lines become the backstop
+## Amendment 2 (Accepted by Rayyan Aquino, 2026-11-01): dollars may be the model's words, as code-filled slots; code's cost lines become the backstop
 
 **Context.**
 - **The model writes little of what the designer reads.** In the two live G1 reviews (2026-10-31), it wrote 3 of 7 review lines on Demo A and 1 of 6 on Demo B. Code appended the rest every time: the payback line, the rival line, the conditional removal and the intent question.
