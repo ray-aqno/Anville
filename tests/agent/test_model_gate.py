@@ -129,6 +129,15 @@ def test_the_cutter_part_number_in_a_rendered_name_is_code_not_the_model():
     assert score.numbers_from_code(result(comment=text), VALUES)
 
 
+def test_the_lead_is_scored_against_the_trace_ranking_not_a_fixed_key():
+    """ADR 0010 on #37: the cost-ranked shop fix leads; the ranking comes from the "Fixes ranked" event."""
+    assert score.ranked_lead(result(propose(BUY)), "G3", {"I1": BUY})
+    assert not score.ranked_lead(result(propose(ROUTE)), "G3", {"I1": BUY})
+    assert score.ranked_lead(result(propose(ROUTE)), "G3", {}) is None  # code under test doesn't rank
+    # The ranking orders shop-side fixes; after "not needed", a part edit may lead (dry run, #37).
+    assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": BUY}) is None
+
+
 def test_a_dropped_or_quiet_issue_is_not_raised():
     assert score.raised(result(propose(ROUTE)), "G3")
     assert not score.raised(result(NS(issue_id="I1", action="quiet", option_key=None, question=None)), "G3")
@@ -145,3 +154,37 @@ def test_the_question_check_flags_one_that_names_a_fix():
     assert score.question_names_no_fix("Is G3 required as modelled?", catalog, "G3")
     assert not score.question_names_no_fix("Could we remove feature G3?", catalog, "G3")
     assert score.question_names_no_fix(None, catalog, "G3") is None
+
+
+def test_unknown_intent_with_the_gate_open_always_asks():
+    """Rayyan's ruling (a), 2026-10-30: code attaches the intent question, so a miss is a bug."""
+    def unknown(*decisions, allowed=True):
+        r = result(*decisions)
+        r.intents, r.ask_allowed = {"G3": NS(status="unknown")}, {"I1": allowed}
+        return r
+    assert score.intent_asked(unknown(propose(BUY, "Is G3 required as modelled?")), "G3")
+    assert not score.intent_asked(unknown(propose(BUY)), "G3")
+    assert score.intent_asked(unknown(propose(BUY), allowed=False), "G3") is None  # gate closed
+    stated = unknown(propose(BUY))
+    stated.intents = {"G3": NS(status="stated")}
+    assert score.intent_asked(stated, "G3") is None
+
+
+def test_on_a_freed_face_the_ranked_lead_may_be_the_part_edit():
+    """ADR 0010 Amendment 1 (2026-10-31): a freed face's removal is ranked with the shop fixes, so the lead is
+    scored on either side. On code that ranks only shop fixes, a part-side lead still isn't scored."""
+    assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": REMOVE}, freed={"I1"})
+    assert not score.ranked_lead(result(propose(BUY)), "G3", {"I1": REMOVE}, freed={"I1"})
+    assert score.ranked_lead(result(propose(REMOVE)), "G3", {"I1": BUY}) is None
+
+
+def test_a_reply_is_read_right_only_when_rule_and_preference_both_match():
+    """#38's read_reply: code checks a quote is real, not that it supports the rule (Codex). Scored by label."""
+    keep = [{"face_group": "G3", "rule": "keep", "quote": "keep it"}]
+    assert score.reply_read_right(keep, [("G3", "keep", None)])
+    assert not score.reply_read_right(keep, [("G3", "may_change", None)])  # real quote, wrong rule
+    buy = [{"face_group": "G3", "rule": "may_change", "quote": "can go", "prefer": "shop_fix", "prefer_quote": "buy"}]
+    assert score.reply_read_right(buy, [("G3", "may_change", "shop_fix")])
+    assert not score.reply_read_right(buy, [("G3", "may_change", None)])  # a preference the reply didn't state
+    assert score.reply_read_right([], [])  # a reply that decides nothing
+    assert not score.reply_read_right(None, [])  # the stage fell back

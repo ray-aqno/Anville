@@ -45,17 +45,27 @@ BARS = {
     "survived": 0.90,  # Rayyan's patch; 90% is the probe's bar (ADR 0003 Amendment 1)
     "raised": 0.95, "shop_fix": 0.95, "plan_changing_fix": 0.95,  # the ruling's 19/20
 }
-COMMON = ["survived", "no_bare_question", "numbers_from_code"]
-UNKNOWN = ["raised", "any_intent_leads", "removal_conditional_only"]
+COMMON = ["survived", "no_bare_question", "numbers_from_code", "ranked_lead"]  # ranked_lead: None if unranked
+UNKNOWN = ["raised", "any_intent_leads", "removal_conditional_only", "intent_asked"]
+BARS["ranked_lead"] = 1.0  # ADR 0010: Decide rejects any other shop-side lead, so a miss is a bug
+BARS["intent_asked"] = 1.0  # ruling (a): code attaches the question, so a miss is a bug
 STATED = "Weld clearance chamfer"
-REPLIES = {"keep": "Weld clearance for the frame tube", "may_change": "Edge break only, not needed"}
+REPLIES = {"keep": "Weld clearance for the frame tube", "may_change": "Edge break only, not needed",
+           "may_change_buy": "Edge break only, not needed"}
+PREFER = {"may_change_buy": ("shop_fix", "we'd rather buy the 910480 cutter")}  # read_reply's prefer, quoted
 
 # name: (part, the shop owns the 910480, turns). A turn is (stated?, reply rule or None, gated checks).
 SCENARIOS = {
     "a_stated": ("demo_bracket", False, [(True, None, ["raised", "shop_fix"])]),
+    # The live demo's first review alone (intent unknown): a one-turn, cents-per-run check of prose changes.
+    "a_unknown": ("demo_bracket", False, [(False, None, UNKNOWN)]),
     "a_reply_keep": ("demo_bracket", False, [(False, None, UNKNOWN), (False, "keep", ["raised", "shop_fix"])]),
     "a_reply_not_needed": ("demo_bracket", False,
                            [(False, None, UNKNOWN), (False, "may_change", ["raised", "plan_changing_fix"])]),
+    # Freed, and the designer explicitly asks for the cutter (Rayyan, 2026-10-31: "Ranking is good, unless the
+    # designer is clearly explicit"). The constraint is what read_reply records from such a reply.
+    "a_reply_buy": ("demo_bracket", False,
+                    [(False, None, UNKNOWN), (False, "may_change_buy", ["raised", "shop_fix"])]),
     "b_cutter_owned": ("demo_bracket_b", True, [(False, None, ["nothing_raised"])]),
     "two_pockets": ("two_pockets", False, [(False, None, [])]),  # several issues: repeats are tracked
     # No shop fix exists, only removal (Rayyan's ruling, 2026-10-30): flag and ask (lane 1), state the
@@ -137,7 +147,11 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
 
     events: list[dict] = []
     g = case.group
-    constraints = [{"id": "reply-1", "face_group": g, "rule": reply, "reason": REPLIES[reply]}] if reply else None
+    constraints = None
+    if reply:
+        constraints = [{"id": "reply-1", "face_group": g, "rule": reply.removesuffix("_buy"), "reason": REPLIES[reply]}]
+        if reply in PREFER:
+            constraints[0].update(prefer=PREFER[reply][0], prefer_reason=PREFER[reply][1])
     start = time.monotonic()
     _slots.values = {}
     r = run_review(case.facts, case.shop, models[0], verifier=models[1], stated={g: STATED} if stated else None,
@@ -150,7 +164,10 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
     _slots.values = None
     results = {}
     for name in ([*COMMON, *checks] if r.issues else checks):
-        args = {"numbers_from_code": (r, values), "estimate_shown": (r, values), "survived": (r,),
+        ranked = {e["issue_id"]: e["lead"] for e in events if e["title"] == "Fixes ranked" and e.get("lead")}
+        freed = {e["issue_id"] for e in events if e["title"] == "Fixes ranked" and e.get("freed")}
+        args = {"ranked_lead": (r, g, ranked, freed), "numbers_from_code": (r, values), "estimate_shown": (r, values),
+                "survived": (r,),
                 "no_bare_question": (r,), "nothing_raised": (r,), "asks_without_removal": (r,),
                 "flags_and_asks": (r,)}.get(name, (r, g))
         results[name] = getattr(score, name)(*args)
@@ -168,8 +185,28 @@ def run_turn(case: Case, models, stated: bool, reply: str | None, checks: list[s
             x.question, CATALOG, next(i.face_group for i in r.issues if i.id == x.issue_id)) is False),
         "repeated_fixes": score.repeated_fixes(r),
         "rejections": [rejection_kind(e.get("reason", "")) for e in events if e["title"] == "Model answer rejected"],
+        "rejection_reasons": [(e.get("stage"), e.get("reason", "")[:200]) for e in events
+                              if e["title"] == "Model answer rejected"],
         "model_sentences": next((e["model_sentences"] for e in events if e["title"] == "Comment assembled"), 0),
+        # The prose metric: review lines the model wrote (its verified sentences, plus its own published question).
+        "line_share": score.model_line_share(r.comment, next((e["model_sentences"] for e in events
+                                                              if e["title"] == "Comment assembled"), 0)
+                                             + sum(1 for d in r.decisions
+                                                   if d.question and "required as modelled" not in d.question)),
         "sentences_checked": sum(1 for e in events if e["title"] == "Sentence checked"),
+        # Why code rejected the model's sentences, so a new rule's cost shows (e.g. #37's cost claims).
+        "sentence_rejections": [("cost_claim" if "cheapest" in e.get("reason", "") else "other")
+                                for e in events if e["title"] == "Sentence checked" and not e.get("ok")],
+        # The full reasons, to break rejections down by rule: code's check, then the verifier.
+        "dropped_sentences": [{"by": "check" if e["title"] == "Sentence checked" else "verifier",
+                               "reason": e.get("reason", ""), "text": e.get("text", "")}
+                              for e in events if (e["title"] == "Sentence checked" and not e.get("ok"))
+                              or e["title"] == "Sentence not supported"],
+        # Who wrote each published question: the model, or code (its own, or in place of one the verifier
+        # rejected). Read from the final decisions; the trace logs a replacement as a second "Decision made".
+        "question_source": ["code" if "required as modelled" in d.question else "model"
+                            for d in r.decisions if d.question],
+        "retries": [u["stage"] for i, u in enumerate(r.usage) if any(v["stage"] == u["stage"] for v in r.usage[:i])],
     }
 
 
@@ -202,8 +239,12 @@ def summarize(name: str, trials: list[list[dict]]) -> dict:
         "leads": dict(Counter(f"{t['lead_side']}:{t['lead']}" for t in turns if t["lead"])),
         "proposals": dict(Counter(p for t in turns for p in t.get("proposals", []))),
         "model_sentences": sum(t["model_sentences"] for t in turns),
+        "line_share": [sum(t["line_share"][0] for t in turns), sum(t["line_share"][1] for t in turns)],
         "sentences_checked": sum(t["sentences_checked"] for t in turns),
         "repeated_fixes": sum(t["repeated_fixes"] for t in turns),
+        "sentence_rejections": dict(Counter(k for t in turns for k in t.get("sentence_rejections", []))),
+        "question_source": dict(Counter(k for t in turns for k in t.get("question_source", []))),
+        "retries": dict(Counter(s for t in turns for s in t.get("retries", []))),
         "questions": sum(len(t["questions"]) for t in turns),
         "questions_naming_a_fix": sum(t["questions_naming_a_fix"] for t in turns),
     }
@@ -221,9 +262,11 @@ def print_table(summary: dict, spent: float) -> None:
         print(f"{name:20} {'PASS' if s['ok'] else 'FAIL':5} {checks:58} {lat:>11} {s['cost']:6.3f}")
     print(f"\ntotal spend ${spent:.3f}")
     for name, s in summary.items():
-        extra = {k: s[k] for k in ("leads" if s.get("leads") else "proposals", "fallbacks", "rejections", "repeated_fixes", "questions",
+        extra = {k: s[k] for k in ("leads" if s.get("leads") else "proposals", "fallbacks", "rejections", "retries",
+                                   "sentence_rejections", "question_source", "repeated_fixes", "questions",
                                    "questions_naming_a_fix", "turn2_keeps_turn1_fix") if s.get(k)}
         extra["model_sentences"] = f"{s['model_sentences']}/{s['sentences_checked']} published/written"
+        extra["model_lines"] = f"{s['line_share'][0]}/{s['line_share'][1]} of review lines"
         print(f"  {name}: {json.dumps(extra)}")
 
 

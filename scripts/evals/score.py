@@ -105,6 +105,18 @@ def shop_fix(result, group: str) -> bool:
     return side_of(result, group) == "shop" and result.options[d.option_key].changes_plan
 
 
+def ranked_lead(result, group: str, ranked: dict[str, str], freed: set[str] = frozenset()) -> bool | None:
+    """ADR 0010: the proposal is the cost-ranked fix code chose (`ranked`: issue id -> lead, from the
+    "Fixes ranked" trace event). Amendment 1: on a freed face (`freed`, from the same event) part edits are
+    ranked too, so either side is scored; elsewhere only a shop-side lead is. None when unranked."""
+    d = decision_for(result, group)
+    if d is None or d.issue_id not in ranked:  # a dropped issue fails `raised`, not this
+        return None
+    if side_of(result, group) != "shop" and d.issue_id not in freed:
+        return None
+    return d.option_key == ranked[d.issue_id]
+
+
 def any_intent_leads(result, group: str) -> bool | None:
     """Unknown intent: the proposal is a fix that works whatever the face is for (shop side). None when
     code offers no plan-changing shop fix for this face (the ruling doesn't cover that case)."""
@@ -112,6 +124,16 @@ def any_intent_leads(result, group: str) -> bool | None:
                for o in result.options.values()):
         return None
     return shop_fix(result, group)
+
+
+def intent_asked(result, group: str) -> bool | None:
+    """Rayyan's ruling (a), 2026-10-30: intent unknown and the ask gate open, so the comment asks what the
+    face is for (the designer's reply drives the re-plan). None when intent is known or asking isn't allowed."""
+    d = decision_for(result, group)
+    intent = getattr(result, "intents", {}).get(group)
+    if d is None or intent is None or intent.status != "unknown" or not result.ask_allowed.get(d.issue_id):
+        return None
+    return bool(d.question)
 
 
 def removal_conditional_only(result, group: str) -> bool:
@@ -161,3 +183,12 @@ def model_line_share(comment: str, model_lines: int) -> tuple[int, int]:
     review lines). `model_lines` comes from the trace ("Comment assembled" carries model_sentences)."""
     lines = [ln for ln in comment.splitlines() if ln.strip() and not ln.startswith(_NOT_REVIEW)]
     return model_lines, len(lines)
+
+
+def reply_read_right(found: list[dict] | None, expected: list[tuple[str, str, str | None]]) -> bool:
+    """#38's read_reply: the rules read match the label exactly, preference included. Code already checks
+    each quote is the designer's own words; it can't check the words support the rule, so this does, by label.
+    A fallback (None) is a miss."""
+    if found is None:
+        return False
+    return sorted((r["face_group"], r["rule"], r.get("prefer")) for r in found) == sorted(expected)

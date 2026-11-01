@@ -1,0 +1,421 @@
+{
+ "what": "Eval gate on feat/rank-freed-part-edits (ADR 0010 Amendment 1) merged with origin/main; Part A scenarios only",
+ "repo_sha": "cb1ebca",
+ "n_per_scenario": 10,
+ "spent_usd": 1.3534,
+ "models": {
+  "plan, decide": "meta-models/muse-spark-open-1026 (inference.baseten.co)",
+  "verify": "muse-spark-1.3 (api.meta.ai)"
+ },
+ "prices_per_1m": {
+  "muse-spark-open": [
+   1.25,
+   0.15,
+   4.25
+  ],
+  "muse-spark-1.3": [
+   1.25,
+   1.25,
+   4.25
+  ]
+ },
+ "bars": {
+  "no_bare_question": 1.0,
+  "numbers_from_code": 1.0,
+  "removal_conditional_only": 1.0,
+  "any_intent_leads": 1.0,
+  "nothing_raised": 1.0,
+  "survived": 0.9,
+  "raised": 0.95,
+  "shop_fix": 0.95,
+  "plan_changing_fix": 0.95,
+  "ranked_lead": 1.0,
+  "intent_asked": 1.0,
+  "flags_and_asks": 0.95,
+  "asks_without_removal": 0.95,
+  "estimate_shown": 1.0
+ },
+ "summary": {
+  "a_stated": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.2064,
+   "latency_p50_s": 21.9,
+   "latency_max_s": 29.9,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1572,
+     "max": 2554
+    },
+    "decide": {
+     "p50": 716.5,
+     "max": 1102
+    },
+    "verify": {
+     "p50": 1684.5,
+     "max": 2764
+    }
+   },
+   "rejections": {
+    "invalid_answer": 1
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 18,
+   "sentences_checked": 30,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 4
+   },
+   "retries": {
+    "plan": 1
+   },
+   "questions": 0,
+   "questions_naming_a_fix": 0
+  },
+  "a_reply_keep": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.3736,
+   "latency_p50_s": 20.549999999999997,
+   "latency_max_s": 32.1,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1622,
+     "max": 3755
+    },
+    "decide": {
+     "p50": 661,
+     "max": 828
+    },
+    "verify": {
+     "p50": 1551,
+     "max": 2490
+    }
+   },
+   "rejections": {
+    "invalid_answer": 2
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 20
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 27,
+   "sentences_checked": 63,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 22
+   },
+   "retries": {
+    "plan": 1,
+    "decide": 1
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "10/10"
+  },
+  "a_reply_not_needed": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "plan_changing_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.3637,
+   "latency_p50_s": 19.299999999999997,
+   "latency_max_s": 28.7,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1670.0,
+     "max": 2655
+    },
+    "decide": {
+     "p50": 683.0,
+     "max": 1129
+    },
+    "verify": {
+     "p50": 1587,
+     "max": 2770
+    }
+   },
+   "rejections": {},
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 12,
+    "part:remove_feature/G3": 8
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "part:remove_feature/G3": 8,
+    "shop:add_tool/G3/+Z/BC45-910480": 2
+   },
+   "model_sentences": 17,
+   "sentences_checked": 61,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 29
+   },
+   "retries": {},
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "2/10"
+  },
+  "a_reply_buy": {
+   "trials": 10,
+   "gated": {
+    "no_bare_question": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "numbers_from_code": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "removal_conditional_only": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "any_intent_leads": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    },
+    "survived": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.9,
+     "ok": true
+    },
+    "raised": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 0.95,
+     "ok": true
+    },
+    "shop_fix": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 0.95,
+     "ok": true
+    },
+    "ranked_lead": {
+     "passed": 20,
+     "runs": 20,
+     "bar": 1.0,
+     "ok": true
+    },
+    "intent_asked": {
+     "passed": 10,
+     "runs": 10,
+     "bar": 1.0,
+     "ok": true
+    }
+   },
+   "ok": true,
+   "cost": 0.4097,
+   "latency_p50_s": 21.45,
+   "latency_max_s": 31.7,
+   "completion_tokens": {
+    "plan": {
+     "p50": 1699,
+     "max": 2993
+    },
+    "decide": {
+     "p50": 697,
+     "max": 1148
+    },
+    "verify": {
+     "p50": 1626,
+     "max": 2754
+    }
+   },
+   "rejections": {
+    "invalid_answer": 2
+   },
+   "fallbacks": {},
+   "leads": {
+    "shop:add_tool/G3/+Z/BC45-910480": 20
+   },
+   "proposals": {
+    "shop:add_tool/G3/+Z/BC45-910480 +question": 10,
+    "shop:add_tool/G3/+Z/BC45-910480": 10
+   },
+   "model_sentences": 26,
+   "sentences_checked": 64,
+   "repeated_fixes": 0,
+   "sentence_rejections": {
+    "other": 14
+   },
+   "retries": {
+    "plan": 1,
+    "decide": 1
+   },
+   "questions": 10,
+   "questions_naming_a_fix": 0,
+   "turn2_keeps_turn1_fix": "10/10"
+  }
+ },
+ "note": "After 'not needed', removal led 8/10 (0/10 before the amendment). In the other 2 the 910480 was the ranked lead and Decide wasn't retried, so removal likely wasn't offered (Plan didn't request it): inferred, the ranking event's candidates aren't recorded. Explicit buy: 910480 10/10."
+}
