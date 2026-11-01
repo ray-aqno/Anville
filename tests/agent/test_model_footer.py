@@ -82,3 +82,9 @@ def test_a_reply_read_that_fell_back_says_so(part_a, shop):
                                                       model=Scripted(bad, bad))
     assert found is None and len(calls) == 2
     assert credits_line(calls, fallbacks).endswith("· read_reply fell back to code")
+
+
+def test_one_call_is_singular():
+    """Live, take g2's branch reply: "Fix drafted by Muse Wonder (Meta API) · 1 model calls · 6 s"."""
+    line = credits_line([call("fix_branch", "Muse Wonder", "api.meta.ai")])
+    assert "· 1 model call ·" in line and "calls" not in line
