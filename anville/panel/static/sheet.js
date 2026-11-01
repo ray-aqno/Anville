@@ -24,6 +24,17 @@ export function requestFor(pending, note, newId) {
   return pending && pending.content === content ? pending : { id: newId(), content };
 }
 
+// The flagged face's picture lands after the comment (ADR 0007 Amendment 4). A sheet opened first has a hidden
+// slot: ask again every few seconds for a minute, and show it once it loads (Codex, PR #51).
+export function watchPicture(figure, { every = 5000, tries = 12, wait = setTimeout } = {}) {
+  const img = figure.querySelector("img");
+  let n = 0;
+  const next = () => { n += 1; img.src = `${figure.dataset.render}&try=${n}`; };
+  img.onload = () => { figure.hidden = false; };
+  img.onerror = () => { if (n < tries) wait(next, every); };
+  next();
+}
+
 function wire(main) {
   const form = main.querySelector("form.note");
   const status = form.querySelector(".sent");
@@ -77,4 +88,6 @@ function wire(main) {
 if (typeof document !== "undefined") {
   const main = document.querySelector("main[data-sheet]");
   if (main) wire(main);
+  const slot = document.querySelector("figure.face[data-render]");
+  if (slot) watchPicture(slot);
 }
