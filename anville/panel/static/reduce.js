@@ -30,7 +30,7 @@ function newRun(event) {
     stages: Object.fromEntries(STAGES.map((s) => [s, { status: "pending", retries: 0 }])),
     current: null, agentFailed: false, calls: [], liveCalls: [],
     issues: {}, intents: {}, options: {}, rejected: [], decisions: [], checks: [], verdicts: [],
-    ledgerUsed: false, learned: [], costs: null, commentPosted: false, reviewFailed: false, anchor: null,
+    ledgerUsed: false, learned: [], costs: null, commentPosted: false, reviewFailed: false, anchor: null, sheet: null,
   };
 }
 
@@ -100,6 +100,9 @@ function applyEvent(run, event, d) {
     case "Agent finished":
       run.calls = (d.calls ?? []).map(call);
       run.liveCalls = [];
+      return;
+    case "Setup sheet ready":  // the signed link is main's: the secret never reaches the page (Amendment 5)
+      run.sheet = { id: d.sheet_id ?? null, url: d.sheet_url ?? null, setups: d.setups ?? null };
       return;
     case "Face anchored":  // SAM 3.1 on the flagged face, after the comment posts (ADR 0007 Amendment 4)
       run.liveCalls = run.liveCalls.filter((c) => c.stage !== "anchor");

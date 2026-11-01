@@ -268,3 +268,21 @@ Drafted by the panel lane against `anville/panel/DESIGN.md`. Main agreed the pan
   - One more dependency.
   - The panel token can fetch the picture for any stored version id, not only its own document's. Version ids are Onshape's 24-character ids, not secrets, so a token holder for one allowed document could read another allowed document's picture.
 - **Revisit:** checking the version's document in `read_render`. Also whether to show SAM's trace when it disagrees, as evidence for a human.
+
+## Amendment 5 (Accepted, Rayyan Aquino, 2026-10-31): the card's "Open setup sheet" link
+
+**Context.** The decision card's "Open setup sheet" button was rendered but never enabled. Rayyan hit this live: "I can't even open the setup sheet from the panel." The sheet's link is signed with the panel secret (Amendment 3), and the panel page must never hold that secret, so the page can't build the link itself.
+
+**Decision.**
+- Main adds `sheet_url` to the existing `tool_result` **"Setup sheet ready"** event: `{sheet_id, setups, buying, sheet_url}`.
+  - It's the same absolute signed link the review comment carries (`deploy.sheet_link`).
+  - It's null when no panel token is set.
+- The reducer keeps `run.sheet = {id, url, setups}`. The card renders `<a class="sheet" href=… target="_blank" rel="noopener noreferrer">`, but only when the link matches `https://<host>/sheet/<id>?s=<64 lowercase hex>`. Otherwise the disabled button stays, so no `javascript:` or look-alike link from a trace is ever clickable.
+- Runs recorded before this change have no `sheet_url` and keep the disabled button.
+
+**Options considered.** A `/panel/sheet/{id}` route that signs and redirects. Rejected: one allowed document's panel token could then mint links to another document's sheets. The trace is read per document, so a link in it reaches only that document's panel, and the same link is already in the comment every collaborator sees.
+
+**Consequences.**
+- **Easier:** the designer and the demo reach the traveler from the card, in one click.
+- **Harder:** the signed link now also sits in the trace store, so rotating the panel secret leaves dead links in old runs, as it does in old comments.
+- **Revisit:** whether Onshape's right-panel iframe allows a new tab (`allow-popups`). Unverified until it's clicked docked. In a plain browser tab it works.
