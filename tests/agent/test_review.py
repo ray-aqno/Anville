@@ -710,6 +710,28 @@ def test_no_payback_is_claimed_against_a_plan_that_cant_make_the_part(monkeypatc
     assert r.decisions[0].option_key == BUY and "pays off" not in r.comment
 
 
+
+def test_with_no_complete_fix_any_plan_changing_option_may_lead(monkeypatch, part_a, costed, chamfer, catalog_access):
+    """Live, sandbox smoke 2026-11-01: no fix was complete, so the ranking's top tier was empty (basis "none"), and
+    Decide was told "costs more than [] at every input: lead with one of those", a rule no answer can satisfy."""
+    import anville.shop as shop_mod
+
+    real = shop_mod.cost_options
+
+    def all_incomplete(*a, **k):
+        result = real(*a, **k)
+        for route in result.routes:
+            route.complete = False
+        return result
+
+    monkeypatch.setattr(shop_mod, "cost_options", all_incomplete)
+    buy = decide({"issue_id": "I1", "action": "propose", "option_key": BUY, "reason": "x"})
+    events = []
+    r = run_review(part_a, costed, Scripted(plan(*requests_for(chamfer)), buy, buy), back_chamfer=catalog_access,
+                   emit=lambda kind, title, **d: events.append((title, d)))  # a second reply, used only if rejected
+    assert not any("costs more than" in d.get("reason", "") for t, d in events if t == "Model answer rejected")
+    assert "decide" not in r.fallbacks and r.decisions[0].option_key == BUY
+
 def test_the_cost_comparison_and_its_inputs_reach_the_trace(part_a, costed, chamfer, catalog_access):
     """Codex, PR #26: the panel must show that the verdict depends, and which inputs are placeholders."""
     events = []
