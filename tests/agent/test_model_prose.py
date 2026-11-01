@@ -267,3 +267,19 @@ def test_a_rival_said_to_cost_more_doesnt_cover_its_line(part_a, costed, chamfer
     opposite = {**rival(chamfer), "text": f"{{{{option.{ROUTE}.fix}}}} costs more at some shop rates."}
     r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), opposite])
     assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+
+
+def test_a_payback_label_isnt_a_payoff_claim():
+    """Codex, fifth pass: "Payback thresholds: lo, mid, hi" never says when the tool pays off."""
+    k = BUY
+    label = [f"Payback thresholds: {{{{option.{k}.payback_lo}}}}, {{{{option.{k}.payback_mid}}}}, "
+             f"{{{{option.{k}.payback_hi}}}}."]
+    assert not review.payback_covered(k, (3, 331), 21, label)
+
+
+def test_the_win_claim_must_belong_to_the_rival(part_a, costed, chamfer, catalog_access):
+    """Codex, fifth pass: opening with the rival, then saying the chosen fix comes out ahead, isn't the caveat."""
+    other = {**rival(chamfer), "text": f"{{{{option.{ROUTE}.fix}}}} is an alternative; {{{{option.{BUY}.fix}}}} "
+             "comes out ahead at some shop rates."}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), other])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()

@@ -821,7 +821,7 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     # and saying it comes out ahead at some inputs. A mention, or "we lead, ahead of X", leaves out the caveat
     # code's line carries (Codex, PR review, three passes).
     named = {m.group(1) for s in verified if any(c.startswith("cost:") for c in s["cites"])
-             and _COMPARES.search(s["text"]) and (m := _RIVAL_FIRST.match(s["text"]))}
+             and (m := _RIVAL_WINS.match(s["text"]))}
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
@@ -921,10 +921,11 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
     return out, considered
 
 
-# The rival's side of the ranking: it wins somewhere ("can come out ahead at some shop rates").
-_COMPARES = re.compile(r"\b(comes? out ahead|costs? less|wins?)\b.*\bat some (inputs|shop rates|rates)\b", re.I)
-_RIVAL_FIRST = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}")  # match(): the rival's name opens the sentence
-_PAYS = re.compile(r"\bpays? (off|back)\b|\bpayback\b", re.I)
+# The rival wins somewhere, said of the rival itself: its name slot opens the sentence and the claim follows it
+# in the same clause ("{{option.R.fix}} can come out ahead at some shop rates").
+_RIVAL_WINS = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
+                         r"[^;{]*?\bat some (inputs|shop rates|rates)\b", re.I)
+_PAYS = re.compile(r"\bpays? (off|back)\b", re.I)  # the claim, not the label "payback"
 
 
 def payback_covered(key: str, payback: tuple, mid: int | None, sentences: list[str]) -> bool:
