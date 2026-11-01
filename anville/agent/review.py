@@ -313,7 +313,8 @@ DECIDE_TOOL = _tool(
     "`ask` with a question and no option: code then states the part edit as a conditional. Then write the "
     "comment the designer will read: sentences that each cite the nodes they rest on. You may state a fix's "
     "payback (its whole range, with its payback slots) and name a rival fix (cite it with the cost ranking); "
-    "a rival named with the ranking is said to come out ahead at some shop rates; "
+    "a rival named with the ranking gets its own sentence opening with its fix slot, saying it can come out "
+    "ahead at some shop rates; "
     "a lead the ranking gives at mid-range is said to lead at mid-range shop rates, never cheapest, cheaper or "
     "lowest-cost. Name a fix with its {{option.<key>.fix}} slot, never a part number, an option key or a "
     "paraphrase. The slot fills with a phrase such as 'buying the cutter', so make it the subject that opens the "
@@ -816,13 +817,11 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
                for c in s["cites"] if c.startswith("decision:")}
     # Code is the backstop, not the author (Rayyan, 2026-10-31): verified prose that used all of a fix's payback
     # slots already stated it, and a sentence citing a rival with the cost ranking already named that rival.
-    used = {m.strip() for s in verified for m in _SLOT.findall(s["text"])}
-    # A rival is named only by a sentence that cites the ranking and says the rival wins at some inputs: a
-    # mention, or "we lead, ahead of X", leaves out the caveat code's line carries (Codex, PR review).
-    ranked = [s for s in verified if any(c.startswith("cost:") for c in s["cites"]) and _COMPARES.search(s["text"])]
-    named = ({c.split(":", 1)[1] for s in ranked for c in s["cites"] if c.startswith("option:")}
-             | {m.strip()[len("option."):-len(".fix")] for s in ranked for m in _SLOT.findall(s["text"])
-                if m.strip().startswith("option.") and m.strip().endswith(".fix")})
+    # A rival is named only by a sentence about it: citing the ranking, opening with the rival's own name slot,
+    # and saying it comes out ahead at some inputs. A mention, or "we lead, ahead of X", leaves out the caveat
+    # code's line carries (Codex, PR review, three passes).
+    named = {m.group(1) for s in verified if any(c.startswith("cost:") for c in s["cites"])
+             and _COMPARES.search(s["text"]) and (m := _RIVAL_FIRST.match(s["text"]))}
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
@@ -835,7 +834,7 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
         if d.action == "propose":
             said.add(d.option_key)
         if d.action == "propose" and d.option_key in (paybacks or {}):
-            if not payback_covered(d.option_key, *paybacks[d.option_key], used):
+            if not payback_covered(d.option_key, *paybacks[d.option_key], [s["text"] for s in verified]):
                 lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
         for r in (rivals or {}).get(d.option_key, []) if d.action == "propose" else []:  # ADR 0010 §5
             if r in named:
@@ -923,14 +922,18 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
 
 
 _COMPARES = re.compile(r"\bat some (inputs|shop rates|rates)\b", re.I)  # the rival's side of the ranking
+_RIVAL_FIRST = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}")  # match(): the rival's name opens the sentence
+_PAYS = re.compile(r"\bpays? (off|back)\b|\bpayback\b", re.I)
 
 
-def payback_covered(key: str, payback: tuple, mid: int | None, used: set[str]) -> bool:
-    """Verified prose already stated the payback: every end of the range pays off (a "never" is code's to say)
-    and prose used all three slots, since the range is what says it depends on inputs (ADR 0010 §5)."""
+def payback_covered(key: str, payback: tuple, mid: int | None, sentences: list[str]) -> bool:
+    """Verified prose already stated the payback: every end of the range pays off (a "never" is code's to say),
+    and one sentence says it pays off with all three slots, since the range is what says it depends on inputs
+    (ADR 0010 §5)."""
     if None in (*payback, mid):
         return False
-    return {f"option.{key}.payback_{f}" for f in ("lo", "mid", "hi")} <= used
+    slots = {f"option.{key}.payback_{f}" for f in ("lo", "mid", "hi")}
+    return any(_PAYS.search(t) and slots <= {m.strip() for m in _SLOT.findall(t)} for t in sentences)
 
 
 def payback_line(key: str, payback: tuple, mid: int | None) -> str:

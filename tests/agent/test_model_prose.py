@@ -25,7 +25,7 @@ def buy_with_payback(chamfer):
 
 
 def rival(chamfer):
-    return {"text": "An outside five-axis shop can still come out ahead at some shop rates.", "role": "reason",
+    return {"text": f"{{{{option.{ROUTE}.fix}}}} can still come out ahead at some shop rates.", "role": "reason",
             "cites": [f"option:{ROUTE}", "cost:I1"]}
 
 
@@ -232,12 +232,26 @@ def test_a_lead_ahead_of_a_rival_doesnt_say_the_rival_wins_elsewhere(part_a, cos
 def test_a_payback_that_never_pays_off_somewhere_is_always_codes_line():
     """Codex, P2: a None end means code's line says "never" at those inputs; prose using every numeric slot
     can still leave that out, so it can't cover the line."""
-    key = BUY
-    used = {f"option.{key}.payback_lo", f"option.{key}.payback_mid", f"option.{key}.payback_hi"}
-    assert review.payback_covered(key, (3, 331), 21, used)
-    assert not review.payback_covered(key, (3, None), 21, used)
-    assert not review.payback_covered(key, (3, 331), None, used)
-    assert not review.payback_covered(key, (3, 331), 21, used - {f"option.{key}.payback_hi"})
+    k = BUY
+    said = [f"It pays off past ~{{{{option.{k}.payback_mid}}}} parts ({{{{option.{k}.payback_lo}}}} to "
+            f"{{{{option.{k}.payback_hi}}}})."]
+    assert review.payback_covered(k, (3, 331), 21, said)
+    assert not review.payback_covered(k, (3, None), 21, said)
+    assert not review.payback_covered(k, (3, 331), None, said)
+    # Codex, third pass: the three numbers listed, or split across sentences, don't state the payback
+    listed = [f"Inputs: {{{{option.{k}.payback_lo}}}}, {{{{option.{k}.payback_mid}}}}, {{{{option.{k}.payback_hi}}}}."]
+    assert not review.payback_covered(k, (3, 331), 21, listed)
+    split = [f"It pays off past ~{{{{option.{k}.payback_mid}}}} parts.",
+             f"The range is {{{{option.{k}.payback_lo}}}} to {{{{option.{k}.payback_hi}}}}."]
+    assert not review.payback_covered(k, (3, 331), 21, split)
+
+
+def test_the_chosen_fix_winning_at_some_rates_doesnt_cover_the_rival(part_a, costed, chamfer, catalog_access):
+    """Codex, third pass: the covering sentence must be about the rival, opening with its own name."""
+    ours = {"text": f"{{{{option.{BUY}.fix}}}} wins at some shop rates; we also weighed {{{{option.{ROUTE}.fix}}}}.",
+            "role": "reason", "cites": [f"option:{ROUTE}", "cost:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), ours])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
 
 
 def test_naming_a_rival_without_comparing_it_leaves_codes_rival_line(part_a, costed, chamfer, catalog_access):
