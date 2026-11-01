@@ -1,6 +1,6 @@
 # RFC 0003: Anchoring flags to Onshape faces
 
-- **Status:** Draft
+- **Status:** Closed: the anchoring itself is deferred past the hackathon (Rayyan, 2026-10-31). The face matcher this RFC proposed is built (`pair` in `anville/geometry/anchor.py`), but only its probe (`scripts/probe_face_anchoring.py`) calls it; the fix branch matches faces by area and centroid instead (`match_centroids`, RFC 0005). Pinning a comment to its faces and the panel's "Show in model" are not built; the flagged face is shown instead by a render painted by code from the B-rep, with SAM 3.1's outline when its mask agrees (ADR 0007 Amendment 4, PR #50).
 - **Date:** 2026-10-30
 - **Author:** geometry session (for S4: comment anchoring and the panel's "Show in model")
 - **Touches:** ADR 0006 §10 (comment anchoring), ADR 0007 (panel selection and highlight), ADR 0008 §8 (face IDs are OCCT indices)
