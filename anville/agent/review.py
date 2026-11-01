@@ -816,7 +816,9 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     # Code is the backstop, not the author (Rayyan, 2026-10-31): verified prose that used all of a fix's payback
     # slots already stated it, and a sentence citing a rival with the cost ranking already named that rival.
     used = {m.strip() for s in verified for m in _SLOT.findall(s["text"])}
-    ranked = [s for s in verified if any(c.startswith("cost:") for c in s["cites"])]  # rivals named with the ranking
+    # A rival is named only by a sentence that compares it (cites the ranking and says who comes out ahead),
+    # not by a mention (Codex, PR review).
+    ranked = [s for s in verified if any(c.startswith("cost:") for c in s["cites"]) and _COMPARES.search(s["text"])]
     named = ({c.split(":", 1)[1] for s in ranked for c in s["cites"] if c.startswith("option:")}
              | {m.strip()[len("option."):-len(".fix")] for s in ranked for m in _SLOT.findall(s["text"])
                 if m.strip().startswith("option.") and m.strip().endswith(".fix")})
@@ -832,12 +834,8 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
         if d.action == "propose":
             said.add(d.option_key)
         if d.action == "propose" and d.option_key in (paybacks or {}):
-            line = payback_line(d.option_key, *paybacks[d.option_key])
-            # Covered only if prose said every payback slot code's line would: the range is what says the
-            # payback depends on inputs (ADR 0010 §5), so a midpoint alone doesn't cover it.
-            needed = {m for m in _SLOT.findall(line) if ".payback_" in m}
-            if not needed or not needed <= used:
-                lines.append(line)
+            if not payback_covered(d.option_key, *paybacks[d.option_key], used):
+                lines.append(payback_line(d.option_key, *paybacks[d.option_key]))
         for r in (rivals or {}).get(d.option_key, []) if d.action == "propose" else []:  # ADR 0010 §5
             if r in named:
                 continue
@@ -921,6 +919,17 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
         emit("decision", "Fixes ranked", stage="plan", issue_id=issue.id, top=list(ranking.top), lead=ranking.lead,
              basis=ranking.basis, freed=freed, prefer=prefer or None)
     return out, considered
+
+
+_COMPARES = re.compile(r"\b(ahead|leads?|costs? less|come out)\b", re.I)
+
+
+def payback_covered(key: str, payback: tuple, mid: int | None, used: set[str]) -> bool:
+    """Verified prose already stated the payback: every end of the range pays off (a "never" is code's to say)
+    and prose used all three slots, since the range is what says it depends on inputs (ADR 0010 §5)."""
+    if None in (*payback, mid):
+        return False
+    return {f"option.{key}.payback_{f}" for f in ("lo", "mid", "hi")} <= used
 
 
 def payback_line(key: str, payback: tuple, mid: int | None) -> str:

@@ -219,3 +219,22 @@ def test_a_rival_named_through_its_fix_slot_covers_codes_rival_line(part_a, cost
     r = review_with(part_a, costed, chamfer, catalog_access, [ranked])
     assert "ahead of sending it to an outside 5-axis shop" in r.comment
     assert "costs less at some inputs." not in r.comment
+
+
+def test_a_payback_that_never_pays_off_somewhere_is_always_codes_line():
+    """Codex, P2: a None end means code's line says "never" at those inputs; prose using every numeric slot
+    can still leave that out, so it can't cover the line."""
+    key = BUY
+    used = {f"option.{key}.payback_lo", f"option.{key}.payback_mid", f"option.{key}.payback_hi"}
+    assert review.payback_covered(key, (3, 331), 21, used)
+    assert not review.payback_covered(key, (3, None), 21, used)
+    assert not review.payback_covered(key, (3, 331), None, used)
+    assert not review.payback_covered(key, (3, 331), 21, used - {f"option.{key}.payback_hi"})
+
+
+def test_naming_a_rival_without_comparing_it_leaves_codes_rival_line(part_a, costed, chamfer, catalog_access):
+    """Codex, P2: "We also considered ..." cites the rival and the ranking but never says it can come out ahead."""
+    mention = {"text": f"We also considered {{{{option.{ROUTE}.fix}}}}.", "role": "reason",
+               "cites": [f"option:{ROUTE}", "cost:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), mention])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
