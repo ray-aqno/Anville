@@ -43,7 +43,17 @@ function ring(r) {
 </svg>`;
 }
 
-function card(c, reason) {
+// Only a signed sheet link goes in an href: the trace is main's, but a javascript: or look-alike link must never
+// become clickable (ADR 0007 Amendment 5).
+const SHEET_URL = /^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/sheet\/[A-Za-z0-9_-]{1,64}\?s=[0-9a-f]{64}$/;
+
+function sheetButton(url) {
+  return url && SHEET_URL.test(url)
+    ? `<a class="sheet" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open setup sheet</a>`
+    : `<button class="sheet" disabled>Open setup sheet</button>`;
+}
+
+function card(c, reason, sheetUrl) {
   const cost = c.cost?.one_time ? `one-time $${esc(c.cost.one_time[0])}–${esc(c.cost.one_time[1])}` : "$ —";
   const half = (cls, title, h) => `<div class="half ${cls}"><div class="tag">${title}</div>
     <div class="what">${esc(h.text)}</div>${h.note ? `<div class="note">${esc(h.note)}</div>` : ""}</div>`;
@@ -53,7 +63,7 @@ function card(c, reason) {
   ${c.question ? `<div class="question">${esc(c.question)}</div>` : ""}
   ${reason ? `<div class="why"><span class="tag">Why</span> ${esc(reason)}</div>` : ""}
   <div class="cost">${cost}</div>
-  <button class="sheet" disabled>Open setup sheet</button>
+  ${sheetButton(sheetUrl)}
 </section>`;
 }
 
@@ -148,7 +158,7 @@ export function renderHTML(state, runId = null, { renderUrl = null } = {}) {
   return `<header class="hd ${run.status}" data-section="header"><span class="dot"></span>Anville · version ${esc((run.versionId ?? "").slice(0, 6))}
   <span class="status">${esc(statusText(run))}</span></header>
 <div data-section="ring">${ring(ringState(run))}</div>
-<div data-section="cards">${cards.map((c) => (c.kind === "ask" ? askCard : card)(c, reasons[c.issueId])).join("")}
+<div data-section="cards">${cards.map((c) => (c.kind === "ask" ? askCard : card)(c, reasons[c.issueId], run.sheet?.url)).join("")}
 ${costStrip(costSummary(run))}
 ${run.learned.length ? `<p class="learned">Learned from the shop: ${esc(run.learned.join(", "))}</p>` : ""}
 ${run.agentFailed ? `<p class="note">Agent failed; posted the setup count instead.</p>` : ""}</div>

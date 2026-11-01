@@ -71,6 +71,7 @@ s { text-decoration-thickness: 1.5px; }
 .face figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .sheet { width: 100%; margin-top: 10px; padding: 9px; border: 0; border-radius: 7px; background: var(--anville); color: #fff; font: inherit; font-weight: 600; }
 .sheet:disabled { opacity: .45; }
+a.sheet { display: block; box-sizing: border-box; text-align: center; text-decoration: none; }
 
 /* the agent's work */
 .agent { padding: 10px 14px; border-top: 1px solid var(--line); }
