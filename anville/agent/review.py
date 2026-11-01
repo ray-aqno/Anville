@@ -921,7 +921,8 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
     return out, considered
 
 
-_COMPARES = re.compile(r"\bat some (inputs|shop rates|rates)\b", re.I)  # the rival's side of the ranking
+# The rival's side of the ranking: it wins somewhere ("can come out ahead at some shop rates").
+_COMPARES = re.compile(r"\b(comes? out ahead|costs? less|wins?)\b.*\bat some (inputs|shop rates|rates)\b", re.I)
 _RIVAL_FIRST = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}")  # match(): the rival's name opens the sentence
 _PAYS = re.compile(r"\bpays? (off|back)\b|\bpayback\b", re.I)
 

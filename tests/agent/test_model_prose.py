@@ -260,3 +260,10 @@ def test_naming_a_rival_without_comparing_it_leaves_codes_rival_line(part_a, cos
                "cites": [f"option:{ROUTE}", "cost:I1"]}
     r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), mention])
     assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+
+
+def test_a_rival_said_to_cost_more_doesnt_cover_its_line(part_a, costed, chamfer, catalog_access):
+    """Codex, fourth pass: "at some shop rates" with the opposite claim isn't the caveat."""
+    opposite = {**rival(chamfer), "text": f"{{{{option.{ROUTE}.fix}}}} costs more at some shop rates."}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), opposite])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
