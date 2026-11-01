@@ -72,3 +72,32 @@ Rayyan, 2026-10-31: "Ranking is good, unless the designer is clearly explicit."
   - The comment names the route as its rival ("costs less at some inputs").
 - **Harder:** a reply now carries two grounded claims, a rule and an optional preference, and each is checked separately.
 - **Unchanged:** a kept or stated face is never edited (ADR 0002 Amendment 2's declined alternative excepted). An unknown face still leads with a shop-side fix.
+
+## Amendment 2 (Proposed, 2026-10-31): dollars may be the model's words, as code-filled slots; code's cost lines become the backstop
+
+**Context.**
+- **The model writes little of what the designer reads.** In the two live G1 reviews (2026-10-31), it wrote 3 of 7 review lines on Demo A and 1 of 6 on Demo B. Code appended the rest every time: the payback line, the rival line, the conditional removal and the intent question.
+- **§5 kept dollars code-rendered for a reason that no longer holds.** In #37 nothing could verify a cost sentence. Since #45, cost prose can be checked:
+  - the ranking (`cost:<issue>`, with what its basis lets a sentence claim), the priced quantity (`costs`) and each fix's price fields are citable nodes;
+  - a sentence brings the node behind every slot it uses to the verifier;
+  - `_COST_CLAIM` rejects "cheapest", "cheaper", "lowest-cost" and "costs less" unless the basis is `dominates`, and Decide retries with the allowed wording.
+- Rayyan, 2026-10-31: "constrain the accuracy, not the wording."
+
+**Decision.**
+1. **The model may state dollars and paybacks, only through code-filled slots** (`option.<key>.payback_lo|mid|hi`, `option.<key>.cost_lo|hi`, `costs.quantity`). A digit the model writes is still rejected (locked decision 3). §5's wording limits still hold: a tie-break lead is never "cheapest" or "recommended".
+2. **Code's payback line is a backstop.** It is left out only when verified prose used every payback slot that line would use.
+   - The range is what says the payback depends on inputs, so prose that gives only the midpoint doesn't cover it.
+   - A "doesn't pay off" verdict has no slots, so it is always code's line.
+3. **Code's rival line is a backstop.** It is left out only when a verified sentence cites that rival's option node together with `cost:<issue>`, so the verifier judged the comparison against the basis's `means`.
+4. **Only verified prose covers.** A sentence the check or the verifier drops covers nothing, and code's line goes out.
+5. **Unchanged:**
+   - the conditional removal line stays code's (ADR 0009 Amendment 1: a part edit on a face of unknown purpose appears only there);
+   - lane 3's estimate line stays code's;
+   - code still places the intent question and keeps it as the backstop (ruling (a)). The model now writes it when it can (the Decide prompt asks for it), and it is verified before it is used.
+
+**Consequences.**
+- **Easier:** more of the comment is the model's reasoning in its own words (the rubric's visible model work), and every number in it is still code's.
+- **Harder:**
+  - Whether a code line appears now depends on what the verifier accepted, so two runs of one part can differ in which lines are code's.
+  - The eval gate tracks the model's share of review lines (`scripts/evals/score.model_line_share`), with survival and every gated check held.
+- **Revisit:** if the verifier passes a cost sentence that misstates the basis, add a code check for it rather than restoring code's lines wholesale.
