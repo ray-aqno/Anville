@@ -89,7 +89,7 @@ Rayyan, 2026-10-31: "Ranking is good, unless the designer is clearly explicit."
    - The range is what says the payback depends on inputs, so prose that gives only the midpoint, or lists the numbers without the claim, doesn't cover it.
    - A range with a "never" end (it never pays off at the worst or mid-range inputs) is always code's line: that verdict has no slot.
 3. **Code's rival line is a backstop.** It is left out only when a verified sentence cites `cost:<issue>`, opens with the rival's own `{{option.<key>.fix}}` slot, and says the rival comes out ahead (or costs less) at some inputs. A mention, or "ours leads, ahead of X", leaves out the caveat, so code's line stays.
-   - These coverage tests are code patterns, not meaning: the verifier judges whether a sentence is supported, not whether it carries every caveat. The patterns are tight (four Codex passes on PR review), so a miss errs toward code repeating a caveat, not dropping one.
+   - These coverage tests are code patterns, not meaning: the verifier judges whether a sentence is supported, not whether it carries every caveat. Five Codex passes on PR #56 each found a phrasing that wrongly covered a line (dropping its caveat), and each was closed. A phrasing the strict patterns don't recognise only makes code repeat the caveat, but more wrong covers may exist. The robust alternative is for the verifier to say which caveat each sentence states.
 4. **Only verified prose covers.** A sentence the check or the verifier drops covers nothing, and code's line goes out.
 5. **Unchanged:**
    - the conditional removal line stays code's (ADR 0009 Amendment 1: a part edit on a face of unknown purpose appears only there);
