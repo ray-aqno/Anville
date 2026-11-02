@@ -40,7 +40,10 @@ Plus the panel, a web page embedded through an Onshape extension (ADR 0007). The
 Named after ADR 0001, plus the two seams that the live build added:
 
 1. **`CadSource`:** emits `version_saved(doc, version, step_bytes)`, `comment_added(doc, thread, text, author)` and, optionally, `note_added`. It must provide a stable version identity and the version's STEP.
-2. **`ReviewSink`:** `post(doc, version, text) -> thread_id`, `reply(thread_id, text)`, and `is_own(author)` (the self-loop filter, ADR 0003 F1).
+2. **`ReviewSink`:** `post(doc, version, text) -> comment_id`, `reply(thread_id, text) -> comment_id`, and `is_own(comment)`, the self-loop filter (ADR 0003 F1).
+   - The filter must work **per comment, not per author**. When Anville posts with the owner's keys, its comments share the designer's author.
+   - Today's guard is comment-level: the durable record of comment ids Anville posted (`posted` table), plus the marker header on owner-key posts (`reply.is_own_comment`, `reply.py:104–109`).
+   - Every sink must return the posted id, and carry a marker where the host allows one.
 3. **`CadEditor`** (optional): `apply(intent, on_branch) -> step_bytes | None`. Fix intents are already CAD-neutral, e.g. "remove face group G11". Without an editor, the intent is shown as a written fix (ADR 0001's fallback).
 4. **`Presence`** (optional): where the panel URL is embedded. Without one, the panel opens as a browser window beside the CAD, as it ran before the Onshape extension existed.
 
@@ -55,11 +58,11 @@ Named after ADR 0001, plus the two seams that the live build added:
 | SAM-outlined render | STEP (code renders it) | **Yes, unchanged** |
 | Setup sheet, shop note, learning beat | Nothing (Anville's own pages and ledger) | **Yes, unchanged** |
 | Trigger on save | A save or check-in event | Needs `CadSource` |
-| Review and thread replies | Somewhere to post and read text | Needs `ReviewSink`. Fallback: the panel thread (`/api/ask`, specced, not built) or Anville's own review page |
+| Review and thread replies | Somewhere to post and read text | Needs `ReviewSink`. Fallback: an Anville-hosted thread, the review page plus replies, which needs designing (see open questions) |
 | Fix branch, measured | A programmatic edit API and branching | Needs `CadEditor`. Fallback: the written fix plus the predicted count (`job.removal_alternative`) |
 | Docked panel | An embeddable web view | Needs `Presence`. Fallback: a browser window |
 
-So 6 of the 10 features need nothing from the CAD beyond STEP. The other four degrade to working fallbacks, so no feature disappears.
+So 6 of the 10 features need nothing from the CAD beyond STEP. Three of the other four already have working fallbacks: `removal_alternative` for the fix branch, a browser window for the panel, and the local connector once it's built. The fourth, the thread for a CAD without comments, still needs a CAD-neutral design before that claim holds.
 
 ## Options for the next connector
 
@@ -67,8 +70,8 @@ The host details below are **prior knowledge, not checked against current vendor
 
 1. **Local folder (`LocalSource`/`LocalSink`, decided in ADR 0001).**
    - A STEP file dropped in a folder triggers a review. The review is written beside it, replies come from a CLI, and the shop ledger is a local file.
-   - Works with **any** CAD that exports STEP, today, with no vendor API.
-   - It's the reference connector and the test harness for the others. Being built now (panel lane).
+   - **Once built**, it works with any CAD that exports STEP, with no vendor API. It doesn't exist yet: the panel lane is building it now, and the README lists it as not built.
+   - It becomes the reference connector and the test harness for the others.
 2. **PDM/PLM check-in** (e.g. SolidWorks PDM, Windchill, Teamcenter).
    - These vaults can run workflow actions on check-in, which gives the trigger.
    - Review notes or change requests give the thread. STEP comes from a vault export or a conversion task.
@@ -86,7 +89,10 @@ The host details below are **prior knowledge, not checked against current vendor
 - **STEP fidelity across exporters:** do face counts and group labels stay stable between versions from the same CAD? Onshape's do, verified on DEMO A v1/v2/v3. SolidWorks, Fusion and Inventor are unverified.
 - **Identity:** in a vault, who is "Anville"? A service account per tenant, or the reviewer's own account plus a marker?
 - **Face pinning without Onshape's ids:** RFC 0003 is closed for the demo. A `CadEditor` that edits faces needs our face-to-entity map. `geometry/anchor.py` already does centroid matching, which is CAD-neutral.
-- **The panel thread** (`/api/ask`): build it once, and every CAD without native comments gets the full reply → re-plan loop.
+- **A CAD-neutral thread:** for a CAD without comments, how is a designer's question identified, answered and kept as one thread?
+  - Today's `/api/ask` doesn't do this. It takes Onshape workspace, element and face ids, returns 501 (`panel/router.py:133`), and ADR 0007 routes answers back to Onshape comments.
+  - A neutral thread would key on document, version and our face groups, store replies in Anville's own store, and render in the panel and on the review page.
+  - Until then, that CAD's loop runs through the local CLI or a vault's review notes.
 
 ## Recommendation
 
@@ -95,6 +101,6 @@ The host details below are **prior knowledge, not checked against current vendor
 3. **After it, choose the second connector by customer pull.**
    - My lean is PDM check-in (option 2): the trigger and thread live where releases happen, and it needs no desktop install.
    - Then a desktop add-in for `Presence` and `CadEditor`.
-4. **Build the panel's reply thread** (`/api/ask`), so that no connector loses the conversation loop.
+4. **Design a CAD-neutral thread** (key: document, version, our face groups; stored in Anville's store; shown in the panel and on the review page), then rebuild `/api/ask` on it, so that no connector loses the conversation loop.
 
 When this is decided, it closes with an ADR. Rayyan accepts it.
