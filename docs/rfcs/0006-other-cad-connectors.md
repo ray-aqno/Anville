@@ -39,7 +39,7 @@ Plus the panel, a web page embedded through an Onshape extension (ADR 0007). The
 
 Named after ADR 0001, plus the two seams that the live build added:
 
-1. **`CadSource`:** emits `version_saved(doc, version, step_bytes)`, `comment_added(doc, thread, text, author)` and, optionally, `note_added`. It must provide a stable version identity and the version's STEP.
+1. **`CadSource`:** emits `version_saved(doc, version, step_bytes)`, `comment_added(doc, thread_id, comment_id, text, author)`. `comment_id` is stable per reply and distinct from the thread: the re-plan uses it to deduplicate events and to tag each recorded constraint's provenance (`modal_app._on_reply`, `_replan`, `reply.constraint_entry`) and, optionally, `note_added`. It must provide a stable version identity and the version's STEP.
 2. **`ReviewSink`:** `post(doc, version, text) -> comment_id`, `reply(thread_id, text) -> comment_id`, and `is_own(comment)`, the self-loop filter (ADR 0003 F1).
    - The filter must work **per comment, not per author**. When Anville posts with the owner's keys, its comments share the designer's author.
    - Today's guard is comment-level: the durable record of comment ids Anville posted (`posted` table), plus the marker header on owner-key posts (`reply.is_own_comment`, `reply.py:104–109`).
