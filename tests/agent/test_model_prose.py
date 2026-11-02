@@ -458,3 +458,17 @@ def test_blank_slots_are_none_empty_or_whitespace():
 
     values = {"a": " ", "b": "+Z", "c": "", "d": None}
     assert _blank_slots("{{a}} {{ b }} {{c}} {{d}} {{missing}}", values) == ["a", "c", "d", "missing"]
+
+
+def test_a_number_slot_between_the_rival_and_its_claim_still_covers():
+    """Local connector run, 2026-11-02: "Sending it to an outside 5-axis shop takes it to 1 setup(s) and it can come
+    out ahead at some shop rates." left code's rival line in too: the setups slot sat between name and claim."""
+    from anville.agent.review import _rival_wins
+
+    r, b = f"option.{ROUTE}", f"option.{BUY}"
+    m = _rival_wins(f"{{{{{r}.fix}}}} takes it to {{{{{r}.setups_after}}}} setup(s) and it can come out ahead at "
+                    "some shop rates.")
+    assert m and m.group(1) == ROUTE
+    # another fix's name still ends the rival's clause (Codex, PR #56)
+    other = _rival_wins(f"{{{{{r}.fix}}}} is an option and {{{{{b}.fix}}}} comes out ahead at some shop rates.")
+    assert other and other.group(1) == BUY  # the buy is said to win; the name never spans another slot
