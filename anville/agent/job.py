@@ -106,7 +106,7 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
             on = f" on {source['on']}" if source.get("on") else ""
             comment += f"\nIt plans with the {name} the shop bought{on}."
     return comment or None, {"agent_calls": r.model_calls, "agent_fallbacks": r.fallbacks,
-                               "agent_usage": r.usage, "buying": buying_from(r)}
+                               "agent_usage": r.usage, "buying": buying_from(r), "sheet_ok": sheet_represents(r)}
 
 
 def with_credits(message: str, calls: list[dict], fallbacks=()) -> str:
@@ -125,6 +125,18 @@ def buying_from(r) -> list[str]:
         if o and o.kind == "add_tool" and o.params.get("type") == "back_chamfer" and o.params.get("owned") is False:
             names.append(o.params["name"])
     return sorted(set(names))
+
+
+
+def sheet_represents(r) -> bool:
+    """Whether a setup sheet can show what the run proposes. sheet_for machines the version with the cutters it's
+    told to buy, so only back-chamfer cutters fit: a part edit, a route or another tool would be missing from it
+    (Codex on feat/replan-sheet, two P1s). Proposing nothing is represented too: the plan as it stands."""
+    for d in r.decisions:
+        o = r.options.get(d.option_key) if d.action == "propose" else None
+        if o is not None and not (o.kind == "add_tool" and o.params.get("type") == "back_chamfer"):
+            return False
+    return True
 
 
 def sheet_for(facts: dict, shop: ShopProfile, back_chamfer: list[dict], *, buying: list[str] = (),
