@@ -409,3 +409,11 @@ def test_one_sentence_about_two_faces_doesnt_drop_either_flag():
     two = {"text": "G3's purpose is unknown.", "cites": ["issue:I1", "intent:G3", "intent:G4"]}
     assert _unknown_said([one]) == {"G3"}
     assert _unknown_said([two]) == set()
+
+
+def test_a_hypothetical_rival_win_doesnt_cover_codes_line(part_a, costed, chamfer, catalog_access):
+    """Codex: "If {{route.fix}} costs less at some inputs, use it." asserts nothing."""
+    maybe = {"text": f"If {{{{option.{ROUTE}.fix}}}} comes out ahead at some shop rates, the plan changes.", "role": "reason",
+             "cites": ["decision:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), maybe])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()

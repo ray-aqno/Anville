@@ -764,7 +764,7 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
             src = slot_source(slot.strip(), nodes)  # lack of a citation (models lane, 2026-10-31: 32 of 54 drops)
             if src and src not in cited:
                 cited[src] = nodes[src]
-        if _RIVAL_WINS.search(sent["text"]):  # a rival said to win is judged against the ranking (live g3)
+        if _rival_wins(sent["text"]):  # a rival said to win is judged against the ranking (live g3)
             cited.update({c: n for c, n in nodes.items() if c.startswith("cost:")})
         for c in sent["cites"]:
             if c.startswith("decision:"):
@@ -827,7 +827,7 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     # A rival is named only by a sentence about it, saying in the clause that names it (by its own slot) that it
     # comes out ahead at some inputs. The verifier judged that sentence with the cost ranking in view. A mention, or "we lead, ahead of X", leaves out the caveat
     # code's line carries (Codex, PR review, three passes).
-    named = {m.group(1) for s in verified if (m := _RIVAL_WINS.search(s["text"]))}  # verified with cost:<issue>
+    named = {m.group(1) for s in verified if (m := _rival_wins(s["text"]))}  # verified with cost:<issue>
     # The model already said a face's purpose is unknown: code's question line doesn't say it again (live g3).
     unknown_said = _unknown_said(verified)
     lines = [s["text"] for s in verified]
@@ -979,6 +979,14 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
 # ("{{option.R.fix}} can come out ahead at some shop rates", "..., while {{option.R.fix}} can still come out ahead").
 _RIVAL_WINS = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
                          r"[^;{]*?\bat some (inputs|shop rates|rates)\b", re.I)
+def _rival_wins(text: str) -> re.Match | None:
+    """A rival-wins claim asserted, not supposed: no "if / unless / whether / when" earlier in its clause (Codex)."""
+    m = _RIVAL_WINS.search(text)
+    if m and re.search(r"\b(if|unless|whether|when)\b", re.split(r"[;,.]", text[:m.start()])[-1], re.I):
+        return None
+    return m
+
+
 _PAYS = re.compile(r"\bpays? (off|back)\b", re.I)  # the claim, not the label "payback"
 
 
