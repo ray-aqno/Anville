@@ -214,10 +214,31 @@ def thin_wall_step():
     return _fuse(part, _box(15, 0, 0, 5, 20, 20))
 
 
+def _demo_insert_body():
+    """Demo Part B (the recording's): a suspension tube insert, centred on the origin as modelled in Onshape.
+    Onshape build sheet: docs/demo/build-sheet.md. 22 tall, so the Ø6.5 holes stay within EM6's 24 mm reach."""
+    part = _fuse(_box(-35, -20, 0, 70, 40, 12), _cylinder((0, 0, 12), (0, 0, 1), 16, 10))  # flange, Ø32 spigot
+    part = _cut(part, _cylinder((0, 0, -1), (0, 0, 1), 10, 24))                             # Ø20 bore, through
+    for x in (-25, 25):
+        part = _cut(part, _cylinder((x, 0, -1), (0, 0, 1), 3.25, 14))                      # Ø6.5 (M6 clearance)
+    return part
+
+
+def demo_insert():
+    """Last feature: Chamfer 1, 1 mm on the bottom back edge (Y +20)."""
+    return _chamfer(_demo_insert_body(), 1.0, lambda x, y, z: abs(y - 20) < 1e-6 and abs(z) < 1e-6)
+
+
+def demo_insert_unchamfered():
+    """The insert with Chamfer 1 suppressed."""
+    return _demo_insert_body()
+
+
 PARTS = {f.__name__: f for f in (plain_block, two_pockets, side_hole, deep_slot, tight_corner, clevis, undercut,
                                  wedge, kinked_pocket, demo_bracket, demo_bracket_unchamfered,
                                  demo_bracket_b, demo_bracket_b_unchamfered, demo_bracket_2mm, split_edge_chamfer,
-                                 stopped_chamfer, both_long_chamfers, narrow_bar, thin_wall_step)}
+                                 stopped_chamfer, both_long_chamfers, narrow_bar, thin_wall_step, demo_insert,
+                                 demo_insert_unchamfered)}
 
 
 def write_step(shape, path: Path) -> Path:
