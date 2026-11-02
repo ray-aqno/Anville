@@ -5,6 +5,7 @@ data/onshape_fix_branch_live.json, so the decoding is tested on what Onshape rea
 """
 
 import copy
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -136,8 +137,9 @@ def test_the_branch_suppresses_the_chamfer_and_measures_it(part_a, removal, owne
     assert api.calls[0] == ("POST", "/documents/d/d1/workspaces", {"name": "anville/alt-r7", "versionId": "v1"})
     assert all("/w/w-alt/" in p for m, p, _ in api.calls[1:5])  # every edit is on the branch, never main
     g = removal.face_group
-    assert b.line() == (f"Branch anville/alt-r7: removing {g} measured 1 setup(s) (predicted 1). Shown as the "
-                        f"alternative, not merged: {g} stays as designed. https://cad.onshape.com/documents/d1/w/w-alt/e/e1")
+    assert b.line() == (f"Branch anville/alt-r7: removing the 1.5 mm chamfer on the bottom front edge ({g}) measured "
+                        "1 setup(s) (predicted 1). Shown as the alternative, not merged: that face stays as designed. "
+                        "https://cad.onshape.com/documents/d1/w/w-alt/e/e1")
 
 
 def test_the_requests_have_the_live_proofs_shapes(part_a, removal, owners):
@@ -198,7 +200,8 @@ def test_an_ambiguous_face_is_never_guessed(part_a, removal, owners):
     b = _build(part_a, removal, api)
     assert b.status == "predicted" and "ambiguous" in b.reason and b.measured is None
     assert not [p for m, p, _ in api.calls if "/features/featureid/" in p]  # nothing was edited
-    assert b.line() == (f"Removing {removal.face_group} would take it to 1 setup(s): predicted from the geometry; "
+    assert b.line() == (f"Removing the 1.5 mm chamfer on the bottom front edge ({removal.face_group}) would take it "
+                        "to 1 setup(s): predicted from the geometry; "
                         "Anville couldn't measure it on a branch this time.")
 
 
@@ -269,7 +272,8 @@ def test_the_job_builds_the_branch_and_returns_its_line(part_a, shop, removal, o
     line, stats = fix_branch(api, part_a.to_dict(), shop, {"ANVILLE_FIX_BRANCH": "on"},
                              lambda kind, title, **d: events.append((kind, title, d)), did="d1", vid="v1",
                              eid="e1", run="r7", measure=lambda s: 1, wait=_wait)
-    assert line.startswith(f"Branch anville/alt-r7: removing {removal.face_group} measured 1 setup(s) (predicted 1)")
+    assert line.startswith(f"Branch anville/alt-r7: removing the 1.5 mm chamfer on the bottom front edge "
+                           f"({removal.face_group}) measured 1 setup(s) (predicted 1)")
     assert stats["fix_branch"]["status"] == "measured" and stats["fix_branch"]["calls"] == 8
     assert any(t == "Fix branch finished" and d["stage"] == "fix_branch" for _, t, d in events)
 
@@ -318,7 +322,7 @@ def test_the_line_says_it_is_the_declined_alternative(part_a, removal, owners):
     b = _build(part_a, removal, FakeOnshape(part_a, owners))
     assert "Shown as the alternative, not merged" in b.line()
     b.kept_for = "weld clearance"
-    assert f"{removal.face_group} stays as designed: weld clearance." in b.line()
+    assert "that face stays as designed: weld clearance." in b.line()
 
 
 def test_a_face_without_an_id_is_dropped():
@@ -356,3 +360,58 @@ def test_measured_comes_from_re_extracting_the_branch_step(owners, removal):
                      faces=option.removed_faces, predicted=option.after.setups, measure=measure,
                      emit=lambda *a, **k: None, wait=_wait)
     assert (b.status, b.feature_name, b.predicted, b.measured) == ("measured", "Weld clearance chamfer", 1, 1)
+
+
+# --- The reply names the face in words (live g3: "removing G11" read as a code) ---
+
+
+def test_the_line_names_the_group_in_words(part_a, removal, owners):
+    g = removal.face_group
+    b = _build(part_a, removal, FakeOnshape(part_a, owners))
+    assert b.where == "the 1.5 mm chamfer on the bottom front edge"
+    assert b.line().startswith(f"Branch anville/alt-r7: removing the 1.5 mm chamfer on the bottom front edge ({g}) "
+                               "measured 1 setup(s) (predicted 1). Shown as the alternative, not merged: "
+                               "that face stays as designed.")
+
+
+def test_the_fallback_line_names_it_in_words_too(part_a, removal, owners):
+    b = _build(part_a, removal, FakeOnshape(part_a, owners, status="ERROR"))
+    assert b.line() == (f"Removing the 1.5 mm chamfer on the bottom front edge ({removal.face_group}) would take it "
+                        "to 1 setup(s): predicted from the geometry; Anville couldn't measure it on a branch this time.")
+
+
+@pytest.mark.parametrize("found", [None, ValueError("geometry bug")])
+def test_without_a_description_the_line_keeps_the_label(monkeypatch, part_a, removal, owners, found):
+    import anville.connectors.onshape.fixbranch as fb
+
+    def describe(facts, group):
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+    monkeypatch.setattr(fb, "describe_group", describe)
+    b = _build(part_a, removal, FakeOnshape(part_a, owners))
+    assert b.where is None and b.status == "measured"
+    assert b.line().startswith(f"Branch anville/alt-r7: removing {removal.face_group} measured 1 setup(s)")
+    assert f"not merged: {removal.face_group} stays as designed." in b.line()
+
+
+# --- Codex review of the worded line ---
+
+
+def test_a_removal_wider_than_the_group_keeps_the_label(part_a, removal, owners):
+    """The phrase names the group; if the removal takes more faces than the group, it would undersell the edit."""
+    wider = replace(removal, removed_faces=[*removal.removed_faces, next(
+        x.id for x in part_a.faces if x.id not in removal.removed_faces)])
+    b = _build(part_a, wider, FakeOnshape(part_a, owners, status="ERROR"))
+    assert b.where is None
+    assert b.line().startswith(f"Removing {removal.face_group} would take it")
+
+
+def test_a_group_of_several_faces_is_those_faces(part_a, removal, owners):
+    b = _build(part_a, removal, FakeOnshape(part_a, owners))
+    b.where, b.extra_faces = "the walls of the 8 mm deep 50 × 30 mm pocket (r6 corners)", 0
+    b.faces = 4
+    assert "not merged: those faces stay as designed." in b.line()
+    b.faces = 1
+    assert "not merged: that face stays as designed." in b.line()
