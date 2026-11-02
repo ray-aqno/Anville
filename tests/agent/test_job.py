@@ -354,3 +354,17 @@ def test_a_shop_that_owns_the_cutter_flags_nothing(part_a, shop, catalog_access)
 
     owned = replace(shop, back_chamfer_tools=list(BACK_CHAMFER_CATALOG))
     assert flagged_groups(part_a.to_dict(), owned, [a.to_dict() for a in catalog_access]) == []
+
+
+def test_a_re_plan_that_edits_the_part_gets_no_sheet_of_the_unedited_part():
+    """Codex on feat/replan-sheet (P1): a re-plan that proposes removing a face must not send the shop a sheet built
+    from the version that still has it; only shop-side decisions keep the version's geometry valid."""
+    from types import SimpleNamespace as NS
+    from anville.agent.job import proposes_part_edit
+
+    options = {"remove_feature/G11": NS(side="part"), "add_tool/G11/910480": NS(side="shop")}
+    run = lambda *keys, action="propose": NS(options=options, decisions=[NS(action=action, option_key=k) for k in keys])
+    assert proposes_part_edit(run("remove_feature/G11"))
+    assert proposes_part_edit(run("add_tool/G11/910480", "remove_feature/G11"))
+    assert not proposes_part_edit(run("add_tool/G11/910480"))
+    assert not proposes_part_edit(run("remove_feature/G11", action="ask"))  # an ask edits nothing

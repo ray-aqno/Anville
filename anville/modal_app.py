@@ -584,8 +584,9 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
         # (demo spine: re-plan, then the sheet goes to the shop; Codex on the panel's re-plan fix).
         from anville.deploy import sheet_link
 
-        link = sheet_link(os.environ, _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"],
-                                                   ledger, stats.get("buying") or [], trace))
+        # Only while the re-plan keeps the part as is: a sheet of this version can't machine a proposed edit.
+        link = None if stats.get("part_edit", True) else sheet_link(os.environ, _store_sheet(
+            store, ev.key, did, vid, result["facts"], result["back_chamfer"], ledger, stats.get("buying") or [], trace))
         if link:
             body += f"\nSetup sheet for the shop: {link}"
         # The reader worked even when the review falls back to the setup count (Codex, P2): credit what ran.

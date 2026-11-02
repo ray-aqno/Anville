@@ -106,7 +106,7 @@ def agent_comment(facts: dict, shop: ShopProfile, env: Mapping[str, str], emit: 
             on = f" on {source['on']}" if source.get("on") else ""
             comment += f"\nIt plans with the {name} the shop bought{on}."
     return comment or None, {"agent_calls": r.model_calls, "agent_fallbacks": r.fallbacks,
-                               "agent_usage": r.usage, "buying": buying_from(r)}
+                               "agent_usage": r.usage, "buying": buying_from(r), "part_edit": proposes_part_edit(r)}
 
 
 def with_credits(message: str, calls: list[dict], fallbacks=()) -> str:
@@ -126,6 +126,13 @@ def buying_from(r) -> list[str]:
             names.append(o.params["name"])
     return sorted(set(names))
 
+
+
+def proposes_part_edit(r) -> bool:
+    """Whether the run proposes changing the part. A sheet is the version's geometry machined, so it stays true only
+    while every proposal is shop-side (Codex on feat/replan-sheet, P1)."""
+    return any(d.action == "propose" and getattr(r.options.get(d.option_key), "side", None) == "part"
+               for d in r.decisions)
 
 def sheet_for(facts: dict, shop: ShopProfile, back_chamfer: list[dict], *, buying: list[str] = (),
               provenance: dict[str, dict] | None = None) -> dict:
