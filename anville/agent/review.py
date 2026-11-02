@@ -829,8 +829,7 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
     # code's line carries (Codex, PR review, three passes).
     named = {m.group(1) for s in verified if (m := _RIVAL_WINS.search(s["text"]))}  # verified with cost:<issue>
     # The model already said a face's purpose is unknown: code's question line doesn't say it again (live g3).
-    unknown_said = {c.split(":", 1)[1] for s in verified if _UNKNOWN_PURPOSE.search(s["text"])
-                    for c in s["cites"] if c.startswith("intent:")}
+    unknown_said = _unknown_said(verified)
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
@@ -875,6 +874,17 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
 _UNKNOWN_PURPOSE = re.compile(r"\b(purpose|intent|function)\b.*\b(unknown|isn't on record|not on record)\b", re.I)
 
 
+def _unknown_said(verified: list[dict]) -> set[str]:
+    """Faces whose unknown purpose verified prose already stated: a sentence about one face's intent only, so a
+    sentence citing several can't drop another face's flag (Codex, PR review)."""
+    out = set()
+    for s in verified:
+        intents = [c.split(":", 1)[1] for c in s["cites"] if c.startswith("intent:")]
+        if len(intents) == 1 and _UNKNOWN_PURPOSE.search(s["text"]):
+            out.add(intents[0])
+    return out
+
+
 def _face(issue: Issue, described: set[str] | None) -> str:
     """A face in code's lines: its measured description with the label once, for traceability ("the 1.5 mm chamfer
     on the bottom front edge (G11)"), or the bare label when geometry gave none (live g3: "If G11 isn't needed")."""
@@ -897,7 +907,7 @@ def _pronouns(lines: list[str], options: dict[str, Option]) -> list[str]:
         if m and m.group(1) == last:
             line = "It" + line[m.end():]
         out.append(line)
-        last = last_named(line) or last
+        last = last_named(line) or (last if line.startswith("It ") else None)  # another topic resets it
     return out
 
 

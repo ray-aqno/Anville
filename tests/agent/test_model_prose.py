@@ -384,3 +384,28 @@ def test_a_rival_claim_brings_the_ranking_to_the_verifier_and_covers_without_cit
     r = run_review(part_a, costed, model, verifier=verifier, back_chamfer=catalog_access, stated={chamfer: STATED})
     assert "cost:I1" in _sent_to_verifier(verifier)[1]["cites"]  # judged against the ranking
     assert "costs less at some inputs." not in r.comment
+
+
+def test_a_line_on_another_topic_resets_the_pronoun():
+    """Codex: a sentence about another face between two mentions of the fix; "It" would point at the face."""
+    from anville.agent.review import _pronouns
+
+    options = {BUY: type("O", (), {"kind": "add_tool", "params": {"type": "back_chamfer"}, "face_group": "G3",
+                                   "key": BUY})()}
+    fix = f"{{{{option.{BUY}.fix}}}}"
+    kept = _pronouns([f"{fix} takes it to 1 setup(s).", "G4 alone forces the +X setup.", f"{fix} also fixes G4."],
+                     options)
+    assert kept[-1] == f"{fix} also fixes G4."
+    carried = _pronouns([f"{fix} takes it to 1 setup(s).", "It keeps the part as designed.", f"{fix} leads."],
+                        options)
+    assert carried[-1] == "It leads."
+
+
+def test_one_sentence_about_two_faces_doesnt_drop_either_flag():
+    """Codex: a sentence citing several intents may say only one is unknown; neither flag is dropped."""
+    from anville.agent.review import _unknown_said
+
+    one = {"text": "G3's purpose is unknown.", "cites": ["issue:I1", "intent:G3"]}
+    two = {"text": "G3's purpose is unknown.", "cites": ["issue:I1", "intent:G3", "intent:G4"]}
+    assert _unknown_said([one]) == {"G3"}
+    assert _unknown_said([two]) == set()
