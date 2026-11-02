@@ -54,6 +54,41 @@ def catalog_for(shop: ShopProfile) -> list:
     return [c for c in BACK_CHAMFER_CATALOG if c.name not in owned]
 
 
+def analyze_step(step, ledger: list[dict] = ()) -> dict:
+    """STEP → PartFacts → SetupPlan for any CadSource: modal_app.analyze's work without its Volume (ADR 0001, 0008).
+    The shop is the review's, owned cutters included; checks a-f run for its cutters and the catalog's, and a
+    back-chamfer failure costs only the buy option (`back_chamfer_error` says why)."""
+    from dataclasses import replace
+
+    from anville.geometry import assess_back_chamfer, extract, min_setups
+
+    facts = extract(str(step))
+    shop, _ = review_shop(list(ledger))
+    out = {}
+    try:
+        access = assess_back_chamfer(str(step), facts, replace(
+            shop, back_chamfer_tools=[*shop.back_chamfer_tools, *catalog_for(shop)]))
+    except Exception as e:
+        access, out["back_chamfer_error"] = [], repr(e)[:300]
+    plan = min_setups(facts, shop, back_chamfer=access)
+    return {**out, "plan": plan.to_dict(), "facts": facts.to_dict(), "back_chamfer": [a.to_dict() for a in access],
+            "faces": len(facts.faces), "groups": len(facts.groups), "extract_s": round(facts.extract_s, 2)}
+
+
+def setup_count_message(vid: str, plan: dict) -> str:
+    """The review when no model wrote one: modal_app._review_message, which a test holds equal (that module needs
+    Modal). Every number comes from the SetupPlan (locked decision 3)."""
+    dirs = "; ".join(" + ".join(s["directions"]) for s in plan["setups"]) or "none"
+    msg = f"Anville reviewed version {vid[:8]}: {plan['count']} setup(s) on a 3-axis mill ({dirs})."
+    no_tool = sum(u["reason"] == "no_tool" for u in plan["unreachable"])
+    no_dir = sum(u["reason"] == "no_direction" for u in plan["unreachable"])
+    if no_tool:
+        msg += f" {no_tool} face(s) need a tool the shop doesn't have."
+    if no_dir:
+        msg += f" {no_dir} face(s) can't be reached from any of the six directions."
+    return msg + " Geometry only so far; costed options come next."
+
+
 def flushing_at_stage_changes(add: Emit, flush) -> Emit:
     """`add` that flushes right after an event that opens a new stage. The opening event ("Model
     called") comes before the stage's slow call, so the panel sees each stage start live, and the
