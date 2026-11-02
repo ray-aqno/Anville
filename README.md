@@ -61,6 +61,19 @@ reply in the thread → read by Muse Spark Open (Fireworks, Baseten as failover)
 - **CAD-agnostic core:** the core reads STEP and never calls a CAD API; Onshape is the first connector ([ADR 0001](docs/adrs/0001-cad-agnostic-core-with-onshape-connector.md)).
 - **Decisions:** every significant choice is an ADR or RFC in `docs/`.
 
+## Beyond Onshape
+
+Anville's core never calls a CAD API: geometry, setup planning, the shop's checks and the costs all start from a STEP file and a shop profile ([ADR 0001](docs/adrs/0001-cad-agnostic-core-with-onshape-connector.md)). The CAD system is a connector at the edge: it says when a version is ready, exports STEP, and carries Anville's records back to the designer.
+
+| | State |
+|---|---|
+| **Onshape:** "Create version" webhooks, STEP export, review comments and replies, a docked panel, fix branches as feature edits | built (`anville/connectors/onshape`, `anville/panel`) |
+| **Asking from the panel:** select a face and ask, answered by the same loop as a reply | not built: the panel's `/api/ask` route answers 501 until a handler exists (`anville/panel/DESIGN.md`) |
+| **A local connector:** a folder of STEP files in, JSON out (ADR 0001's `LocalSource` and `LocalSink`) | not built |
+| **Other CAD:** a PDM vault check-in as the "version ready" signal; the panel, a web page, hosted in the CAD's own web view (a SolidWorks Task Pane or a Fusion palette) | not built or designed. The hosting options are general knowledge, not tried here |
+
+What doesn't carry over unchanged: the fix branch writes Onshape features, and the agent job reaches the Onshape connector for it and to recognise its own comments (`anville/agent/job.py`, `anville/agent/reply.py`). Another CAD needs its own version of both.
+
 ## Run the tests
 
 ```bash
