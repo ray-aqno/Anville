@@ -15,6 +15,15 @@ export function latestRun(state) {
   return id === undefined ? null : state.runs[id];
 }
 
+// The run whose `key` ("sheet", "anchor") to show for `run`: its own, else the latest run of the same version that
+// has one. A re-plan run (<vid8>-r<n>) makes no sheet or picture of its own, by design, so it shows its version's
+// review's; a new version never borrows the last one's (Rayyan, live on g3: the button greyed out after a reply).
+export function withVersion(state, run, key) {
+  if (run[key]) return run;
+  const same = state.order.map((id) => state.runs[id]).filter((r) => r.versionId === run.versionId && r[key]);
+  return same.at(-1) ?? run;
+}
+
 export function hostLabel(host) {
   if (!host) return "—";
   if (/baseten/i.test(host)) return "Baseten";

@@ -1,7 +1,7 @@
 // State -> HTML for the docked panel (DESIGN.md §4): the ring, the decision card, then the agent's work.
 // Pure string output; every value from the trace goes through esc(), because reasons and sentences are model text.
 
-import { STAGES, costSummary, decisionCards, latestRun, optionLabel, optionText, ringState, sentenceSummary } from "./reduce.js";
+import { STAGES, costSummary, decisionCards, latestRun, optionLabel, optionText, ringState, sentenceSummary, withVersion } from "./reduce.js";
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export function esc(s) {
@@ -47,13 +47,16 @@ function ring(r) {
 // become clickable (ADR 0007 Amendment 5).
 const SHEET_URL = /^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/sheet\/[A-Za-z0-9_-]{1,64}\?s=[0-9a-f]{64}$/;
 
-function sheetButton(url) {
+// `borrowed`: the sheet is the version's review's, shown on a re-plan, which makes none. A reply may have changed
+// the fix since, so the button says whose sheet it is (Codex P1).
+function sheetButton(url, borrowed = false) {
   return url && SHEET_URL.test(url)
-    ? `<a class="sheet" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open setup sheet</a>`
+    ? `<a class="sheet" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open setup sheet${
+      borrowed ? " (from the first review)" : ""}</a>`
     : `<button class="sheet" disabled>Open setup sheet</button>`;
 }
 
-function card(c, reason, sheetUrl) {
+function card(c, reason, sheet) {
   const cost = c.cost?.one_time ? `one-time $${esc(c.cost.one_time[0])}–${esc(c.cost.one_time[1])}` : "$ —";
   const half = (cls, title, h) => `<div class="half ${cls}"><div class="tag">${title}</div>
     <div class="what">${esc(h.text)}</div>${h.note ? `<div class="note">${esc(h.note)}</div>` : ""}</div>`;
@@ -63,7 +66,7 @@ function card(c, reason, sheetUrl) {
   ${c.question ? `<div class="question">${esc(c.question)}</div>` : ""}
   ${reason ? `<div class="why"><span class="tag">Why</span> ${esc(reason)}</div>` : ""}
   <div class="cost">${cost}</div>
-  ${sheetButton(sheetUrl)}
+  ${sheetButton(sheet.url, sheet.borrowed)}
 </section>`;
 }
 
@@ -152,17 +155,19 @@ export function renderHTML(state, runId = null, { renderUrl = null } = {}) {
   const run = (runId && state.runs[runId]) || latestRun(state);
   if (!run) return `<header class="hd"><span class="dot"></span>Anville</header><p class="empty">Waiting for the next save.</p>`;
   const cards = decisionCards(run);
+  const from = withVersion(state, run, "sheet");
+  const sheet = { url: from.sheet?.url ?? null, borrowed: from !== run };
   const reasons = Object.fromEntries(run.decisions.map((d) => [d.issueId, d.reason]));
   const calls = run.calls.length || run.liveCalls.length;
   // Top-level sections carry data-section, so panel.js replaces only the ones that changed.
   return `<header class="hd ${run.status}" data-section="header"><span class="dot"></span>Anville · version ${esc((run.versionId ?? "").slice(0, 6))}
   <span class="status">${esc(statusText(run))}</span></header>
 <div data-section="ring">${ring(ringState(run))}</div>
-<div data-section="cards">${cards.map((c) => (c.kind === "ask" ? askCard : card)(c, reasons[c.issueId], run.sheet?.url)).join("")}
+<div data-section="cards">${cards.map((c) => (c.kind === "ask" ? askCard : card)(c, reasons[c.issueId], sheet)).join("")}
 ${costStrip(costSummary(run))}
 ${run.learned.length ? `<p class="learned">Learned from the shop: ${esc(run.learned.join(", "))}</p>` : ""}
 ${run.agentFailed ? `<p class="note">Agent failed; posted the setup count instead.</p>` : ""}</div>
-${face(run, renderUrl)}
+${face(withVersion(state, run, "anchor"), renderUrl)}
 <section class="agent" data-section="agent"><div class="tag">Agent${calls ? ` · ${run.calls.length || run.liveCalls.length} model calls` : ""}</div>
 ${rail(run)}
 <ul class="chips">${chips(run)}</ul>
