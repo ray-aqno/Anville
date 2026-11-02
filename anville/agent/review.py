@@ -987,11 +987,14 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
 
 # The rival wins somewhere, said of the rival itself: the claim follows its name slot in the same clause
 # ("{{option.R.fix}} can come out ahead at some shop rates", "..., while {{option.R.fix}} can still come out ahead").
-_RIVAL_WINS = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
+_RIVAL_WINS = re.compile(r"\{\{\s*option\.([^{}]+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
                          r"[^;{]*?\bat some (inputs|shop rates|rates)\b", re.I)
 def _rival_wins(text: str) -> re.Match | None:
     """A rival-wins claim asserted: not supposed ("if / unless / whether / when" earlier in its clause) and not
     negated (Codex, PR review). Patterns, not meaning: ADR 0010 Amendment 2 records the limit."""
+    # A number slot names no fix: mask it so "{{R.fix}} takes it to {{R.setups_after}} setup(s) and it can
+    # come out ahead ..." matches; another fix's .fix slot still ends the rival's clause (local run, 2026-11-02).
+    text = re.sub(r"\{\{(?![^}]*\.(fix|tool)\s*\}\})[^}]*\}\}", "N", text)  # .tool names a fix too (Codex)
     m = _RIVAL_WINS.search(text)
     if m and re.search(r"\b(if|unless|whether|when)\b", re.split(r"[;,.]", text[:m.start()])[-1], re.I):
         return None
