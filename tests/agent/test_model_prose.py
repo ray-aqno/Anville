@@ -428,3 +428,33 @@ def test_a_negated_rival_win_doesnt_cover_codes_line():
     for text in (f"At midpoint, {slot} does not win at some shop rates.", f"{slot} never comes out ahead at some rates.",
                  f"{slot} doesn't come out ahead at some inputs.", f"{slot} can't win at some shop rates."):
         assert not _rival_wins(text), text
+
+
+def test_an_unreachable_issue_offers_no_direction_slot(part_a, costed):
+    """Sandbox smoke, d51173e: "G1 is unreachable from  and its purpose is unknown." (no direction reaches it)."""
+    from anville.agent.review import slot_values
+
+    r = run_review(part_a, costed, None)
+    issue = r.issues[0]
+    nowhere = type(issue)(**{**issue.__dict__, "detail": {**issue.detail, "directions": []}})
+    values = slot_values(r.plan, [nowhere], {})
+    assert f"issue.{issue.id}.directions" not in values
+
+
+def test_a_sentence_whose_slot_fills_blank_is_dropped_before_verify(monkeypatch, part_a, costed, chamfer,
+                                                                    catalog_access):
+    """Any slot that resolves to nothing: the sentence covers nothing, and code's line goes out instead."""
+    monkeypatch.setattr(review, "describe_group", lambda facts, group: "  ")
+    blank = {"text": "{{issue.I1.where}} forces its own setup.", "role": "context", "cites": ["issue:I1"]}
+    model = Scripted(plan(*requests_for(chamfer)), decide(PROPOSE_BUY, comment=[context(chamfer), blank]))
+    verifier = Scripted(verdicts(True), name="verifier")
+    r = run_review(part_a, costed, model, verifier=verifier, back_chamfer=catalog_access, stated={chamfer: STATED})
+    assert [s["text"] for s in _sent_to_verifier(verifier)] == ["G3 alone forces the -Z setup."]
+    assert " forces its own setup." not in r.comment
+
+
+def test_blank_slots_are_none_empty_or_whitespace():
+    from anville.agent.review import _blank_slots
+
+    values = {"a": " ", "b": "+Z", "c": "", "d": None}
+    assert _blank_slots("{{a}} {{ b }} {{c}} {{d}} {{missing}}", values) == ["a", "c", "d", "missing"]

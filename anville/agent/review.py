@@ -218,7 +218,8 @@ def slot_values(plan: SetupPlan, issues: list[Issue], options: dict[str, Option]
         if t.reason:
             values[f"intent.{g}.reason"] = t.reason
     for i in issues:
-        values[f"issue.{i.id}.directions"] = " + ".join(i.detail.get("directions", []))
+        if i.detail.get("directions"):  # an unreachable face has none: no slot, so prose can't say "from  "
+            values[f"issue.{i.id}.directions"] = " + ".join(i.detail["directions"])
     for key, o in options.items():
         values[f"option.{key}.setups_before"] = str(o.before.setups)
         values[f"option.{key}.setups_after"] = str(o.after.setups)
@@ -238,6 +239,11 @@ def slot_source(slot: str, nodes: dict) -> str | None:
         return head if head in nodes else None
     node = f"{head}:{rest.rsplit('.', 1)[0]}" if "." in rest else None
     return node if node in nodes else None
+
+
+def _blank_slots(text: str, values: dict[str, str]) -> list[str]:
+    """Slots in model prose that would fill with nothing (None, empty or whitespace)."""
+    return [s.strip() for s in _SLOT.findall(text) if not str(values.get(s.strip()) or "").strip()]
 
 
 def fill_slots(text: str, values: dict[str, str], option_keys: list[str]) -> tuple[str | None, str]:
@@ -520,7 +526,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
 
     # Decide and write (model + gate): decisions are validated; the prose is checked sentence by sentence
     values = slot_values(plan, chosen, options, intents)
-    where = {i.id: w for i in chosen if (w := describe_group(facts, i.face_group))}
+    where = {i.id: w for i in chosen if (w := describe_group(facts, i.face_group)) and w.strip()}
     values.update({f"issue.{i}.where": w for i, w in where.items()})  # digits in it reach prose through the slot
     estimates = {}  # conditional part edit -> its cost slot, where only a part edit helps (ruling, lane 3)
     if priced:
@@ -590,6 +596,8 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                 if d["action"] == "quiet" or not gates[issue.id]:
                     return None, f"asking about {issue.id} is not allowed: the answer would not change the plan"
                 _, err = fill_slots(question, values, keys)  # the designer reads it: same number rule
+                if not err and (blank := _blank_slots(question, values)):
+                    err = f"slot(s) with no value here: {', '.join(blank)}"
                 if err:
                     return None, f"question for {issue.id}: {err}"
                 # Kept as a template, so rendering re-checks slots, not filled numbers (Greptile, PR #14).
@@ -720,6 +728,8 @@ def check_sentence(sent: dict, decided_by: dict[str, Decision], nodes: dict, val
     _, err = fill_slots(sent["text"], values, keys)
     if err:
         return err
+    if blank := _blank_slots(sent["text"], values):  # it would publish a gap (sandbox smoke, d51173e)
+        return f"slot(s) with no value here: {', '.join(blank)}"
     if "?" in sent["text"]:
         return "questions reach the designer only through an accepted ask"
     # Write for the designer: citations go in `cites` and numbers in {{slots}}, never in the words
