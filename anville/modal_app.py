@@ -579,8 +579,17 @@ def _replan(store, ev, trace: "_Trace", client, reply: dict, root: str, review, 
         constraints = constraints_from_ledger(store.call.remote("read_ledger", "constraint", scope), version_id=vid)
         comment, stats = agent_comment(result["facts"], shop, os.environ, emit, deadline=deadline,
                                        back_chamfer=result["back_chamfer"], learned=learned, constraints=constraints)
+        body = comment or _review_message(vid, result["plan"])
+        # The re-plan's own sheet: it may buy differently from the review, and the shop runs what was decided last
+        # (demo spine: re-plan, then the sheet goes to the shop; Codex on the panel's re-plan fix).
+        from anville.deploy import sheet_link
+
+        link = sheet_link(os.environ, _store_sheet(store, ev.key, did, vid, result["facts"], result["back_chamfer"],
+                                                   ledger, stats.get("buying") or [], trace))
+        if link:
+            body += f"\nSetup sheet for the shop: {link}"
         # The reader worked even when the review falls back to the setup count (Codex, P2): credit what ran.
-        message = with_credits(comment or _review_message(vid, result["plan"]),
+        message = with_credits(body,
                                read_calls + stats.get("agent_usage", []),
                                [*read_fallbacks, *stats.get("agent_fallbacks", [])])
     else:
