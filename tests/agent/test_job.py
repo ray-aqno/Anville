@@ -356,15 +356,19 @@ def test_a_shop_that_owns_the_cutter_flags_nothing(part_a, shop, catalog_access)
     assert flagged_groups(part_a.to_dict(), owned, [a.to_dict() for a in catalog_access]) == []
 
 
-def test_a_re_plan_that_edits_the_part_gets_no_sheet_of_the_unedited_part():
-    """Codex on feat/replan-sheet (P1): a re-plan that proposes removing a face must not send the shop a sheet built
-    from the version that still has it; only shop-side decisions keep the version's geometry valid."""
+def test_a_re_plan_sheet_only_for_what_a_sheet_can_show():
+    """Codex on feat/replan-sheet (two P1s): a sheet machines the version with the cutters it's told to buy. A
+    proposed removal, 5-axis route or longer end mill would be missing from it, so no sheet goes with those."""
     from types import SimpleNamespace as NS
-    from anville.agent.job import proposes_part_edit
+    from anville.agent.job import sheet_represents
 
-    options = {"remove_feature/G11": NS(side="part"), "add_tool/G11/910480": NS(side="shop")}
+    options = {"remove_feature/G11": NS(kind="remove_feature", params={}),
+               "route_machine/5": NS(kind="route_machine", params={}),
+               "add_tool/G4/EM12-L84": NS(kind="add_tool", params={"type": "end_mill"}),
+               "add_tool/G11/910480": NS(kind="add_tool", params={"type": "back_chamfer", "owned": False})}
     run = lambda *keys, action="propose": NS(options=options, decisions=[NS(action=action, option_key=k) for k in keys])
-    assert proposes_part_edit(run("remove_feature/G11"))
-    assert proposes_part_edit(run("add_tool/G11/910480", "remove_feature/G11"))
-    assert not proposes_part_edit(run("add_tool/G11/910480"))
-    assert not proposes_part_edit(run("remove_feature/G11", action="ask"))  # an ask edits nothing
+    assert sheet_represents(run("add_tool/G11/910480"))
+    assert sheet_represents(run())  # nothing proposed: the plan as it stands
+    assert sheet_represents(run("remove_feature/G11", action="ask"))  # an ask changes nothing
+    for other in ("remove_feature/G11", "route_machine/5", "add_tool/G4/EM12-L84"):
+        assert not sheet_represents(run("add_tool/G11/910480", other)), other
