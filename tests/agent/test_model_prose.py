@@ -283,3 +283,148 @@ def test_the_win_claim_must_belong_to_the_rival(part_a, costed, chamfer, catalog
              "comes out ahead at some shop rates."}
     r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), other])
     assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+
+
+PHRASE = "the 1.5 mm chamfer on the bottom front edge"
+
+
+def described(monkeypatch, phrase=PHRASE):
+    monkeypatch.setattr(review, "describe_group", lambda facts, group: phrase)
+
+
+def test_codes_lines_name_the_face_by_its_description_with_the_label_once(monkeypatch, part_a, costed):
+    """Live g3 (DEMO A v3): "If G11 isn't needed, removing G11 also ...", "G11's purpose isn't on record."."""
+    described(monkeypatch)
+    lines = run_review(part_a, costed, None).comment.splitlines()
+    assert "If the 1.5 mm chamfer on the bottom front edge (G3) isn't needed, removing it also takes it to " \
+           "1 setup(s)." in lines
+    assert ("The purpose of the 1.5 mm chamfer on the bottom front edge (G3) isn't on record. Is the 1.5 mm "
+            "chamfer on the bottom front edge (G3) required as modelled? The answer could change the best plan."
+            in lines)
+    assert any(ln.startswith("The 1.5 mm chamfer on the bottom front edge (G3): ") for ln in lines)
+    assert not any(ln.startswith("G3") or "If G3" in ln for ln in lines)
+
+
+def test_an_undescribed_face_keeps_its_label(monkeypatch, part_a, costed):
+    described(monkeypatch, None)
+    lines = run_review(part_a, costed, None).comment.splitlines()
+    assert "If G3 isn't needed, removing G3 also takes it to 1 setup(s)." in lines
+    assert any(ln.startswith("G3's purpose isn't on record. Is G3 required as modelled?") for ln in lines)
+
+
+def test_the_models_unknown_purpose_sentence_covers_codes_flag(part_a, costed, chamfer, catalog_access):
+    """Live g3: the model wrote "G11 purpose is unknown." and code added "G11's purpose isn't on record." too."""
+    unknown = {"text": "G3's purpose is unknown.", "role": "context", "cites": ["issue:I1", "intent:G3"]}
+    model = Scripted(plan(*requests_for(chamfer)), decide(PROPOSE_BUY, comment=[context(chamfer), unknown]))
+    r = run_review(part_a, costed, model, verifier=Scripted(verdicts(True, True), name="verifier"),
+                   back_chamfer=catalog_access)
+    assert "G3's purpose is unknown." in r.comment
+    assert "isn't on record" not in r.comment
+    assert any(ln.startswith("Is ") and ln.endswith("required as modelled? The answer could change the best plan.")
+               for ln in r.comment.splitlines())  # the question alone, with no second "unknown"
+
+
+def test_a_fix_named_again_on_the_next_line_becomes_it(part_a, costed, chamfer, catalog_access):
+    """Live g3 re-plan: "Buying the 910480 back-chamfer cutter takes it to 1 setup(s)." then "Buying the 910480
+    back-chamfer cutter leads at mid-range shop rates"."""
+    first = {"text": f"{{{{option.{BUY}.fix}}}} takes it to {{{{option.{BUY}.setups_after}}}} setup(s).",
+             "role": "action", "cites": ["decision:I1"]}
+    again = {"text": f"{{{{option.{BUY}.fix}}}} leads at mid-range shop rates.", "role": "reason",
+             "cites": ["decision:I1", "cost:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), first, again])
+    lines = r.comment.splitlines()
+    assert "Buying the 910480 back-chamfer cutter takes it to 1 setup(s)." in lines
+    assert "It leads at mid-range shop rates." in lines
+
+
+def test_decide_is_told_to_name_a_described_face_by_its_slot_not_beside_its_label():
+    """Live g3 line 1: "... because G11 is only reachable from -Z in the 1.5 mm chamfer on the bottom front edge"."""
+    text = json.dumps(review.DECIDE_TOOL)
+    assert "in place of its label" in text and "after its first mention" in text
+
+
+def test_a_fix_named_again_after_its_own_follow_up_still_becomes_it(part_a, costed, chamfer, catalog_access):
+    """Live g3 check: full name, then "It consolidates ...", then the full name again."""
+    first = {"text": f"{{{{option.{BUY}.fix}}}} takes it to {{{{option.{BUY}.setups_after}}}} setup(s).",
+             "role": "action", "cites": ["decision:I1"]}
+    then = {"text": "It keeps the part as designed.", "role": "reason", "cites": ["decision:I1"]}
+    again = {"text": f"{{{{option.{BUY}.fix}}}} leads at mid-range shop rates.", "role": "reason",
+             "cites": ["decision:I1", "cost:I1"]}
+    lines = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), first, then, again]).comment
+    assert "It leads at mid-range shop rates." in lines.splitlines()
+
+
+def test_another_fix_named_in_between_keeps_the_full_name(part_a, costed, chamfer, catalog_access):
+    first = {"text": f"{{{{option.{BUY}.fix}}}} takes it to {{{{option.{BUY}.setups_after}}}} setup(s).",
+             "role": "action", "cites": ["decision:I1"]}
+    other = {"text": f"{{{{option.{ROUTE}.fix}}}} can still come out ahead at some shop rates.", "role": "reason",
+             "cites": [f"option:{ROUTE}", "cost:I1"]}
+    again = {"text": f"{{{{option.{BUY}.fix}}}} leads at mid-range shop rates.", "role": "reason",
+             "cites": ["decision:I1", "cost:I1"]}
+    lines = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), first, other, again]).comment
+    assert "Buying the 910480 back-chamfer cutter leads at mid-range shop rates." in lines.splitlines()
+
+
+def test_a_rival_winning_mid_sentence_covers_codes_rival_line(part_a, costed, chamfer, catalog_access):
+    """Live g3 check: "It leads at mid-range shop rates ..., while {{route.fix}} can still come out ahead at some shop
+    rates." and code still added the rival line."""
+    both = {"text": f"It leads at mid-range shop rates, while {{{{option.{ROUTE}.fix}}}} can still come out ahead "
+            "at some shop rates.", "role": "reason", "cites": ["decision:I1", "cost:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), both])
+    assert "costs less at some inputs." not in r.comment
+
+
+def test_a_rival_claim_brings_the_ranking_to_the_verifier_and_covers_without_citing_it(part_a, costed, chamfer,
+                                                                                       catalog_access):
+    """Live g3 check: a mid-sentence rival claim without a cost:I1 cite left code's rival line in as well."""
+    both = {"text": f"It leads, and {{{{option.{ROUTE}.fix}}}} can come out ahead at some shop rates.",
+            "role": "reason", "cites": ["decision:I1"]}
+    model = Scripted(plan(*requests_for(chamfer)), decide(PROPOSE_BUY, comment=[context(chamfer), both]))
+    verifier = Scripted(verdicts(True, True), name="verifier")
+    r = run_review(part_a, costed, model, verifier=verifier, back_chamfer=catalog_access, stated={chamfer: STATED})
+    assert "cost:I1" in _sent_to_verifier(verifier)[1]["cites"]  # judged against the ranking
+    assert "costs less at some inputs." not in r.comment
+
+
+def test_a_line_on_another_topic_resets_the_pronoun():
+    """Codex: a sentence about another face between two mentions of the fix; "It" would point at the face."""
+    from anville.agent.review import _pronouns
+
+    options = {BUY: type("O", (), {"kind": "add_tool", "params": {"type": "back_chamfer"}, "face_group": "G3",
+                                   "key": BUY})()}
+    fix = f"{{{{option.{BUY}.fix}}}}"
+    kept = _pronouns([f"{fix} takes it to 1 setup(s).", "G4 alone forces the +X setup.", f"{fix} also fixes G4."],
+                     options)
+    assert kept[-1] == f"{fix} also fixes G4."
+    carried = _pronouns([f"{fix} takes it to 1 setup(s).", "It keeps the part as designed.", f"{fix} leads."],
+                        options)
+    assert carried[-1] == "It leads."
+
+
+def test_one_sentence_about_two_faces_doesnt_drop_either_flag():
+    """Codex: a sentence citing several intents may say only one is unknown; neither flag is dropped."""
+    from anville.agent.review import _unknown_said
+
+    one = {"text": "G3's purpose is unknown.", "cites": ["issue:I1", "intent:G3"]}
+    two = {"text": "G3's purpose is unknown.", "cites": ["issue:I1", "intent:G3", "intent:G4"]}
+    assert _unknown_said([one]) == {"G3"}
+    assert _unknown_said([two]) == set()
+
+
+def test_a_hypothetical_rival_win_doesnt_cover_codes_line(part_a, costed, chamfer, catalog_access):
+    """Codex: "If {{route.fix}} costs less at some inputs, use it." asserts nothing."""
+    maybe = {"text": f"If {{{{option.{ROUTE}.fix}}}} comes out ahead at some shop rates, the plan changes.", "role": "reason",
+             "cites": ["decision:I1"]}
+    r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), maybe])
+    assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+
+
+def test_a_negated_rival_win_doesnt_cover_codes_line():
+    """Codex, third pass: "{{route.fix}} does not win at some shop rates" matched."""
+    from anville.agent.review import _rival_wins
+
+    slot = f"{{{{option.{ROUTE}.fix}}}}"
+    assert _rival_wins(f"{slot} can come out ahead at some shop rates.")
+    for text in (f"At midpoint, {slot} does not win at some shop rates.", f"{slot} never comes out ahead at some rates.",
+                 f"{slot} doesn't come out ahead at some inputs.", f"{slot} can't win at some shop rates."):
+        assert not _rival_wins(text), text

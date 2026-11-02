@@ -319,7 +319,10 @@ DECIDE_TOOL = _tool(
     "lowest-cost. Name a fix with its {{option.<key>.fix}} slot, never a part number, an option key or a "
     "paraphrase. The slot fills with a phrase such as 'buying the cutter', so make it the subject that opens the "
     "sentence: '{{option.<key>.fix}} takes it to {{option.<key>.setups_after}} setup(s).' Put no verb before it "
-    "(not 'Use', 'Fix with' or 'Proposing') and don't repeat the tool after it. "
+    "(not 'Use', 'Fix with' or 'Proposing') and don't repeat the tool after it. Name a fix in full once; after "
+    "its first mention say 'it'. Where an issue has a {{issue.<id>.where}} slot (the face in a designer's words), "
+    "name the face with it in place of its label, with the label once in brackets after it: "
+    "'{{issue.<id>.where}} (G3) is only reachable from -Z', never 'G3 ... in {{issue.<id>.where}}'. "
     "Code states whatever your verified sentences leave out. Questions are written only in `decisions`; code "
     "places them.",
     _obj(["decisions", "comment"], {
@@ -653,7 +656,7 @@ def run_review(facts: PartFacts, shop: ShopProfile, model: ChatModel | None, *,
                  option_key=d.option_key, question=d.question, reason=d.reason, question_replaced=True)
     decided_by = {d.issue_id: d for d in decisions}
     comment, _ = fill_slots(assemble_comment(verified, decisions, by_id, intents, options, conditional, paybacks,
-                                             estimates, rivals), values, keys)
+                                             estimates, rivals, set(where)), values, keys)
     if not comment:  # every part was validated, so this is a last resort: never an empty post
         comment, _ = fill_slots(NOTHING_TO_RAISE, values, keys)
     emit("verify", "Comment assembled", stage="publish", model_sentences=len(verified))
@@ -761,6 +764,8 @@ def verify_sentences(run: "_Runner", verifier: ChatModel | None, checked: list[d
             src = slot_source(slot.strip(), nodes)  # lack of a citation (models lane, 2026-10-31: 32 of 54 drops)
             if src and src not in cited:
                 cited[src] = nodes[src]
+        if _rival_wins(sent["text"]):  # a rival said to win is judged against the ranking (live g3)
+            cited.update({c: n for c, n in nodes.items() if c.startswith("cost:")})
         for c in sent["cites"]:
             if c.startswith("decision:"):
                 d = decided_by[c.split(":", 1)[1]]
@@ -810,7 +815,8 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
                      conditional: dict[str, str] | None = None,
                      paybacks: dict[str, tuple] | None = None,
                      estimates: dict[str, bool] | None = None,  # estimates: key -> rests on placeholders
-                     rivals: dict[str, list[str]] | None = None) -> str:  # rivals: tie-break lead -> the others
+                     rivals: dict[str, list[str]] | None = None,  # rivals: tie-break lead -> the others
+                     described: set[str] | None = None) -> str:  # issues with a {{issue.<id>.where}} slot
     """Verified model sentences in the model's order; every decision not stated by a verified action
     sentence gets its code-rendered line; accepted questions are always placed by code, after the
     proposal they belong to (flag, then suggest)."""
@@ -818,20 +824,21 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
                for c in s["cites"] if c.startswith("decision:")}
     # Code is the backstop, not the author (Rayyan, 2026-10-31): verified prose that used all of a fix's payback
     # slots already stated it, and a sentence citing a rival with the cost ranking already named that rival.
-    # A rival is named only by a sentence about it: citing the ranking, opening with the rival's own name slot,
-    # and saying it comes out ahead at some inputs. A mention, or "we lead, ahead of X", leaves out the caveat
+    # A rival is named only by a sentence about it, saying in the clause that names it (by its own slot) that it
+    # comes out ahead at some inputs. The verifier judged that sentence with the cost ranking in view. A mention, or "we lead, ahead of X", leaves out the caveat
     # code's line carries (Codex, PR review, three passes).
-    named = {m.group(1) for s in verified if any(c.startswith("cost:") for c in s["cites"])
-             and (m := _RIVAL_WINS.match(s["text"]))}
+    named = {m.group(1) for s in verified if (m := _rival_wins(s["text"]))}  # verified with cost:<issue>
+    # The model already said a face's purpose is unknown: code's question line doesn't say it again (live g3).
+    unknown_said = _unknown_said(verified)
     lines = [s["text"] for s in verified]
     if not any(s["role"] == "context" for s in verified):
         lines.insert(0, NOTHING_TO_RAISE)
     said = set()  # a part-wide fix (the 5-axis route) is named once, for the first issue it fixes
     for d in decisions:
         if d.issue_id not in covered and d.action == "propose" and d.option_key in said:
-            lines.append(f"{by_id[d.issue_id].face_group}: the same change covers it.")
+            lines.append(f"{_face(by_id[d.issue_id], described)}: the same change covers it.")
         elif d.issue_id not in covered:
-            lines.append(render_line(d, by_id, intents, options))
+            lines.append(render_line(d, by_id, intents, options, described))
         if d.action == "propose":
             said.add(d.option_key)
         if d.action == "propose" and d.option_key in (paybacks or {}):
@@ -843,19 +850,65 @@ def assemble_comment(verified: list[dict], decisions: list[Decision], by_id: dic
             name = _name(options[r])
             lines.append(f"{name[0].upper()}{name[1:]} costs less at some inputs.")
         if d.question:
-            g, key = by_id[d.issue_id].face_group, (conditional or {}).get(d.issue_id)
+            issue, key = by_id[d.issue_id], (conditional or {}).get(d.issue_id)
+            g, face = issue.face_group, _face(issue, described)
             if key:  # the part edit, offered only on condition, next to the one question about intent
                 also = " also" if d.action == "propose" else ""
-                lines.append(f"If {g} isn't needed, {_name(options[key])}{also} {_effect(options[key], short=True)}.")
+                edit = _name(options[key])
+                if face != g:  # the face was just named in full: "removing it", "changing its depth"
+                    edit = re.sub(rf"\b{re.escape(g)}\b", "it", edit.replace(f"{g}'s", "its"))
+                lines.append(f"If {face} isn't needed, {edit}{also} {_effect(options[key], short=True)}.")
                 if key in (estimates or {}):  # lane 3: what the edit would cost, from the cost model's slots
                     rates = " on placeholder shop rates" if estimates[key] else ""
-                    lines.append(f"At {{{{costs.quantity}}}} parts, the plan after {_name(options[key])} runs "
+                    lines.append(f"At {{{{costs.quantity}}}} parts, the plan after {edit} runs "
                                  f"${{{{option.{key}.cost_lo}}}}–${{{{option.{key}.cost_hi}}}}{rates}; "
                                  "designer time isn't priced.")
-            # An ask's own line already says the purpose isn't on record.
-            flag = "" if d.action == "ask" else f"{g}'s purpose isn't on record. "
-            lines.append(f"{flag}{d.question} The answer could change the best plan.")
-    return "\n".join(lines)
+            # An ask's own line already says the purpose isn't on record, and so may the model's prose.
+            flag = ("" if d.action == "ask" or g in unknown_said else
+                    f"The purpose of {face} isn't on record. " if face != g else f"{g}'s purpose isn't on record. ")
+            question = f"Is {face} required as modelled?" if d.question == _intent_question(g) else d.question
+            lines.append(f"{flag}{question} The answer could change the best plan.")
+    return "\n".join(_pronouns(lines, options))
+
+
+_UNKNOWN_PURPOSE = re.compile(r"\b(purpose|intent|function)\b.*\b(unknown|isn't on record|not on record)\b", re.I)
+
+
+def _unknown_said(verified: list[dict]) -> set[str]:
+    """Faces whose unknown purpose verified prose already stated: a sentence about one face's intent only, so a
+    sentence citing several can't drop another face's flag (Codex, PR review)."""
+    out = set()
+    for s in verified:
+        intents = [c.split(":", 1)[1] for c in s["cites"] if c.startswith("intent:")]
+        if len(intents) == 1 and _UNKNOWN_PURPOSE.search(s["text"]):
+            out.add(intents[0])
+    return out
+
+
+def _face(issue: Issue, described: set[str] | None) -> str:
+    """A face in code's lines: its measured description with the label once, for traceability ("the 1.5 mm chamfer
+    on the bottom front edge (G11)"), or the bare label when geometry gave none (live g3: "If G11 isn't needed")."""
+    if issue.id in (described or ()):
+        return f"{{{{issue.{issue.id}.where}}}} ({issue.face_group})"
+    return issue.face_group
+
+
+def _pronouns(lines: list[str], options: dict[str, Option]) -> list[str]:
+    """A line opening with the fix the comment last named becomes "It ..." (live g3 re-plan: "Buying the 910480
+    back-chamfer cutter takes it to 1 setup(s)." then "Buying the 910480 back-chamfer cutter leads ...")."""
+    def last_named(line: str) -> str | None:  # the fix mentioned last in a line, by its slot or code's name for it
+        found = [(at, k) for k, o in options.items()
+                 for at in (line.rfind(f"{{{{option.{k}.fix}}}}"), line.lower().rfind(_name(o).lower())) if at >= 0]
+        return max(found)[1] if found else None
+
+    out, last = [], None
+    for line in lines:
+        m = re.match(r"\{\{\s*option\.(.+?)\.fix\s*\}\}", line)
+        if m and m.group(1) == last:
+            line = "It" + line[m.end():]
+        out.append(line)
+        last = last_named(line) or (last if line.startswith("It ") else None)  # another topic resets it
+    return out
 
 
 def _price(facts: PartFacts, shop: ShopProfile, plan: SetupPlan, options: dict[str, Option],
@@ -922,10 +975,21 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
     return out, considered
 
 
-# The rival wins somewhere, said of the rival itself: its name slot opens the sentence and the claim follows it
-# in the same clause ("{{option.R.fix}} can come out ahead at some shop rates").
+# The rival wins somewhere, said of the rival itself: the claim follows its name slot in the same clause
+# ("{{option.R.fix}} can come out ahead at some shop rates", "..., while {{option.R.fix}} can still come out ahead").
 _RIVAL_WINS = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
                          r"[^;{]*?\bat some (inputs|shop rates|rates)\b", re.I)
+def _rival_wins(text: str) -> re.Match | None:
+    """A rival-wins claim asserted: not supposed ("if / unless / whether / when" earlier in its clause) and not
+    negated (Codex, PR review). Patterns, not meaning: ADR 0010 Amendment 2 records the limit."""
+    m = _RIVAL_WINS.search(text)
+    if m and re.search(r"\b(if|unless|whether|when)\b", re.split(r"[;,.]", text[:m.start()])[-1], re.I):
+        return None
+    if m and re.search(r"\b(not|never|no)\b|n't\b", m.group(0), re.I):  # "does not win", "can't win"
+        return None
+    return m
+
+
 _PAYS = re.compile(r"\bpays? (off|back)\b", re.I)  # the claim, not the label "payback"
 
 
@@ -1009,23 +1073,25 @@ def _fallback_decision(issue: Issue, may_ask: bool, options: list[Option], ranki
     return Decision(issue.id, "quiet", reason="no option changes the plan")
 
 
-def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent], options: dict[str, Option]) -> str:
+def render_line(d: Decision, by_id: dict[str, Issue], intents: dict[str, Intent], options: dict[str, Option],
+                described: set[str] | None = None) -> str:
     """One decision as a slot template written by code: the fallback for any unverified statement."""
-    g = by_id[d.issue_id].face_group
+    g, face = by_id[d.issue_id].face_group, _face(by_id[d.issue_id], described)
     intent = intents.get(g)
     if d.action == "ask":
-        return f"{g}: only a part edit fixes this, and its purpose isn't on record."
+        return f"{face}: only a part edit fixes this, and its purpose isn't on record."
     if d.action == "propose":
         o = options[d.option_key]
         name = _name(o)
-        line = f"{g}: {name[0].upper()}{name[1:]} {_effect(o)}."
+        line = f"{face}: {name[0].upper()}{name[1:]} {_effect(o)}."
         if o.side == "shop":
             line += " It changes the shop, not the part."
         if intent and intent.status == "protected":
             # A keep constraint may carry no reason; its slot then doesn't exist (Greptile, PR #14).
-            line += f" {g} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {g} stays as designed."
+            who = "That face" if face != g else g  # never the label as subject once the face is named in full
+            line += f" {who} stays as designed: {{{{intent.{g}.reason}}}}." if intent.reason else f" {who} stays as designed."
         return line
-    return f"{g}: no change proposed."
+    return f"{face}: no change proposed."
 
 
 def _fix(key: str, o: Option) -> str:

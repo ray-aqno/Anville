@@ -21,6 +21,15 @@ from anville.agent.review import (
 )
 from anville.geometry import extract, min_setups
 
+
+@pytest.fixture(autouse=True)
+def undescribed_faces(monkeypatch):
+    """These tests pin code's wording for a face geometry can't describe (the bare label). The described wording,
+    "the 1.5 mm chamfer on the bottom front edge (G3)", has its own tests in test_model_prose.py."""
+    import anville.agent.review as review
+
+    monkeypatch.setattr(review, "describe_group", lambda facts, group: None)
+
 ROUTE = "route_machine/5"
 
 
