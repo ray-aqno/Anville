@@ -28,6 +28,7 @@ from typing import Callable
 
 from anville.agent.model import ChatModel, ModelUnavailable
 from anville.geometry.anchor import frame_offset, match_centroids
+from anville.geometry.describe import describe_group
 from anville.geometry.facts import PartFacts
 
 Emit = Callable[..., None]
@@ -73,20 +74,32 @@ class Branch:
     feature_name: str | None = None
     extra_faces: int = 0           # faces the feature creates beyond the group's: any refuses the branch
     kept_for: str | None = None    # why the designer keeps the group (its stated intent), for the line
+    where: str | None = None       # the group in words (describe_group), so the line doesn't read "removing G11"
+    faces: int = 1                 # how many faces the group has: "that face" or "those faces"
     patch_by: str | None = None    # model | code
     reason: str | None = None      # why it fell back, or why code wrote the patch
     usage: list[dict] = field(default_factory=list)
     calls: int = 0                 # Onshape calls made
 
     def line(self) -> str:
-        """The comment's line. Code writes it; every number is a field above."""
+        """The comment's line. Code writes it; every number is a field above. With `where`, the face is named in
+        words once ("the 1.5 mm chamfer on the bottom front edge (G11)") and then "that face", never the label
+        alone as a subject; the review's code lines read the same (evals, PR on review.py)."""
         if self.status == "measured":  # ADR 0002 Amendment 2: the declined alternative, with its cost
             kept = f": {self.kept_for}" if self.kept_for else ""
-            return (f"Branch {self.name}: removing {self.group} measured {self.measured} setup(s) "
-                    f"(predicted {self.predicted}). Shown as the alternative, not merged: {self.group} stays as "
-                    f"designed{kept}. {self.url}")
-        return (f"Removing {self.group} would take it to {self.predicted} setup(s): predicted from the geometry; "
+            return (f"Branch {self.name}: removing {self._subject()} measured {self.measured} setup(s) "
+                    f"(predicted {self.predicted}). Shown as the alternative, not merged: "
+                    f"{self._kept()} as designed{kept}. {self.url}")
+        return (f"Removing {self._subject()} would take it to {self.predicted} setup(s): predicted from the geometry; "
                 "Anville couldn't measure it on a branch this time.")
+
+    def _kept(self) -> str:
+        if not self.where:
+            return f"{self.group} stays"
+        return "that face stays" if self.faces == 1 else "those faces stay"
+
+    def _subject(self) -> str:
+        return f"{self.where} ({self.group})" if self.where else self.group
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -123,6 +136,13 @@ def build_branch(client, facts: PartFacts, *, did: str, vid: str, eid: str, run:
     """
     api = _Counted(client)
     out = Branch(status="predicted", group=group, predicted=predicted, name=f"anville/alt-{run}", kept_for=kept_for)
+    try:
+        ours = facts.group_faces(group)
+        out.faces = len(ours)
+        # The phrase names the group: only when the removal takes exactly its faces (Codex, PR review)
+        out.where = describe_group(facts, group) if sorted(ours) == sorted(faces) else None
+    except Exception:  # a geometry bug leaves the label; it never costs the branch
+        out.where = None
     try:
         _build(api, facts, out, did=did, vid=vid, eid=eid, faces=faces, measure=measure, emit=emit,
                model=model, deadline=deadline, wait=wait or _poll, base_url=base_url)
