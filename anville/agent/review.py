@@ -992,9 +992,9 @@ _RIVAL_WINS = re.compile(r"\{\{\s*option\.([^{}]+?)\.fix\s*\}\}[^;,.{]*?\b(comes
 def _rival_wins(text: str) -> re.Match | None:
     """A rival-wins claim asserted: not supposed ("if / unless / whether / when" earlier in its clause) and not
     negated (Codex, PR review). Patterns, not meaning: ADR 0010 Amendment 2 records the limit."""
-    # A number slot isn't another fix: mask it so "{{R.fix}} takes it to {{R.setups_after}} setup(s) and it can
+    # A number slot names no fix: mask it so "{{R.fix}} takes it to {{R.setups_after}} setup(s) and it can
     # come out ahead ..." matches; another fix's .fix slot still ends the rival's clause (local run, 2026-11-02).
-    text = re.sub(r"\{\{(?![^}]*\.fix\s*\}\})[^}]*\}\}", "N", text)
+    text = re.sub(r"\{\{(?![^}]*\.(fix|tool)\s*\}\})[^}]*\}\}", "N", text)  # .tool names a fix too (Codex)
     m = _RIVAL_WINS.search(text)
     if m and re.search(r"\b(if|unless|whether|when)\b", re.split(r"[;,.]", text[:m.start()])[-1], re.I):
         return None

@@ -472,3 +472,7 @@ def test_a_number_slot_between_the_rival_and_its_claim_still_covers():
     # another fix's name still ends the rival's clause (Codex, PR #56)
     other = _rival_wins(f"{{{{{r}.fix}}}} is an option and {{{{{b}.fix}}}} comes out ahead at some shop rates.")
     assert other and other.group(1) == BUY  # the buy is said to win; the name never spans another slot
+    # a tool slot names a fix too (Codex, PR review): the claim after it isn't the rival's
+    tool = _rival_wins(f"{{{{{r}.fix}}}} is an alternative and buying the {{{{{b}.tool}}}} costs less at some "
+                       "shop rates.")
+    assert not tool
