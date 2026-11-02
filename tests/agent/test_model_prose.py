@@ -417,3 +417,14 @@ def test_a_hypothetical_rival_win_doesnt_cover_codes_line(part_a, costed, chamfe
              "cites": ["decision:I1"]}
     r = review_with(part_a, costed, chamfer, catalog_access, [context(chamfer), maybe])
     assert "Sending it to an outside 5-axis shop costs less at some inputs." in r.comment.splitlines()
+
+
+def test_a_negated_rival_win_doesnt_cover_codes_line():
+    """Codex, third pass: "{{route.fix}} does not win at some shop rates" matched."""
+    from anville.agent.review import _rival_wins
+
+    slot = f"{{{{option.{ROUTE}.fix}}}}"
+    assert _rival_wins(f"{slot} can come out ahead at some shop rates.")
+    for text in (f"At midpoint, {slot} does not win at some shop rates.", f"{slot} never comes out ahead at some rates.",
+                 f"{slot} doesn't come out ahead at some inputs.", f"{slot} can't win at some shop rates."):
+        assert not _rival_wins(text), text

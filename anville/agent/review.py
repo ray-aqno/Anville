@@ -980,9 +980,12 @@ def _rank(result, shop: ShopProfile, issues: list[Issue], options: dict[str, Opt
 _RIVAL_WINS = re.compile(r"\{\{\s*option\.(.+?)\.fix\s*\}\}[^;,.{]*?\b(comes? out ahead|costs? less|wins?)\b"
                          r"[^;{]*?\bat some (inputs|shop rates|rates)\b", re.I)
 def _rival_wins(text: str) -> re.Match | None:
-    """A rival-wins claim asserted, not supposed: no "if / unless / whether / when" earlier in its clause (Codex)."""
+    """A rival-wins claim asserted: not supposed ("if / unless / whether / when" earlier in its clause) and not
+    negated (Codex, PR review). Patterns, not meaning: ADR 0010 Amendment 2 records the limit."""
     m = _RIVAL_WINS.search(text)
     if m and re.search(r"\b(if|unless|whether|when)\b", re.split(r"[;,.]", text[:m.start()])[-1], re.I):
+        return None
+    if m and re.search(r"\b(not|never|no)\b|n't\b", m.group(0), re.I):  # "does not win", "can't win"
         return None
     return m
 
