@@ -8,6 +8,17 @@ Anville closes the design loop between engineers and the shop floor, and every l
 
 *Built during Meta's 2026 Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). Every commit in this repo is from the event.*
 
+## For judges: run without CAD
+
+**No CAD experience or Onshape account is needed for the local review path.** [Judge quickstart](docs/JUDGES.md) covers generating synthetic STEP parts, running a geometry-only review, inspecting its Markdown/JSON outputs, and testing the designer/shop-memory loop without API keys. It also explains the additional credentials for live Meta reasoning and the Onshape UI shown in the video.
+
+```bash
+uv sync --locked --python 3.12
+uv run pytest -q tests/geometry/test_demo_parts.py tests/geometry/test_demo_insert.py tests/agent/test_reply.py tests/connectors/test_local.py
+```
+
+The keyless path uses real geometry and production connector/harness code; model-dependent tests use scripted responses. It does not claim to execute live models without credentials.
+
 ## The edge: a workflow, not a gap fill
 
 Manufacturing software stops at company walls. Design tools help a team design; shop software helps a shop quote and schedule. **The work that crosses between them** — a part version, "we can't make this", a fix, a tooling change, what actually happened at the spindle — runs on email and PDFs, and nobody owns it.
@@ -69,7 +80,7 @@ Anville's core never calls a CAD API: geometry, setup planning, the shop's check
 |---|---|
 | **Onshape:** "Create version" webhooks, STEP export, review comments and replies, a docked panel, fix branches as feature edits | built (`anville/connectors/onshape`, `anville/panel`) |
 | **Asking from the panel:** select a face and ask, answered by the same loop as a reply | not built: the panel's `/api/ask` route answers 501 until a handler exists (`anville/panel/DESIGN.md`) |
-| **A local connector:** a folder of STEP files in, JSON out (ADR 0001's `LocalSource` and `LocalSink`) | not built |
+| **A local connector:** a folder of STEP files in, review Markdown, setup-sheet JSON and trace out | built (`anville/connectors/local`, `scripts/anville_local.py`); see [judge quickstart](docs/JUDGES.md) |
 | **Other CAD:** a PDM vault check-in as the "version ready" signal; the panel, a web page, hosted in the CAD's own web view (a SolidWorks Task Pane or a Fusion palette) | not built or designed. The hosting options are general knowledge, not tried here |
 
 What doesn't carry over unchanged: the fix branch writes Onshape features, and the agent job reaches the Onshape connector for it and to recognise its own comments (`anville/agent/job.py`, `anville/agent/reply.py`). Another CAD needs its own version of both.
